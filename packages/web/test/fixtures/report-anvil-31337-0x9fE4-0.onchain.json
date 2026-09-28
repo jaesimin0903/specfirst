@@ -1,0 +1,18 @@
+{
+  "source": "CertificateRegistry.certificateOf(target, 0) read with cast right after `specfirst run spec/staking-vault.spec.yaml --agent replay:fixtures/fix-reentrancy.patch --network anvil` issued it (local anvil, 2026-09-29)",
+  "chainId": 31337,
+  "registry": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  "target": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+  "certId": 0,
+  "issueTx": "0xd3e948d033e2d9e1645764c7c28f7626a90d4058475a281843121b71ba994fe5",
+  "specHash": "0xeef8d3d946c3d73f1e3ebb943f39db41a006ff093f1d9e87a4f8168908bc303d",
+  "invariantSetHash": "0x9d888ec9877ba576ca5b8f090fdef723acc402c53f81b48cce1dcd494b101629",
+  "propertyHash": "0x23617d7f3e374ae84011c7c3d3c8a62ae5524608783556caba2f2123730a3c77",
+  "codeHash": "0x360611441956dc61bae6a310a32ddc7f4992396a704d31f6a51ab8299da48e92",
+  "reportHash": "0x5fc212ca700e6c2269c85860abd1e921275c583462e9b644ece0a5e137965b56",
+  "passedCount": 7,
+  "totalCount": 7,
+  "passedBitmap": 127,
+  "rehearsalTxCount": 30,
+  "reportURI": "certs/31337/0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0/0.json"
+}

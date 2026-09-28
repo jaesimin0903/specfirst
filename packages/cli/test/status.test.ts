@@ -30,6 +30,7 @@ function certificate(overrides: Partial<CertificateStruct> = {}): CertificateStr
 
 function mockClient(handlers: Record<string, (args: readonly unknown[]) => unknown>): MinimalPublicClient {
   return {
+    getChainId: vi.fn(async () => 10143) as unknown as MinimalPublicClient['getChainId'],
     readContract: vi.fn(async ({ functionName, args }: { functionName: string; args: readonly unknown[] }) => {
       const handler = handlers[functionName];
       if (!handler) throw new Error(`unexpected call: ${functionName}`);

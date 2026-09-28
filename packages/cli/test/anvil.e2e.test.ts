@@ -155,6 +155,14 @@ describe.skipIf(SKIP_ANVIL)('specfirst on anvil: deploy, rehearse, verify, cert'
     const st = await cli('status', v1.address, '--rpc', anvil.url, '--registry', registry.address);
     expect(st.out.join('\n')).toMatch(/certified:\s+true/);
     expect(st.out.join('\n')).toMatch(/isLatest:\s+true/);
+    expect(st.out.join('\n')).toMatch(/chainId:\s+31337/);
+  });
+
+  it('status reads chainId from the RPC and finds the registry via SPECFIRST_REGISTRY_31337', async () => {
+    const r = await cli('--json', 'status', v1.address, '--rpc', anvil.url);
+    expect(r.err).toEqual([]);
+    const ev = JSON.parse(r.stdout.trim().split('\n').at(-1)!) as { chainId: number; registry: string; certified: boolean };
+    expect(ev).toMatchObject({ chainId: 31337, registry: registry.address, certified: true });
   });
 
   it('v2: a one-line change goes through the whole run pipeline; v1 is Superseded but still certified', async () => {

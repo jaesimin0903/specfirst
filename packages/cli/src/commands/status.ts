@@ -53,6 +53,8 @@ export interface StatusResult {
 /** The slice of viem's PublicClient that fetchStatus needs; lets tests pass a mock. */
 export interface MinimalPublicClient {
   readContract: PublicClient['readContract'];
+  /** eth_chainId of the RPC actually queried; shown instead of assuming Monad testnet. */
+  getChainId: PublicClient['getChainId'];
 }
 
 export interface FetchStatusInput {
@@ -118,7 +120,8 @@ export async function fetchStatus({ client, registry, address, invariantSetHash 
     if (!isNoCertificateRevert(err)) throw err;
   }
 
-  const base = { address, chainId: MONAD_TESTNET_CHAIN_ID, registry, certified, certifiedWith };
+  const chainId = await client.getChainId();
+  const base = { address, chainId, registry, certified, certifiedWith };
 
   if (!latestResult) {
     return { ...base, hasCertificate: false, isLatest: null, certId: null, certificate: null, codeMatches: null };
@@ -168,7 +171,7 @@ export function registerStatusCommand(program: Command): void {
     .description('Read on-chain certification status for a target from CertificateRegistry.')
     .option('--invariant-set-hash <hash>', 'also check isCertifiedWith against this invariantSetHash')
     .option('--rpc <url>', `JSON-RPC endpoint (default: $${RPC_ENV_VAR} or ${DEFAULT_RPC})`)
-    .option('--registry <address>', `CertificateRegistry address (default: $${REGISTRY_ENV_VAR})`)
+    .option('--registry <address>', 'CertificateRegistry address (default: $SPECFIRST_REGISTRY_<chainId of the RPC>)')
     .action(
       async (
         address: string,
@@ -177,14 +180,16 @@ export function registerStatusCommand(program: Command): void {
       ) => {
         const ctx = contextFrom(command);
 
-        const registry = (opts.registry ?? process.env[REGISTRY_ENV_VAR]) as Address | undefined;
+        const rpcUrl = opts.rpc ?? process.env[RPC_ENV_VAR] ?? DEFAULT_RPC;
+        const client = createPublicClient({ chain: monadTestnet, transport: http(rpcUrl) });
+        // The registry env var follows the chain the RPC reports (SPECFIRST_REGISTRY_31337 on anvil).
+        const registryEnv = `SPECFIRST_REGISTRY_${await client.getChainId()}`;
+        const registry = (opts.registry ?? process.env[registryEnv]) as Address | undefined;
         if (!registry) {
-          console.error(`specfirst status: no registry address. Set ${REGISTRY_ENV_VAR} or pass --registry <address>.`);
+          console.error(`specfirst status: no registry address. Set ${registryEnv} or pass --registry <address>.`);
           process.exitCode = 1;
           return;
         }
-        const rpcUrl = opts.rpc ?? process.env[RPC_ENV_VAR] ?? DEFAULT_RPC;
-        const client = createPublicClient({ chain: monadTestnet, transport: http(rpcUrl) });
 
         const result = await fetchStatus({
           client,

@@ -1,0 +1,242 @@
+{
+  "specfirst": 1,
+  "projectId": "github.com/jaesimin/specfirst-example-vault#StakingVault",
+  "projectIdHash": "0x6c74fd920186af33aed27afd79040c79e96bd44df04f4983498a8169a0d62928",
+  "name": "StakingVault",
+  "target": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+  "chainId": 31337,
+  "codeHash": "0x360611441956dc61bae6a310a32ddc7f4992396a704d31f6a51ab8299da48e92",
+  "specHash": "0xeef8d3d946c3d73f1e3ebb943f39db41a006ff093f1d9e87a4f8168908bc303d",
+  "invariantSetHash": "0x9d888ec9877ba576ca5b8f090fdef723acc402c53f81b48cce1dcd494b101629",
+  "propertyHash": "0x23617d7f3e374ae84011c7c3d3c8a62ae5524608783556caba2f2123730a3c77",
+  "cliVersion": "0.0.1",
+  "foundryVersion": "forge Version: 1.5.1-Homebrew",
+  "model": "replay",
+  "claudeCliVersion": "replay",
+  "agent": {
+    "kind": "replay",
+    "calls": 1
+  },
+  "fuzz": {
+    "backend": "forge",
+    "runs": 64,
+    "depth": 64,
+    "timeoutSec": 300,
+    "maxIterations": 5
+  },
+  "iterations": 2,
+  "costUsd": 0,
+  "costTotalUsd": 0,
+  "history": [
+    {
+      "iteration": 1,
+      "phase": "fix",
+      "fuzz": {
+        "pass": 3,
+        "fail": 4,
+        "error": 0,
+        "reused": false,
+        "wallclockSec": 2.967
+      },
+      "failing": [
+        "INV-1",
+        "INV-2",
+        "INV-3",
+        "INV-4"
+      ],
+      "agentCalled": true,
+      "changedPaths": [
+        "src/StakingVault.sol"
+      ],
+      "costUsd": 0
+    },
+    {
+      "iteration": 2,
+      "phase": "fix",
+      "fuzz": {
+        "pass": 7,
+        "fail": 0,
+        "error": 0,
+        "reused": false,
+        "wallclockSec": 0.991
+      },
+      "failing": [],
+      "agentCalled": false,
+      "changedPaths": [],
+      "costUsd": 0
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-1",
+      "kind": "invariant",
+      "text": "총 예치량은 모든 사용자 예치 잔고의 합과 같다",
+      "status": "pass",
+      "fuzz": "pass",
+      "verify": true
+    },
+    {
+      "id": "INV-2",
+      "kind": "invariant",
+      "text": "금고가 가진 MON은 모든 사용자 예치 잔고의 합 이상이다",
+      "status": "pass",
+      "fuzz": "pass",
+      "verify": true
+    },
+    {
+      "id": "INV-3",
+      "kind": "postcondition",
+      "text": "출금하면 사용자 예치 잔고는 정확히 출금액만큼 줄고, 받은 MON도 출금액과 같다",
+      "status": "pass",
+      "fuzz": "pass",
+      "verify": true
+    },
+    {
+      "id": "INV-4",
+      "kind": "access",
+      "text": "누구도 자기 예치 잔고보다 많이 출금할 수 없다",
+      "status": "pass",
+      "fuzz": "pass",
+      "verify": true
+    },
+    {
+      "id": "INV-5",
+      "kind": "access",
+      "text": "소유자만 보상률을 바꿀 수 있다",
+      "status": "pass",
+      "fuzz": "pass",
+      "verify": true
+    },
+    {
+      "id": "INV-6",
+      "kind": "invariant",
+      "text": "일시정지 중에는 예치가 성공하지 않는다",
+      "status": "pass",
+      "fuzz": "pass",
+      "verify": true
+    },
+    {
+      "id": "INV-7",
+      "kind": "access",
+      "text": "소유자만 일시정지와 해제를 할 수 있다",
+      "status": "pass",
+      "fuzz": "pass",
+      "verify": true
+    }
+  ],
+  "unverified": [
+    "오라클 가격 조작",
+    "외부 토큰 컨트랙트 결함",
+    "경제적 공격",
+    "배포 후 소유자 권한에 의한 상태 변경",
+    "업그레이드 가능 프록시"
+  ],
+  "passedCount": 7,
+  "totalCount": 7,
+  "passedBitmap": "0x7f",
+  "run": {
+    "runId": "20260928-162323-869600",
+    "baseCommit": "ae66bb7a99b219f14d147e6ee3706519223b8c0d",
+    "finalCommit": "770ced0ab7ffe1ff28a35b05d7f4506c7fe992e7",
+    "status": "passed",
+    "stopReason": "all-pass",
+    "startedAt": "2026-09-28T16:23:23.689Z",
+    "finishedAt": "2026-09-28T16:23:28.373Z"
+  },
+  "deploy": {
+    "txHash": "0xc9882a209b3be96a9db3e469c31b5329e4abf3850e88fe4cfb7f2c485e0a66a6",
+    "blockNumber": "3",
+    "gasUsed": "372385",
+    "gasLimit": "446862",
+    "deployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+  },
+  "rehearsal": {
+    "normalTx": 25,
+    "expectRevertTx": 5,
+    "summary": {
+      "normal": 25,
+      "normalOk": 25,
+      "expectRevert": 5,
+      "reverted": 5,
+      "outOfGas": 0,
+      "unexpectedSuccess": 0,
+      "selectorConfirmed": 5,
+      "selectorUnconfirmed": 0
+    },
+    "actors": [
+      {
+        "name": "owner",
+        "role": "owner",
+        "address": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+      },
+      {
+        "name": "user0",
+        "role": "user",
+        "address": "0xfd2C6EFe58B69Db9838af4797ED4E21651C0a13a"
+      },
+      {
+        "name": "user1",
+        "role": "user",
+        "address": "0xF42AF76c89578c5F10D9DD870469eae5e24d0073"
+      },
+      {
+        "name": "user2",
+        "role": "user",
+        "address": "0x7B62424659e22a7f676585ac893121CfD578E5AD"
+      },
+      {
+        "name": "attacker",
+        "role": "attacker",
+        "address": "0x00a60401Fe2CCF2985064fbb97B6005e5c1D1583"
+      },
+      {
+        "name": "attacker-contract",
+        "role": "attacker-contract",
+        "address": "0x1cc4c9aabb4e60d5b0300197cb500a3f2cb303a3"
+      }
+    ],
+    "expectRevert": [
+      {
+        "hash": "0x9dc175965be4c0f9c3e482653640212ef685d896b19db449e95046a7d02feb72",
+        "kind": "unauthorized-set-reward-rate",
+        "verdict": "reverted",
+        "selector": "Unauthorized 0x82b42900"
+      },
+      {
+        "hash": "0xf8da59869d62a4f716b16ceb87ea4b888af04188c142696f29109dd5d939b9fc",
+        "kind": "deposit-while-paused",
+        "verdict": "reverted",
+        "selector": "PausedError 0xeced32bc"
+      },
+      {
+        "hash": "0x8cb4a843fd0c1dfac0f07a61363ece8c019ed3c0e703ef604704071f3c281fcf",
+        "kind": "reentry",
+        "verdict": "reverted",
+        "selector": "InsufficientBalance 0xf4d678b8"
+      },
+      {
+        "hash": "0x29b3f4aaa23b9f63113c568a27319ffca447f2861e36e0b32ceade80035889d5",
+        "kind": "unauthorized-pause",
+        "verdict": "reverted",
+        "selector": "Unauthorized 0x82b42900"
+      },
+      {
+        "hash": "0x5c4fa1c5cc27e4af3c2543d44b8e03067f706b7c053e30c9c7117cb084fd92a7",
+        "kind": "overdraw-withdraw",
+        "verdict": "reverted",
+        "selector": "InsufficientBalance 0xf4d678b8"
+      }
+    ]
+  },
+  "verifyMethod": "fork",
+  "verifyNotes": [],
+  "verify": {
+    "forkBlock": "39",
+    "probeBlock": null,
+    "depositors": 4,
+    "passed": 7,
+    "violated": 0,
+    "unjudged": 0
+  },
+  "envWarnings": []
+}

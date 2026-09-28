@@ -58,7 +58,7 @@ const deploy = {
   gasUsed: '1',
   gasLimit: '2',
   deployer: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
-} as DeployRecord;
+} as unknown as DeployRecord;
 const verify = {
   path: 'probe',
   note: 'fork 대조 미사용',
