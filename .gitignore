@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+cache/
+.env
+.env.*
+!.env.example
+.specfirst/
+.ultrafuzz/
+broadcast/
+*.log
+.DS_Store
