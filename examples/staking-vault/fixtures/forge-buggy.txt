@@ -1,0 +1,167 @@
+No files changed, compilation skipped
+
+Ran 7 tests for test/specfirst/Invariants.t.sol:SpecfirstInvariants
+[FAIL: INV-1 totalStaked != sum(balances)]
+	[Sequence] (original: 46, shrunk: 2)
+		sender=0x0000000000000000000000000000000000000f5C addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[1569513666514180943722657141929118442540429 [1.569e42], 683608897615232973181679244 [6.836e26]]
+		sender=0x00000000000000000000000000000000000014e9 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=withdraw(uint256,uint256) args=[88006024417183012678754354354 [8.8e28], 5001566686620399899138706264338614703007 [5.001e39]]
+ invariant_INV_1() (runs: 0, calls: 0, reverts: 0)
+
+╭----------+---------------+-------+---------+----------╮
+| Contract | Selector      | Calls | Reverts | Discards |
++=======================================================+
+| Handler  | deposit       | 9     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | pause         | 15    | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | setRewardRate | 12    | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | unpause       | 3     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | withdraw      | 7     | 0       | 0        |
+╰----------+---------------+-------+---------+----------╯
+
+[FAIL: INV-2 vault MON < sum(balances)]
+	[Sequence] (original: 34, shrunk: 3)
+		sender=0x0000000000000000000000000000000000000061 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[3316073128906010040222369868214034339539717810213391523413809 [3.316e60], 115792089237316195423570985008687907853269984665640564039457584007913129639932 [1.157e77]]
+		sender=0xFFFfFffFfffffFffFFFfffFffffFFFFfFFFFffE0 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[742326744999187490745538951974287352598325531273492154 [7.423e53], 109448024353142594524 [1.094e20]]
+		sender=0x00000000000000000000000000000000000019A1 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=withdraw(uint256,uint256) args=[1259, 73327808751948238496705012795243038771249099953533899721758740547552668199635 [7.332e76]]
+ invariant_INV_2() (runs: 0, calls: 0, reverts: 0)
+
+╭----------+---------------+-------+---------+----------╮
+| Contract | Selector      | Calls | Reverts | Discards |
++=======================================================+
+| Handler  | deposit       | 6     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | pause         | 7     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | setRewardRate | 4     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | unpause       | 9     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | withdraw      | 8     | 0       | 0        |
+╰----------+---------------+-------+---------+----------╯
+
+[FAIL: INV-3 withdraw debit or payout != withdrawn amount]
+	[Sequence] (original: 21, shrunk: 2)
+		sender=0xdCAD873309f428b07666b1cC61d50a00576A0065 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[3729, 23003494165520935751954 [2.3e22]]
+		sender=0x0000000000000000000000000000000000000060 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=withdraw(uint256,uint256) args=[373895015567433623151235417061941382237571404311554 [3.738e50], 773487950 [7.734e8]]
+ invariant_INV_3() (runs: 0, calls: 0, reverts: 0)
+
+╭----------+---------------+-------+---------+----------╮
+| Contract | Selector      | Calls | Reverts | Discards |
++=======================================================+
+| Handler  | deposit       | 3     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | pause         | 7     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | setRewardRate | 4     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | unpause       | 3     | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | withdraw      | 4     | 0       | 0        |
+╰----------+---------------+-------+---------+----------╯
+
+[FAIL: INV-4 withdrew more than own balance]
+	[Sequence] (original: 33, shrunk: 4)
+		sender=0x00000000000000000000000000000000000011ec addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[8948914287347089254181218 [8.948e24], 114236380896269789850294695510918117253392803102891603098 [1.142e56]]
+		sender=0x00000000000000000000000000000000817b1Cd3 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[25874538167130246046664875751773132548352 [2.587e40], 746272228284236950611682519075072026449339104875974473 [7.462e53]]
+		sender=0x0000000000000000000000000000000000000530 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[8266244348927269790614529534943814195608133063901234 [8.266e51], 136462212487211698768518678573 [1.364e29]]
+		sender=0x000000000000000000000000000000000000172D addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=withdraw(uint256,uint256) args=[23077289545209026975802356386720444084523574826694365391168514 [2.307e61], 115792089237316195423570985008687907853269984665640564039457584007913129639933 [1.157e77]]
+ invariant_INV_4() (runs: 3, calls: 192, reverts: 0)
+
+╭----------+---------------+-------+---------+----------╮
+| Contract | Selector      | Calls | Reverts | Discards |
++=======================================================+
+| Handler  | deposit       | 47    | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | pause         | 43    | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | setRewardRate | 45    | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | unpause       | 49    | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | withdraw      | 41    | 0       | 0        |
+╰----------+---------------+-------+---------+----------╯
+
+[PASS] invariant_INV_5() (runs: 256, calls: 16384, reverts: 0)
+
+╭----------+---------------+-------+---------+----------╮
+| Contract | Selector      | Calls | Reverts | Discards |
++=======================================================+
+| Handler  | deposit       | 3272  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | pause         | 3298  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | setRewardRate | 3311  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | unpause       | 3257  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | withdraw      | 3246  | 0       | 0        |
+╰----------+---------------+-------+---------+----------╯
+
+[PASS] invariant_INV_6() (runs: 256, calls: 16384, reverts: 0)
+
+╭----------+---------------+-------+---------+----------╮
+| Contract | Selector      | Calls | Reverts | Discards |
++=======================================================+
+| Handler  | deposit       | 3306  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | pause         | 3300  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | setRewardRate | 3247  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | unpause       | 3319  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | withdraw      | 3212  | 0       | 0        |
+╰----------+---------------+-------+---------+----------╯
+
+[PASS] invariant_INV_7() (runs: 256, calls: 16384, reverts: 0)
+
+╭----------+---------------+-------+---------+----------╮
+| Contract | Selector      | Calls | Reverts | Discards |
++=======================================================+
+| Handler  | deposit       | 3191  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | pause         | 3250  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | setRewardRate | 3370  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | unpause       | 3285  | 0       | 0        |
+|----------+---------------+-------+---------+----------|
+| Handler  | withdraw      | 3288  | 0       | 0        |
+╰----------+---------------+-------+---------+----------╯
+
+Suite result: FAILED. 3 passed; 4 failed; 0 skipped; finished in 1.23s (7.52s CPU time)
+
+Ran 1 test suite in 1.23s (1.23s CPU time): 3 tests passed, 4 failed, 0 skipped (7 total tests)
+
+Failing tests:
+Encountered 4 failing tests in test/specfirst/Invariants.t.sol:SpecfirstInvariants
+[FAIL: INV-1 totalStaked != sum(balances)]
+	[Sequence] (original: 46, shrunk: 2)
+		sender=0x0000000000000000000000000000000000000f5C addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[1569513666514180943722657141929118442540429 [1.569e42], 683608897615232973181679244 [6.836e26]]
+		sender=0x00000000000000000000000000000000000014e9 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=withdraw(uint256,uint256) args=[88006024417183012678754354354 [8.8e28], 5001566686620399899138706264338614703007 [5.001e39]]
+ invariant_INV_1() (runs: 0, calls: 0, reverts: 0)
+[FAIL: INV-2 vault MON < sum(balances)]
+	[Sequence] (original: 34, shrunk: 3)
+		sender=0x0000000000000000000000000000000000000061 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[3316073128906010040222369868214034339539717810213391523413809 [3.316e60], 115792089237316195423570985008687907853269984665640564039457584007913129639932 [1.157e77]]
+		sender=0xFFFfFffFfffffFffFFFfffFffffFFFFfFFFFffE0 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[742326744999187490745538951974287352598325531273492154 [7.423e53], 109448024353142594524 [1.094e20]]
+		sender=0x00000000000000000000000000000000000019A1 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=withdraw(uint256,uint256) args=[1259, 73327808751948238496705012795243038771249099953533899721758740547552668199635 [7.332e76]]
+ invariant_INV_2() (runs: 0, calls: 0, reverts: 0)
+[FAIL: INV-3 withdraw debit or payout != withdrawn amount]
+	[Sequence] (original: 21, shrunk: 2)
+		sender=0xdCAD873309f428b07666b1cC61d50a00576A0065 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[3729, 23003494165520935751954 [2.3e22]]
+		sender=0x0000000000000000000000000000000000000060 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=withdraw(uint256,uint256) args=[373895015567433623151235417061941382237571404311554 [3.738e50], 773487950 [7.734e8]]
+ invariant_INV_3() (runs: 0, calls: 0, reverts: 0)
+[FAIL: INV-4 withdrew more than own balance]
+	[Sequence] (original: 33, shrunk: 4)
+		sender=0x00000000000000000000000000000000000011ec addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[8948914287347089254181218 [8.948e24], 114236380896269789850294695510918117253392803102891603098 [1.142e56]]
+		sender=0x00000000000000000000000000000000817b1Cd3 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[25874538167130246046664875751773132548352 [2.587e40], 746272228284236950611682519075072026449339104875974473 [7.462e53]]
+		sender=0x0000000000000000000000000000000000000530 addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=deposit(uint256,uint256) args=[8266244348927269790614529534943814195608133063901234 [8.266e51], 136462212487211698768518678573 [1.364e29]]
+		sender=0x000000000000000000000000000000000000172D addr=[test/specfirst/Handler.sol:Handler]0x2e234DAe75C793f67A35089C9d99245E1C58470b calldata=withdraw(uint256,uint256) args=[23077289545209026975802356386720444084523574826694365391168514 [2.307e61], 115792089237316195423570985008687907853269984665640564039457584007913129639933 [1.157e77]]
+ invariant_INV_4() (runs: 3, calls: 192, reverts: 0)
+
+Encountered a total of 4 failing tests, 3 tests succeeded
+
+Tip: Run `forge test --rerun` to retry only the 4 failed tests
