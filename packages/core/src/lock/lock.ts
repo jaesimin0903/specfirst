@@ -69,21 +69,6 @@ export interface LockMismatch {
   actual: string | null;
 }
 
-/**
- * Result of the per-invariant mutant check (exit 3 when not ok).
- * The check itself lives in src/mutants and is out of scope for this module.
- */
-export interface MutantCheckResult {
-  ok: boolean;
-  results: Array<{
-    invariantId: string;
-    mutantPath: string;
-    /** True when the targeted property actually failed on the mutant. */
-    killed: boolean;
-    detail?: string;
-  }>;
-}
-
 export class LockError extends Error {
   constructor(message: string) {
     super(message);
