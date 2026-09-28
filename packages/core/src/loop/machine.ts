@@ -270,7 +270,12 @@ export async function runFixLoop(input: FixLoopInput): Promise<FixLoopResult> {
     emit({ type: 'iteration-start', runId, iteration, phase: 'fix', worktree: wt.path });
 
     const reused = prevRejected && lastFuzz !== null;
-    const fuzz: FuzzResult = reused ? lastFuzz! : await backend.run({ worktree: wt.path, spec, params });
+    const fuzz: FuzzResult = reused ? lastFuzz! : await backend.run({
+          worktree: wt.path,
+          spec,
+          params,
+          persistDir: path.join(runDir, `iter-${iteration}`, 'forge-persist'),
+        });
     lastFuzz = fuzz;
     const counts = { pass: 0, fail: 0, error: 0 };
     for (const r of fuzz.results) counts[r.status] += 1;

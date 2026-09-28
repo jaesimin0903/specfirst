@@ -85,6 +85,11 @@ describe('runFixLoop', () => {
     expect((await git(repo, 'rev-parse', 'refs/specfirst/runs/r1')).trim()).toBe(res.finalCommit);
     expect(await readFile(path.join(repo, 'src/StakingVault.sol'), 'utf8')).toBe(VAULT);
 
+    // Each judge call gets its own forge failure-corpus directory under the iteration.
+    expect(backend.inputs.map((i) => i.persistDir)).toEqual([
+      path.join(repo, '.specfirst/runs/r1/iter-1/forge-persist'),
+      path.join(repo, '.specfirst/runs/r1/iter-2/forge-persist'),
+    ]);
     // The second judge ran on a fresh worktree that already had the fix.
     expect(backend.inputs[0]!.worktree).not.toBe(backend.inputs[1]!.worktree);
 

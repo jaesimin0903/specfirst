@@ -165,7 +165,10 @@ function countCalls(text: string): number | undefined {
 
 export interface ForgeBackendOptions {
   forgeBin?: string;
-  /** Where raw stdout, build output and the failure corpus go. Kept outside the worktree so collectChanges never sees them. */
+  /**
+   * Where raw stdout and build output go, plus the failure corpus when the caller passes no persistDir.
+   * Kept outside the worktree so collectChanges never sees them.
+   */
   artifactDir?: string;
 }
 
@@ -182,16 +185,18 @@ export class ForgeBackend implements FuzzBackend {
     this.artifactDir = opts.artifactDir ?? path.join(tmpdir(), 'specfirst-forge');
   }
 
-  async run({ worktree, spec, params }: FuzzRunInput): Promise<FuzzResult> {
+  async run({ worktree, spec, params, persistDir }: FuzzRunInput): Promise<FuzzResult> {
     const n = ++this.calls;
     await mkdir(this.artifactDir, { recursive: true });
+    const failurePersistDir = persistDir ?? path.join(this.artifactDir, `forge-persist-${Date.now()}-${n}`);
+    await mkdir(failurePersistDir, { recursive: true });
     const env: Record<string, string> = {
       FOUNDRY_INVARIANT_RUNS: String(params.runs),
       FOUNDRY_INVARIANT_DEPTH: String(params.depth),
       FOUNDRY_OUT: path.join(this.artifactDir, 'out'),
       FOUNDRY_CACHE_PATH: path.join(this.artifactDir, 'cache'),
-      // forge replays persisted failures first; sharing the corpus across iterations re-checks old counterexamples.
-      FOUNDRY_INVARIANT_FAILURE_PERSIST_DIR: path.join(this.artifactDir, 'invariant-failures'),
+      // forge replays persisted failures before fuzzing; a fresh directory per call keeps runs independent.
+      FOUNDRY_INVARIANT_FAILURE_PERSIST_DIR: failurePersistDir,
     };
     if (params.seed !== undefined) env.FOUNDRY_FUZZ_SEED = params.seed;
 

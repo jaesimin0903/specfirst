@@ -58,6 +58,12 @@ export interface FuzzRunInput {
   params: FuzzParams;
   target?: Address;
   forkUrl?: string;
+  /**
+   * Fresh directory for this call's failure corpus. forge replays persisted counterexamples before
+   * fuzzing, so sharing one across iterations would let an old counterexample shape a new result.
+   * The fix loop passes .specfirst/runs/<runId>/iter-N/forge-persist/.
+   */
+  persistDir?: string;
 }
 
 export interface FuzzBackend {

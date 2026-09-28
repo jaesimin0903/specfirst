@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -82,6 +82,38 @@ describe('parseForgeJson snapshots (forge 1.5.1)', () => {
   });
 });
 
+describe('parseForgeJson on examples/staking-vault (forge 1.5.1, --json)', () => {
+  it('planted reentrancy: INV-1 to INV-4 fail with call sequences, INV-5 to INV-7 pass', async () => {
+    const ids = ['INV-1', 'INV-2', 'INV-3', 'INV-4', 'INV-5', 'INV-6', 'INV-7'];
+    const results = parseForgeJson(await fx('example-buggy.json'), ids);
+    expect(results.map((r) => [r.invariantId, r.status])).toEqual([
+      ['INV-1', 'fail'],
+      ['INV-2', 'fail'],
+      ['INV-3', 'fail'],
+      ['INV-4', 'fail'],
+      ['INV-5', 'pass'],
+      ['INV-6', 'pass'],
+      ['INV-7', 'pass'],
+    ]);
+    expect(results.slice(0, 4).map((r) => r.counterexample!.reason)).toEqual([
+      'INV-1 totalStaked != sum(balances)',
+      'INV-2 vault MON < sum(balances)',
+      'INV-3 withdraw debit or payout != withdrawn amount',
+      'INV-4 withdrew more than own balance',
+    ]);
+    for (const r of results.slice(0, 4)) {
+      expect(r.counterexample!.callSequence.length).toBeGreaterThan(0);
+      expect(r.counterexample!.callSequence.every((l) => /^Handler\.\w+\(.*\) sender=0x[0-9a-fA-F]{40} target=0x/.test(l))).toBe(true);
+    }
+  });
+
+  it('fixed vault: all seven pass', async () => {
+    const results = parseForgeJson(await fx('example-fixed.json'));
+    expect(results).toHaveLength(7);
+    expect(results.every((r) => r.status === 'pass')).toBe(true);
+  });
+});
+
 describe('parseForgeJson shapes', () => {
   const doc = (ce: unknown, status = 'Failure', reason: string | null = 'bad') =>
     JSON.stringify({ 'a.t.sol:S': { test_results: { 'invariant_INV_1()': { status, reason, counterexample: ce } } } });
@@ -141,7 +173,8 @@ describe('ForgeBackend', () => {
     const bin = await fakeForge('fail.json', 1);
     const artifactDir = path.join(dir, 'artifacts');
     const backend = new ForgeBackend({ forgeBin: bin, artifactDir });
-    const res = await backend.run({ worktree: dir, spec, params: { runs: 64, depth: 32, timeoutSec: 30, seed: '0x2a' } });
+    const persistDir = path.join(dir, '.specfirst/runs/r1/iter-3/forge-persist');
+    const res = await backend.run({ worktree: dir, spec, params: { runs: 64, depth: 32, timeoutSec: 30, seed: '0x2a' }, persistDir });
 
     expect((await readFile(path.join(dir, 'argv'), 'utf8')).trim()).toBe('test --match-path test/specfirst/Invariants.t.sol --json');
     const env = await readFile(path.join(dir, 'env'), 'utf8');
@@ -149,7 +182,8 @@ describe('ForgeBackend', () => {
     expect(env).toContain('FOUNDRY_INVARIANT_DEPTH=32');
     expect(env).toContain('FOUNDRY_FUZZ_SEED=0x2a');
     expect(env).toContain(`FOUNDRY_OUT=${artifactDir}/out`);
-    expect(env).toContain(`FOUNDRY_INVARIANT_FAILURE_PERSIST_DIR=${artifactDir}/invariant-failures`);
+    expect(env).toContain(`FOUNDRY_INVARIANT_FAILURE_PERSIST_DIR=${persistDir}\n`);
+    expect(existsSync(persistDir)).toBe(true);
     expect(realpathSync((await readFile(path.join(dir, 'cwd'), 'utf8')).trim())).toBe(realpathSync(dir));
 
     expect(res.backend).toBe('forge');
@@ -165,6 +199,19 @@ describe('ForgeBackend', () => {
     ]);
     expect(res.results[0]!.counterexample!.seed).toBe('0x2a');
     expect(await readFile(res.rawArtifactPath, 'utf8')).toBe(await fx('fail.json'));
+  });
+
+  it('uses a fresh failure-corpus directory per call when none is given', async () => {
+    const bin = await fakeForge('pass.json', 0);
+    const backend = new ForgeBackend({ forgeBin: bin, artifactDir: path.join(dir, 'a') });
+    const persistOf = async () => /FOUNDRY_INVARIANT_FAILURE_PERSIST_DIR=(.*)/.exec(await readFile(path.join(dir, 'env'), 'utf8'))![1]!;
+    const params = { runs: 1, depth: 1, timeoutSec: 30 };
+    await backend.run({ worktree: dir, spec, params });
+    const first = await persistOf();
+    await backend.run({ worktree: dir, spec, params });
+    const second = await persistOf();
+    expect(first).not.toBe(second);
+    expect(first.startsWith(path.join(dir, 'a'))).toBe(true);
   });
 
   it('turns a compile failure into errors with the compiler output', async () => {
