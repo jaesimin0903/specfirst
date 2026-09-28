@@ -1,0 +1,205 @@
+name: 'Specfirst verify and issue'
+description: >-
+  specfirst CLI로 Foundry 컨트랙트를 스펙에 대해 판정한다. pr 모드는 배포 없이 반례
+  검사만 하고 결과를 PR 코멘트로 남긴다. release 모드는 배포, 리허설, 대조, 발급까지
+  진행한다. 수정 루프(Claude 에이전트)는 켜지 않는다. 자세한 범위는 action/README.md.
+author: 'jaesimin'
+
+inputs:
+  spec:
+    description: >-
+      스펙 파일 경로. 이 액션을 호출한 워크플로가 체크아웃한 저장소(대상 프로젝트) 루트
+      기준 상대경로. 예: spec/staking-vault.spec.yaml
+    required: true
+  mode:
+    description: "pr(검증만, 배포 없음) 또는 release(배포, 리허설, 대조, 발급)"
+    required: false
+    default: 'pr'
+  network:
+    description: "--network 로 넘길 배포/대조 대상. anvil 또는 monad-testnet"
+    required: false
+    default: 'monad-testnet'
+  registry:
+    description: >-
+      CertificateRegistry 주소. 비우면 CLI가 SPECFIRST_REGISTRY_<chainId> 환경변수로
+      대신 찾는다.
+    required: false
+    default: ''
+  rpc:
+    description: >-
+      RPC URL. 비우면 CLI가 MONAD_TESTNET_RPC 또는 ANVIL_RPC 환경변수로 대신 찾는다.
+    required: false
+    default: ''
+  runs:
+    description: "캠페인당 불변식 실행 횟수. --runs 로 넘긴다."
+    required: false
+    default: '64'
+  tool-ref:
+    description: >-
+      specfirst CLI 소스를 가져올 jaesimin/specfirst 저장소의 ref. 비우면 이 액션
+      자신이 호출된 ref(github.action_ref)를 쓴다. 자기 저장소 안에서 액션을 호출하는
+      경우에는 비워 둔다.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: mode 값 검사
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$MODE" in
+          pr|release) ;;
+          *)
+            echo "mode 는 pr 또는 release 여야 한다. 받은 값: $MODE" >&2
+            exit 1
+            ;;
+        esac
+
+    - name: 자격증명 확인 (release 모드만)
+      if: inputs.mode == 'release'
+      shell: bash
+      run: |
+        set -euo pipefail
+        missing=()
+        [ -z "${DEPLOYER_PRIVATE_KEY:-}" ] && missing+=(DEPLOYER_PRIVATE_KEY)
+        [ -z "${ISSUER_PRIVATE_KEY:-}" ] && missing+=(ISSUER_PRIVATE_KEY)
+        if [ "${#missing[@]}" -gt 0 ]; then
+          echo "release 모드는 다음 환경변수가 필요하다: ${missing[*]}" >&2
+          echo "이 액션을 호출하는 워크플로의 job env 에 secrets 로 설정한다. action/README.md 참고." >&2
+          exit 1
+        fi
+
+    - name: specfirst 툴 소스 체크아웃
+      uses: actions/checkout@v4
+      with:
+        repository: jaesimin/specfirst
+        ref: ${{ inputs['tool-ref'] != '' && inputs['tool-ref'] || github.action_ref }}
+        path: .specfirst-tool
+
+    - name: pnpm 설치
+      uses: pnpm/action-setup@v4
+      with:
+        version: '10.28.1'
+
+    - name: Node 설치
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: 'pnpm'
+        cache-dependency-path: .specfirst-tool/pnpm-lock.yaml
+
+    - name: 툴 의존성 설치
+      shell: bash
+      working-directory: .specfirst-tool
+      run: pnpm install --frozen-lockfile
+
+    - name: Foundry 설치
+      uses: foundry-rs/foundry-toolchain@v1
+
+    - name: 툴 레지스트리 컨트랙트 빌드 (ABI 동기화용)
+      shell: bash
+      working-directory: .specfirst-tool/packages/contracts
+      run: forge build
+
+    - name: 툴 CLI 빌드
+      shell: bash
+      working-directory: .specfirst-tool
+      run: pnpm --filter @specfirst/core --filter @specfirst/cli build
+
+    - name: PR 모드, 검증만 실행
+      if: inputs.mode == 'pr'
+      id: run-pr
+      shell: bash
+      env:
+        SPEC: ${{ inputs.spec }}
+        RUNS: ${{ inputs.runs }}
+      run: |
+        # GitHub Actions runs `shell: bash` steps as `bash -eo pipefail {0}` by
+        # default, so -e is already on. Turn it off around the pipe so a
+        # non-zero exit from `specfirst run` (a counterexample, not a script
+        # bug) doesn't abort the step before we capture PIPESTATUS and write
+        # $GITHUB_OUTPUT for the PR comment step below.
+        set +e
+        node ./.specfirst-tool/packages/cli/dist/index.js run "$SPEC" \
+          --no-deploy --agent none --runs "$RUNS" --json \
+          | tee specfirst-run.ndjson
+        exit_code="${PIPESTATUS[0]}"
+        set -e
+        summary_line=$(grep '"type":"run-summary"' specfirst-run.ndjson | tail -n1 || true)
+        run_json=""
+        if [ -n "$summary_line" ]; then
+          run_json=$(node -e '
+            const line = process.argv[1];
+            try { const e = JSON.parse(line); process.stdout.write(e.runJson || ""); } catch { /* ignore */ }
+          ' "$summary_line")
+        fi
+        {
+          echo "exit_code=$exit_code"
+          echo "run_json=$run_json"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: PR 코멘트
+      if: inputs.mode == 'pr' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      env:
+        RUN_JSON_PATH: ${{ steps.run-pr.outputs.run_json }}
+        EXIT_CODE: ${{ steps.run-pr.outputs.exit_code }}
+      with:
+        script: |
+          const fs = require('fs');
+          const exitCode = process.env.EXIT_CODE || 'unknown';
+          const runJsonRel = process.env.RUN_JSON_PATH || '';
+          const lines = [`### specfirst 판정, exit ${exitCode}`, ''];
+          if (runJsonRel) {
+            try {
+              const data = JSON.parse(fs.readFileSync(runJsonRel, 'utf8'));
+              const failing = data.result && Array.isArray(data.result.failing) ? data.result.failing : [];
+              lines.push(`상태: ${data.status}`);
+              lines.push(`반복: ${data.iterations}`);
+              lines.push(`specHash: ${data.spec ? data.spec.specHash : 'unknown'}`);
+              lines.push('');
+              lines.push(failing.length ? `반례 있는 불변식: ${failing.join(', ')}` : '반례 없음');
+            } catch (err) {
+              lines.push(`run.json(${runJsonRel})을 읽지 못했다: ${err.message}`);
+            }
+          } else {
+            lines.push('run.json 경로를 찾지 못했다. 워크플로 로그를 본다.');
+          }
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body: lines.join('\n'),
+          });
+
+    - name: PR 모드 결과 반영
+      if: inputs.mode == 'pr'
+      shell: bash
+      env:
+        EXIT_CODE: ${{ steps.run-pr.outputs.exit_code }}
+      run: |
+        set -euo pipefail
+        if [ "$EXIT_CODE" != "0" ]; then
+          echo "specfirst run exit $EXIT_CODE, 반례가 있어 실패 처리한다." >&2
+          exit 1
+        fi
+
+    - name: release 모드, 배포부터 발급까지
+      if: inputs.mode == 'release'
+      shell: bash
+      env:
+        SPEC: ${{ inputs.spec }}
+        RUNS: ${{ inputs.runs }}
+        NETWORK: ${{ inputs.network }}
+        REGISTRY: ${{ inputs.registry }}
+        RPC: ${{ inputs.rpc }}
+      run: |
+        set -euo pipefail
+        args=(run "$SPEC" --agent none --network "$NETWORK" --runs "$RUNS")
+        if [ -n "$RPC" ]; then args+=(--rpc "$RPC"); fi
+        if [ -n "$REGISTRY" ]; then args+=(--registry "$REGISTRY"); fi
+        node ./.specfirst-tool/packages/cli/dist/index.js "${args[@]}"

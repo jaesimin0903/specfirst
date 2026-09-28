@@ -1,0 +1,49 @@
+name: specfirst
+
+# specfirst-example-vault로 미러할 때 그대로 쓰는 워크플로다. 이 저장소(specfirst
+# 모노레포) 안에서는 examples/staking-vault가 하위 폴더라 참고용으로만 둔다.
+# action/README.md의 두 예시(a, b)를 이 볼트 스펙에 맞춰 구체화한 버전이다.
+
+on:
+  pull_request:
+    paths:
+      - 'spec/**'
+      - 'src/**'
+      - 'test/specfirst/**'
+      - '.github/workflows/specfirst.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'spec/**'
+      - 'src/**'
+      - 'test/specfirst/**'
+
+jobs:
+  verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jaesimin/specfirst/action@main
+        with:
+          spec: spec/staking-vault.spec.yaml
+          mode: pr
+          runs: '64'
+
+  release:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: testnet-issuer
+    env:
+      DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+      ISSUER_PRIVATE_KEY: ${{ secrets.ISSUER_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jaesimin/specfirst/action@main
+        with:
+          spec: spec/staking-vault.spec.yaml
+          mode: release
+          network: monad-testnet
