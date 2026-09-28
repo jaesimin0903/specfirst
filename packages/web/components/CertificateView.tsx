@@ -14,6 +14,9 @@ export interface CertificateViewProps {
   lookup: CertLookup;
   report: Report | null;
   reportUrl: string | null;
+  /** True when the certificate names a reportURI whose host is not on the report host allowlist
+   * (see lib/fetchReport.ts); reportUrl is null in that case and this explains why. */
+  reportHostBlocked: boolean;
   forwardLineage: LineageHop[];
   backwardLineage: string[];
   issuanceTx: string | null;
@@ -28,7 +31,17 @@ export interface CertificateViewProps {
  * async data fetching, so this component can be unit-tested directly with @testing-library/react
  * instead of through Next's async Server Component rendering pipeline.
  */
-export function CertificateView({ address, lookup, report, reportUrl, forwardLineage, backwardLineage, issuanceTx, now }: CertificateViewProps) {
+export function CertificateView({
+  address,
+  lookup,
+  report,
+  reportUrl,
+  reportHostBlocked,
+  forwardLineage,
+  backwardLineage,
+  issuanceTx,
+  now,
+}: CertificateViewProps) {
   if (!lookup.hasCertificate || !lookup.certificate) {
     return (
       <main className="page">
@@ -148,7 +161,7 @@ export function CertificateView({ address, lookup, report, reportUrl, forwardLin
             report.json
           </a>
         )}
-        <ReportHashCheck reportUrl={reportUrl} onChainHash={cert.reportHash} />
+        {reportHostBlocked ? <span className="hash-check bad">report host not allowed</span> : <ReportHashCheck reportUrl={reportUrl} onChainHash={cert.reportHash} />}
       </div>
 
       <p className="muted small">report hash {shortHash(cert.reportHash)}</p>

@@ -65,12 +65,18 @@ function callRoute(address: string, search = '') {
   return GET(request, { params: Promise.resolve({ address }) });
 }
 
+const ORIGINAL_REPORT_BASE = process.env.NEXT_PUBLIC_REPORT_BASE;
+
 beforeEach(() => {
   vi.mocked(getRegistryAddress).mockReturnValue(REGISTRY);
+  // resolveReportUrl (lib/report.ts) only resolves reportURI against an absolute https base.
+  process.env.NEXT_PUBLIC_REPORT_BASE = 'https://reports.example.test/';
 });
 
 afterEach(() => {
   vi.clearAllMocks();
+  if (ORIGINAL_REPORT_BASE === undefined) delete process.env.NEXT_PUBLIC_REPORT_BASE;
+  else process.env.NEXT_PUBLIC_REPORT_BASE = ORIGINAL_REPORT_BASE;
 });
 
 describe('GET /api/cert/[address]', () => {
@@ -89,7 +95,7 @@ describe('GET /api/cert/[address]', () => {
       total: 7,
       supersededBy: null,
       certificateUrl: `http://localhost/c/${TARGET}`,
-      reportUrl: `reports/staking-vault-v1.json`,
+      reportUrl: `https://reports.example.test/reports/staking-vault-v1.json`,
     });
     expect(body.invariantSetHash).toMatch(/^0x[0-9a-f]{64}$/);
   });

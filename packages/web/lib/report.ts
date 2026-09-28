@@ -81,10 +81,36 @@ export function isReport(value: unknown): value is Report {
   return r.specfirst === 1 && Array.isArray(r.invariants) && Array.isArray(r.unverified);
 }
 
-/** reportURI may be a full URL (e.g. IPFS gateway) or a path relative to NEXT_PUBLIC_REPORT_BASE. */
+/**
+ * Resolves reportURI (an on-chain, issuer-supplied string) against NEXT_PUBLIC_REPORT_BASE.
+ * Returns '' whenever the result would not be safe to use as a fetch target or an href:
+ *   - NEXT_PUBLIC_REPORT_BASE is unset, malformed, or not an absolute https:// URL. reportURI is
+ *     only ever treated as a path under that one trusted base, never as an independent absolute
+ *     URL of its own choosing, on purpose: reportURI is stored on-chain and, while only the
+ *     issuer can write it today, this function has no way to know that will stay true, and an
+ *     absolute reportURI would otherwise let it silently redirect callers to an arbitrary host.
+ *   - The resolved URL's scheme is not http: or https: (blocks javascript:, data:, file:, ...).
+ * Uses the URL parser (never string concatenation) so a reportURI like "javascript:alert(1)" or
+ * "//evil.example" can't be smuggled through as if it were a harmless relative path.
+ */
 export function resolveReportUrl(reportURI: string): string {
   if (!reportURI) return '';
-  if (/^https?:\/\//.test(reportURI)) return reportURI;
-  const base = process.env.NEXT_PUBLIC_REPORT_BASE ?? '';
-  return `${base}${reportURI}`;
+
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(process.env.NEXT_PUBLIC_REPORT_BASE ?? '');
+  } catch {
+    return '';
+  }
+  if (baseUrl.protocol !== 'https:') return '';
+
+  let resolved: URL;
+  try {
+    resolved = new URL(reportURI, baseUrl);
+  } catch {
+    return '';
+  }
+  if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return '';
+
+  return resolved.toString();
 }

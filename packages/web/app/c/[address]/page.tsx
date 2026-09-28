@@ -3,7 +3,7 @@ import type { Address } from 'viem';
 import { getRegistryAddress, publicClient } from '../../../lib/chain';
 import { fetchCertLookup, fetchForwardLineage, fetchBackwardLineage, fetchIssuanceTx } from '../../../lib/certStatus';
 import { resolveReportUrl } from '../../../lib/report';
-import { fetchReport } from '../../../lib/fetchReport';
+import { fetchReport, isAllowedReportUrl } from '../../../lib/fetchReport';
 import { CertificateView } from '../../../components/CertificateView';
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -37,11 +37,28 @@ export default async function CertificatePage({ params }: { params: Promise<{ ad
   const lookup = await fetchCertLookup({ client, registry, address: address as Address });
 
   if (!lookup.hasCertificate || !lookup.certificate) {
-    return <CertificateView address={address} lookup={lookup} report={null} reportUrl={null} forwardLineage={[]} backwardLineage={[]} issuanceTx={null} />;
+    return (
+      <CertificateView
+        address={address}
+        lookup={lookup}
+        report={null}
+        reportUrl={null}
+        reportHostBlocked={false}
+        forwardLineage={[]}
+        backwardLineage={[]}
+        issuanceTx={null}
+      />
+    );
   }
 
   const cert = lookup.certificate;
-  const reportUrl = cert.reportURI ? resolveReportUrl(cert.reportURI) : null;
+  const resolvedReportUrl = cert.reportURI ? resolveReportUrl(cert.reportURI) : null;
+  // resolveReportUrl already refuses javascript:/data:/non-https-base URLs; this is the separate
+  // SSRF gate for the URL this server is about to fetch (docs/plan.md 3.8's report link, but the
+  // request itself is attacker-influenced on-chain input -- see lib/fetchReport.ts).
+  const reportAllowed = Boolean(resolvedReportUrl) && isAllowedReportUrl(resolvedReportUrl!);
+  const reportUrl = reportAllowed ? resolvedReportUrl : null;
+  const reportHostBlocked = Boolean(resolvedReportUrl) && !reportAllowed;
 
   const [report, forwardLineage, backwardLineage, issuanceTx] = await Promise.all([
     reportUrl ? fetchReport(reportUrl, { next: { revalidate: 60 } }) : Promise.resolve(null),
@@ -56,6 +73,7 @@ export default async function CertificatePage({ params }: { params: Promise<{ ad
       lookup={lookup}
       report={report}
       reportUrl={reportUrl}
+      reportHostBlocked={reportHostBlocked}
       forwardLineage={forwardLineage}
       backwardLineage={backwardLineage}
       issuanceTx={issuanceTx}
