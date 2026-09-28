@@ -1,0 +1,29 @@
+specfirst: 1
+name: StakingVault
+projectId: "github.com/jaesimin/specfirst-example-vault#StakingVault"   # keccak256 해서 온체인 projectId
+contract:
+  path: src/StakingVault.sol       # 있으면 구현 단계 건너뜀
+  name: StakingVault
+  constructorArgs: ["$DEPLOYER"]
+  editable: ["src/"]               # 에이전트가 만들거나 고칠 수 있는 디렉터리. 이 밖은 전부 거부
+actors:                            # 퍼징 핸들러와 리허설이 공유
+  users: 3
+  owner: "$DEPLOYER"
+  attacker: true                   # 기본 공격자 액터 생성 (receive 훅에서 대상 함수 재호출)
+invariants:
+  - { id: INV-1, kind: invariant,     text: "총 예치량은 모든 사용자 예치 잔고의 합과 같다" }
+  - { id: INV-2, kind: invariant,     text: "금고가 가진 MON은 모든 사용자 예치 잔고의 합 이상이다" }
+  - { id: INV-3, kind: postcondition, text: "출금하면 사용자 예치 잔고는 정확히 출금액만큼 줄고, 받은 MON도 출금액과 같다" }
+  - { id: INV-4, kind: access,        text: "누구도 자기 예치 잔고보다 많이 출금할 수 없다" }
+  - { id: INV-5, kind: access,        text: "소유자만 보상률을 바꿀 수 있다" }
+  - { id: INV-6, kind: invariant,     text: "일시정지 중에는 예치가 성공하지 않는다" }
+  - { id: INV-7, kind: access,        text: "소유자만 일시정지와 해제를 할 수 있다" }
+unverified:
+  - "오라클 가격 조작"
+  - "외부 토큰 컨트랙트 결함"
+  - "경제적 공격"
+  - "배포 후 소유자 권한에 의한 상태 변경"
+  - "업그레이드 가능 프록시"
+rehearsal:
+  normalTx: 25
+  expectRevertTx: 5
