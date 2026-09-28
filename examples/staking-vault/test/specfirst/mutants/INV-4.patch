@@ -1,0 +1,12 @@
+diff --git a/src/StakingVault.sol b/src/StakingVault.sol
+--- a/src/StakingVault.sol
++++ b/src/StakingVault.sol
+@@ -38,7 +38,7 @@ contract StakingVault {
+ 
+     function withdraw(uint256 amount) external {
+         uint256 bal = balances[msg.sender];
+-        if (amount > bal) revert InsufficientBalance();
++        if (amount > bal) amount = bal;
+         balances[msg.sender] = bal - amount;
+         totalStaked -= amount;
+         emit Withdraw(msg.sender, amount);

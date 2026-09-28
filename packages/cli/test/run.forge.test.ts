@@ -36,7 +36,7 @@ describe.skipIf(process.env.SPECFIRST_SKIP_FORGE === '1')('specfirst run with fo
 
   beforeAll(async () => {
     dir = await sampleRepo();
-    await capture(() => buildProgram(registerLockCommand).parseAsync(['node', 'specfirst', '--project', dir, 'lock', SPEC]));
+    await capture(() => buildProgram(registerLockCommand).parseAsync(['node', 'specfirst', '--project', dir, 'lock', SPEC, '--skip-mutants']));
     expect(process.exitCode ?? 0).toBe(0);
   }, 60_000);
 

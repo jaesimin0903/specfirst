@@ -37,7 +37,6 @@ export {
   type LockMismatch,
   type LockMismatchKind,
   type LockState,
-  type MutantCheckResult,
   type CreateLockInput,
   type VerifyLockInput,
 } from './lock/lock.js';
@@ -81,6 +80,21 @@ export {
   type ClaudeExec,
   type ClaudeExecResult,
 } from './agent/claude.js';
+export {
+  runMutantCheck,
+  annotateLock,
+  mutantPatchPath,
+  mutantsReportPath,
+  MutantCheckError,
+  MUTANTS_DIR,
+  MUTANTS_FILE,
+  type MutantCheckResult,
+  type MutantCheckReport,
+  type MutantBaseline,
+  type MutantEvent,
+  type MutantStatus,
+  type RunMutantCheckInput,
+} from './mutants/mutants.js';
 export {
   createWorktree,
   collectChanges,

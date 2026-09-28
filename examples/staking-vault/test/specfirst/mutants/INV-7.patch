@@ -1,0 +1,12 @@
+diff --git a/src/StakingVault.sol b/src/StakingVault.sol
+--- a/src/StakingVault.sol
++++ b/src/StakingVault.sol
+@@ -56,7 +56,7 @@ contract StakingVault {
+         emit Paused(true);
+     }
+ 
+-    function unpause() external onlyOwner {
++    function unpause() external {
+         paused = false;
+         emit Paused(false);
+     }

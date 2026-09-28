@@ -1,0 +1,12 @@
+diff --git a/src/StakingVault.sol b/src/StakingVault.sol
+--- a/src/StakingVault.sol
++++ b/src/StakingVault.sol
+@@ -42,7 +42,7 @@ contract StakingVault {
+         balances[msg.sender] = bal - amount;
+         totalStaked -= amount;
+         emit Withdraw(msg.sender, amount);
+-        (bool ok,) = msg.sender.call{value: amount}("");
++        (bool ok,) = msg.sender.call{value: amount / 2}("");
+         if (!ok) revert TransferFailed();
+     }
+ 

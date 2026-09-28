@@ -1,0 +1,11 @@
+diff --git a/src/StakingVault.sol b/src/StakingVault.sol
+--- a/src/StakingVault.sol
++++ b/src/StakingVault.sol
+@@ -32,7 +32,6 @@ contract StakingVault {
+     function deposit() external payable {
+         if (paused) revert PausedError();
+         balances[msg.sender] += msg.value;
+-        totalStaked += msg.value;
+         emit Deposit(msg.sender, msg.value);
+     }
+ 

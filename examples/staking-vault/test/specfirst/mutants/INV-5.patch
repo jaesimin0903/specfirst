@@ -1,0 +1,12 @@
+diff --git a/src/StakingVault.sol b/src/StakingVault.sol
+--- a/src/StakingVault.sol
++++ b/src/StakingVault.sol
+@@ -46,7 +46,7 @@ contract StakingVault {
+         if (!ok) revert TransferFailed();
+     }
+ 
+-    function setRewardRate(uint256 rate) external onlyOwner {
++    function setRewardRate(uint256 rate) external {
+         rewardRate = rate;
+         emit RewardRateChanged(rate);
+     }
