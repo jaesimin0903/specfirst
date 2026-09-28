@@ -1,0 +1,3 @@
+[{"type":"system","subtype":"init","cwd":"/tmp/wt/iter-1","session_id":"9f8e7d6c-5b4a-4321-8765-0fedcba98765","tools":["Read","Glob","Grep","Edit","Write","Bash"],"model":"claude-opus-5-5","permissionMode":"dontAsk"},
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading src/StakingVault.sol"}]},"session_id":"9f8e7d6c-5b4a-4321-8765-0fedcba98765"},
+{"type":"result","subtype":"success","is_error":false,"duration_ms":30211,"num_turns":4,"result":"Moved state updates before the transfer.","session_id":"9f8e7d6c-5b4a-4321-8765-0fedcba98765","total_cost_usd":1.25,"modelUsage":{"claude-opus-5-5":{"costUSD":1.25}},"permission_denials":[{"tool_name":"Bash","tool_use_id":"toolu_01","tool_input":{"command":"git status"}}]}]

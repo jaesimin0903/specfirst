@@ -1,0 +1,1 @@
+{"type":"result","subtype":"error_max_turns","is_error":true,"duration_ms":600000,"num_turns":50,"session_id":"1a2b3c4d-0000-4000-8000-000000000001","total_cost_usd":2.5,"modelUsage":{"claude-sonnet-5":{"costUSD":2.5}},"permission_denials":[]}

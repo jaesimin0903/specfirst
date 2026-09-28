@@ -63,7 +63,24 @@ export {
 export { MockBackend, type MockScenario } from './fuzz/mock.js';
 export type { ImplAgent, AgentResult, IterationRecord, ImplementInput, FixInput } from './agent/types.js';
 export { ReplayAgent, type ReplayAgentOptions } from './agent/replay.js';
-export { ClaudeCodeAgent, NotImplementedError, type ClaudeCodeAgentOptions } from './agent/claude.js';
+export {
+  ClaudeCodeAgent,
+  ClaudeAgentError,
+  NotImplementedError,
+  parseClaudeEnvelope,
+  parseClaudeVersion,
+  buildFixPrompt,
+  buildImplementPrompt,
+  CLAUDE_ALLOWED_TOOLS,
+  DEFAULT_CLAUDE_MODEL,
+  DEFAULT_CLAUDE_ESCALATE_MODEL,
+  DEFAULT_CLAUDE_ESCALATE_FROM,
+  DEFAULT_CLAUDE_TIMEOUT_MS,
+  type ClaudeCodeAgentOptions,
+  type ClaudeEnvelope,
+  type ClaudeExec,
+  type ClaudeExecResult,
+} from './agent/claude.js';
 export {
   createWorktree,
   collectChanges,
