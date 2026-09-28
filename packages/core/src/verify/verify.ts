@@ -65,9 +65,13 @@ export interface CollectDepositorsInput {
   chunkSize?: bigint;
 }
 
-/** Every address that ever emitted Deposit(user, ...) on the vault, from the deploy block on (plan 3.6 item 3). */
+/**
+ * Every address that ever emitted Deposit(user, ...) on the vault, from the deploy block on (plan 3.6 item 3).
+ * "Latest" is read with cacheTime 0: viem otherwise serves a block number cached for one polling
+ * interval, which can predate a deposit whose receipt was just returned and silently drop it.
+ */
 export async function collectDepositors(input: CollectDepositorsInput): Promise<{ addresses: Address[]; chunks: number; toBlock: bigint }> {
-  const toBlock = input.toBlock ?? (await input.client.getBlockNumber());
+  const toBlock = input.toBlock ?? (await input.client.getBlockNumber({ cacheTime: 0 }));
   let chunks = 0;
   const logs = await getLogsChunked({
     client: input.client,
@@ -152,7 +156,7 @@ export async function verifyDeployment(input: VerifyInput): Promise<VerifyRecord
   let fuzz: FuzzResult | null = null;
   let forkBlock = dep.toBlock;
   if (!input.forceProbe) {
-    forkBlock = await client.getBlockNumber();
+    forkBlock = await client.getBlockNumber({ cacheTime: 0 });
     const backend = input.backend ?? new ForgeBackend({ artifactDir: input.artifactDir, forgeBin: input.forgeBin });
     fuzz = await backend.run({
       worktree: input.projectDir,

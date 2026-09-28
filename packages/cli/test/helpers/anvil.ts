@@ -1,5 +1,4 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createServer } from 'node:net';
 
 /** Anvil's well-known dev keys (mnemonic "test test ... junk"). Local chain only. */
 export const ANVIL_KEYS = [
@@ -13,18 +12,6 @@ export const ANVIL_KEYS = [
 
 export const SKIP_ANVIL = process.env.SPECFIRST_SKIP_ANVIL === '1';
 
-export async function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      const port = typeof addr === 'object' && addr ? addr.port : 0;
-      srv.close(() => resolve(port));
-    });
-  });
-}
-
 export interface Anvil {
   url: string;
   port: number;
@@ -32,13 +19,43 @@ export interface Anvil {
   stop(): Promise<void>;
 }
 
-/** Starts `anvil` on a free port and resolves once eth_chainId answers. */
+/**
+ * Starts `anvil --port 0` and reads the port the OS assigned from its "Listening on" line.
+ * No port is picked in advance and released, so parallel test processes (core and cli under
+ * `pnpm -r test`) can never race for the same port or talk to each other's chain.
+ * Resolves once eth_chainId answers on that port; rejects if anvil exits first.
+ */
 export async function startAnvil(extraArgs: string[] = []): Promise<Anvil> {
-  const port = await freePort();
-  const proc = spawn('anvil', ['--port', String(port), '--silent', ...extraArgs], { stdio: 'ignore' });
+  const proc = spawn('anvil', ['--port', '0', ...extraArgs], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const port = await new Promise<number>((resolve, reject) => {
+    let buf = '';
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL');
+      reject(new Error(`anvil printed no "Listening on" line within 20s:\n${buf.slice(-2000)}`));
+    }, 20_000);
+    const onData = (chunk: Buffer) => {
+      buf += chunk.toString('utf8');
+      const m = /Listening on [^\s:]+:(\d+)/.exec(buf);
+      if (m) {
+        clearTimeout(timer);
+        resolve(Number(m[1]));
+      }
+    };
+    proc.stdout!.on('data', onData);
+    proc.stderr!.on('data', onData);
+    proc.once('exit', (code) => {
+      clearTimeout(timer);
+      reject(new Error(`anvil exited with code ${code} before listening:\n${buf.slice(-2000)}`));
+    });
+  });
+  // Keep draining anvil's per-transaction log so a full pipe never blocks it.
+  proc.stdout!.removeAllListeners('data').resume();
+  proc.stderr!.removeAllListeners('data').resume();
+
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 20_000;
   for (;;) {
+    if (proc.exitCode !== null) throw new Error(`anvil on ${url} exited with code ${proc.exitCode}`);
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -51,7 +68,7 @@ export async function startAnvil(extraArgs: string[] = []): Promise<Anvil> {
     }
     if (Date.now() > deadline) {
       proc.kill('SIGKILL');
-      throw new Error(`anvil did not start on ${url}`);
+      throw new Error(`anvil did not answer on ${url}`);
     }
     await new Promise((r) => setTimeout(r, 100));
   }

@@ -151,6 +151,22 @@ describe.skipIf(SKIP_ANVIL)('deploy, rehearse, verify on anvil', { timeout: 300_
     expect(v.ok).toBe(false);
   });
 
+  it('depositor scan sees a deposit mined right after the client cached the block number', async () => {
+    // One-minute block number cache: the latest block is cached before the deposit and would be
+    // reused by any getBlockNumber() that does not bypass it.
+    const cached = createChainClients({ chain: anvilChain, rpcUrls: [anvil.url], rps: 1000, pollingIntervalMs: 60_000 });
+    await cached.publicClient.getBlockNumber();
+    const late = clients.wallet(ANVIL_KEYS[4] as Hex);
+    const hash = await late.sendTransaction({
+      to: fixed.record.address,
+      data: encodeFunctionData({ abi: vaultAbi, functionName: 'deposit' }),
+      value: parseEther('0.01'),
+    });
+    await clients.publicClient.waitForTransactionReceipt({ hash });
+    const dep = await collectDepositors({ client: cached.publicClient, target: fixed.record.address, fromBlock: BigInt(fixed.record.blockNumber) });
+    expect(dep.addresses.map((a) => a.toLowerCase())).toContain(late.account.address.toLowerCase());
+  });
+
   it('getLogs with chunk 3 finds the same depositors as chunk 100, over contiguous ranges', async () => {
     const from = BigInt(fixed.record.blockNumber);
     const latest = await clients.publicClient.getBlockNumber();

@@ -19,7 +19,7 @@ export async function runProbe(
   vault: Address,
   depositors: readonly Address[],
 ): Promise<ProbeResult> {
-  const block = await client.getBlockNumber();
+  const block = await client.getBlockNumber({ cacheTime: 0 });
   const args = encodeAbiParameters([{ type: 'address' }, { type: 'address[]' }], [vault, [...depositors]]);
   const data = `${probeBytecode}${args.slice(2)}` as Hex;
   const res = (await client.request({ method: 'eth_call', params: [{ data }, `0x${block.toString(16)}`] })) as Hex;
