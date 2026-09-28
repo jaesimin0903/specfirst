@@ -1,0 +1,32 @@
+{
+  "name": "@specfirst/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "specfirst": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "scripts": {
+    "build": "node scripts/sync-abi.mjs && tsc -p tsconfig.build.json",
+    "test": "node scripts/sync-abi.mjs && vitest run",
+    "lint": "node scripts/sync-abi.mjs && tsc --noEmit",
+    "e2e:testnet": "bash scripts/e2e-testnet.sh"
+  },
+  "dependencies": {
+    "@specfirst/core": "workspace:*",
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

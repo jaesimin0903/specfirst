@@ -10,3 +10,4 @@ cache/
 broadcast/
 *.log
 .DS_Store
+packages/cli/src/abi/*.json
