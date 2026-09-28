@@ -1,6 +1,6 @@
 # Specfirst 구현 계획
 
-- 상태: **approved 2026-09-29, in progress** (ADR 0001: 프록시 폐기, fork 주 경로 확정. 스파이크 실측: P=102 gwei, getLogs 100블록 통일) (사용자 승인: A3, B2, C1, D2, 예산 기본값, 데모 (a) 버전 대체, ultrawork 착수) (개정 3판, Architect와 Critic 2회차 검토 반영. 저장소는 공개가 기본값)
+- 상태: **approved 2026-09-29, week 1 code complete on anvil** (ADR 0001 fork 주 경로, ADR 0002 블록 번호 캐시. 키 필요 작업만 남음: 테스트넷 배포, 키 필요 실측, Ultrafuzz VM, 어그리게이터 발송) (사용자 승인: A3, B2, C1, D2, 예산 기본값, 데모 (a) 버전 대체, ultrawork 착수) (개정 3판, Architect와 Critic 2회차 검토 반영. 저장소는 공개가 기본값)
 - 작성일: 2026-09-28 (월)
 - 대회: Monad Metropolis 트랙 4, 제출 마감 2026-10-13 (화), 1인 팀, 남은 기간 15일
 - 저장소: `~/Developer/Personal/specfirst` (신규. portfolio-slides에는 만들지 않는다)
