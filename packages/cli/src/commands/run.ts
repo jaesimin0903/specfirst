@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { Command } from 'commander';
 import pc from 'picocolors';
+import type { Address, Hex } from 'viem';
 import {
   BudgetTracker,
   BUDGET_FILE,
@@ -32,6 +33,24 @@ import {
 } from '@specfirst/core';
 import { contextFrom, emitEvent, jsonReplacer, printLine, type CliContext } from '../lib/context.js';
 import { ensureLock, LockMismatchError } from '../lib/ensureLock.js';
+import {
+  ConfigError,
+  DEPLOYER_KEY_ENV,
+  ISSUER_KEY_ENV,
+  resolveKey,
+  resolveNetwork,
+  resolveRegistry,
+  type ResolvedNetwork,
+} from '../lib/network.js';
+import {
+  deployStage,
+  issueStage,
+  loadRun,
+  rehearseStage,
+  StageError,
+  verifyStage,
+  type IssueOutcome,
+} from '../lib/pipeline.js';
 import { createRunLog, formatUsd, stage } from '../lib/runLog.js';
 
 const execFileAsync = promisify(execFile);
@@ -51,6 +70,13 @@ interface RunOptions {
   seed?: string;
   maxIterations: string;
   keepWorktrees?: boolean;
+  network: string;
+  rpc?: string;
+  registry?: string;
+  verifyRuns: string;
+  reportBaseUrl?: string;
+  ackEnvWarnings?: boolean;
+  forceProbe?: boolean;
 }
 
 type AgentChoice =
@@ -156,17 +182,36 @@ function summarizeIterations(result: FixLoopResult) {
   });
 }
 
+interface PipelineKeys {
+  net: ResolvedNetwork;
+  deployerKey: Hex;
+  issuerKey: Hex;
+  registry: Address;
+}
+
+/** Resolves network, keys and registry before the loop, so a missing key fails fast instead of after fuzzing. */
+function pipelineConfig(opts: RunOptions): PipelineKeys {
+  const net = resolveNetwork({ network: opts.network, rpc: opts.rpc });
+  return {
+    net,
+    deployerKey: resolveKey(net, DEPLOYER_KEY_ENV),
+    issuerKey: resolveKey(net, ISSUER_KEY_ENV),
+    registry: resolveRegistry(net, { registry: opts.registry }),
+  };
+}
+
 /**
- * `specfirst run <spec>` (plan 3.3, 3.10): spec parse (exit 2) -> lock check (exit 11) -> fix loop
- * with the chosen agent and the forge judge -> run.json. Exit 0 when every invariant passes,
- * 10 when the loop gave up, 11 when the agent touched a locked file, 15 over budget.
- * Deploy, rehearsal, verify and cert issue are the next step; without --no-deploy the command only warns.
+ * `specfirst run <spec>` (plan 3.3, 3.6, 3.10): spec parse (exit 2) -> lock check (exit 11) -> fix loop
+ * with the chosen agent and the forge judge -> run.json. Without --no-deploy a passing loop continues:
+ * deploy (exit 12) -> rehearse -> verify (exit 13) -> cert issue (exit 14).
+ * Loop exits: 0 when every invariant passes, 10 when the loop gave up, 11 when the agent touched a
+ * locked file, 15 over budget.
  */
 export function registerRunCommand(program: Command): void {
   program
     .command('run <spec>')
-    .description('Lock check, then the fix loop (fuzz, fix, re-fuzz) until every invariant passes. Deploy is not implemented yet.')
-    .option('--no-deploy', 'stop after the fix loop (deploy is not implemented yet either way)')
+    .description('Lock check, fix loop until every invariant passes, then deploy, rehearse, verify on a fork and issue the certificate.')
+    .option('--no-deploy', 'stop after the fix loop')
     .option('--agent <kind>', 'fix agent: claude, none (judge once, no fixes), or replay:<patchfile>[,<patchfile>]', 'claude')
     .option('--no-agent', 'same as --agent none')
     .option('--allow-partial', 'record that a partial certificate may be issued (used by cert issue)')
@@ -177,6 +222,13 @@ export function registerRunCommand(program: Command): void {
     .option('--seed <seed>', 'fuzz seed (decimal or 0x hex), for reproducible campaigns')
     .option('--max-iterations <n>', 'fix iteration cap', String(DEFAULT_MAX_ITERATIONS))
     .option('--keep-worktrees', 'leave per-iteration worktrees under .specfirst/worktrees for debugging')
+    .option('--network <name>', 'deploy target: anvil or monad-testnet', 'monad-testnet')
+    .option('--rpc <url>', 'RPC URL, also the fork URL (default: $MONAD_TESTNET_RPC or $ANVIL_RPC)')
+    .option('--registry <address>', 'CertificateRegistry address (default: $SPECFIRST_REGISTRY_<chainId>)')
+    .option('--verify-runs <n>', 'invariant runs on the post-deploy fork', '32')
+    .option('--report-base-url <url>', 'reportURI prefix (default: repo-relative certs/ path)')
+    .option('--ack-env-warnings', 'a human reviewed environment-branch warnings; allow issuing')
+    .option('--force-probe', 'verify with SpecfirstProbe instead of a fork')
     .action(async (specArg: string, opts: RunOptions, command: Command) => {
       const ctx = contextFrom(command);
       const startedAt = new Date();
@@ -211,6 +263,18 @@ export function registerRunCommand(program: Command): void {
         return fail(ctx, 1, `specfirst run: ${(err as Error).message}`);
       }
       if (choice.kind === 'none') maxIterations = 1;
+
+      let pipeline: PipelineKeys | null = null;
+      if (opts.deploy) {
+        try {
+          pipeline = pipelineConfig(opts);
+        } catch (err) {
+          if (err instanceof ConfigError || /unknown network/.test((err as Error).message)) {
+            return fail(ctx, 12, `specfirst run: ${(err as Error).message} (or pass --no-deploy)`);
+          }
+          throw err;
+        }
+      }
 
       // 2. lock
       let lock: LockFile;
@@ -333,7 +397,7 @@ export function registerRunCommand(program: Command): void {
         cost: { runUsd: budget.runUsd, totalUsd: budget.totalUsd, runCapUsd: budget.runCapUsd, totalCapUsd: budget.totalCapUsd },
         envWarnings: result.envWarnings,
         allowPartial: opts.allowPartial ?? false,
-        deploy: opts.deploy ? 'not-implemented' : 'skipped',
+        deploy: opts.deploy ? (result.status === 'passed' ? 'pending' : 'not-run') : 'skipped',
         versions: {
           specfirst: await cliVersion(),
           forge: await toolVersion('forge', ['--version']),
@@ -351,12 +415,70 @@ export function registerRunCommand(program: Command): void {
           : result.status === 'passed'
             ? pc.green(`passed in ${n} iteration${n === 1 ? '' : 's'}`)
             : pc.red(`${result.status} (${result.stopReason}) after ${n} iteration${n === 1 ? '' : 's'}`);
-      printLine(ctx, stage('done', `${verdict}  exit ${result.exitCode}  cost ${formatUsd(budget.runUsd)}`));
+      const continues = pipeline !== null && result.status === 'passed';
+      printLine(ctx, stage(continues ? 'loop' : 'done', `${verdict}  exit ${result.exitCode}  cost ${formatUsd(budget.runUsd)}`));
       printLine(ctx, `${' '.repeat(9)}${pc.dim(path.relative(ctx.projectDir, runJson))}`);
-      if (opts.deploy) {
-        console.error(pc.yellow('specfirst run: deploy not implemented yet; stopping after the fix loop (pass --no-deploy to silence)'));
-      }
       emitEvent(ctx, { type: 'run-summary', runId, status: result.status, exitCode: result.exitCode, iterations: result.iterations.length, runJson: path.relative(ctx.projectDir, runJson) });
       process.exitCode = result.exitCode;
+      if (!pipeline || result.status !== 'passed') return;
+
+      // 6. deploy -> rehearse -> verify -> cert issue (plan 3.6, 3.10)
+      const log = (l: string) => printLine(ctx, l);
+      const stages: Record<string, unknown> = {};
+      let exitCode = 0;
+      let issued: IssueOutcome | null = null;
+      try {
+        for (const n of pipeline.net.notices) log(`${' '.repeat(9)}${pc.yellow(`! ${n}`)}`);
+        const loaded = await loadRun(ctx.projectDir, runId);
+        const verifyRuns = positiveInt('--verify-runs', opts.verifyRuns);
+        const deployed = await deployStage({ projectDir: ctx.projectDir, run: loaded, net: pipeline.net, deployerKey: pipeline.deployerKey, log });
+        stages.deploy = { address: deployed.address, txHash: deployed.txHash, blockNumber: deployed.blockNumber };
+        emitEvent(ctx, { type: 'deployed', runId, address: deployed.address, txHash: deployed.txHash });
+        let rehearsal;
+        try {
+          rehearsal = await rehearseStage({ run: loaded, net: pipeline.net, deployerKey: pipeline.deployerKey, deploy: deployed, log });
+        } catch (err) {
+          throw new StageError(13, `rehearsal failed: ${(err as Error).message.split('\n')[0]}`);
+        }
+        stages.rehearsal = rehearsal.summary;
+        emitEvent(ctx, { type: 'rehearsed', runId, ...rehearsal.summary });
+        const v = await verifyStage({
+          projectDir: ctx.projectDir,
+          run: loaded,
+          net: pipeline.net,
+          deploy: deployed,
+          rehearsal,
+          runs: verifyRuns,
+          seed: params.seed,
+          forceProbe: opts.forceProbe,
+          log,
+        });
+        stages.verify = { path: v.path, passed: v.passed, violated: v.violated, unjudged: v.unjudged };
+        emitEvent(ctx, { type: 'verified', runId, path: v.path, passed: v.passed, violated: v.violated, unjudged: v.unjudged });
+        issued = await issueStage({
+          projectDir: ctx.projectDir,
+          run: loaded,
+          net: pipeline.net,
+          issuerKey: pipeline.issuerKey,
+          registry: pipeline.registry,
+          allowPartial: opts.allowPartial,
+          ackEnvWarnings: opts.ackEnvWarnings,
+          reportBaseUrl: opts.reportBaseUrl ?? process.env.SPECFIRST_REPORT_BASE_URL,
+          log,
+        });
+        stages.cert = { certId: issued.certId, txHash: issued.txHash, reportHash: issued.reportHash };
+        emitEvent(ctx, { type: 'cert-issued', runId, ...issued });
+      } catch (err) {
+        exitCode = err instanceof StageError ? err.exitCode : err instanceof ConfigError ? 12 : 1;
+        const message = `specfirst run: ${(err as Error).message}`;
+        console.error(message);
+        emitEvent(ctx, { type: 'run-error', exitCode, message });
+      }
+      await writeFile(runJson, `${JSON.stringify({ ...summary, deploy: exitCode === 0 ? 'done' : 'failed', pipeline: { exitCode, ...stages } }, jsonReplacer, 2)}\n`);
+      const tail = issued
+        ? pc.green(`certificate ${issued.certId} issued for ${issued.target}`)
+        : pc.red(`pipeline stopped`);
+      printLine(ctx, stage('done', `${tail}  exit ${exitCode}`));
+      process.exitCode = exitCode;
     });
 }

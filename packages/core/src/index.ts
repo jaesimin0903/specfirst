@@ -138,3 +138,99 @@ export {
   type BudgetOptions,
   type BudgetExceeded,
 } from './budget/budget.js';
+export {
+  monadTestnet,
+  anvilChain,
+  chainFor,
+  networkDefaults,
+  NETWORKS,
+  MONAD_TESTNET_CHAIN_ID,
+  ANVIL_CHAIN_ID,
+  MONAD_TESTNET_DEFAULT_RPC,
+  ANVIL_DEFAULT_RPC,
+  type NetworkName,
+  type NetworkDefaults,
+} from './chain/chains.js';
+export { TokenBucket, rpcTransport, isRateLimited, isTransportFailure, type RpcTransportOptions } from './chain/transport.js';
+export {
+  createChainClients,
+  type ChainClients,
+  type ClientFactoryInput,
+  type SpecfirstPublicClient,
+  type SpecfirstWalletClient,
+} from './chain/client.js';
+export { forgeBuild, readArtifact, BuildError, type ContractArtifact } from './deploy/artifacts.js';
+export {
+  deployContract,
+  resolveConstructorArgs,
+  gasLimitFor,
+  withMargin,
+  writeJson,
+  readJson,
+  DeployError,
+  DEPLOY_FAILED_EXIT_CODE,
+  DEPLOY_JSON,
+  TX_GAS_CAP,
+  type DeployRecord,
+  type DeployResult,
+  type DeployContractInput,
+} from './deploy/deploy.js';
+export { planRehearsal, REVERT_KINDS, type PlanStep, type NormalAction, type RevertKind, type ActorRef } from './rehearse/plan.js';
+export {
+  rehearse,
+  deriveActorKey,
+  actorAddress,
+  judgeRevertReceipt,
+  checkRevertSelector,
+  revertDataOf,
+  vaultAbi,
+  attackerAbi,
+  DEFAULT_EXPECTED_ERRORS,
+  DEFAULT_REVERT_INVARIANTS,
+  REHEARSAL_JSON,
+  REVERT_GAS_LIMIT,
+  type RehearsalRecord,
+  type RehearsalTx,
+  type RehearsalActor,
+  type RehearseInput,
+  type SelectorCheck,
+  type Verdict,
+} from './rehearse/rehearse.js';
+export { getLogsChunked, chunkRanges, DEFAULT_LOG_CHUNK, type ChunkedLogsInput } from './verify/logs.js';
+export { runProbe, type ProbeResult } from './verify/probe.js';
+export {
+  verifyDeployment,
+  collectDepositors,
+  VERIFY_JSON,
+  VERIFY_FAILED_EXIT_CODE,
+  DEFAULT_FORK_RUNS,
+  FORK_NOT_USED,
+  DEFAULT_ACCESS_EVENTS,
+  PROBE_INVARIANTS,
+  type VerifyRecord,
+  type VerifyInput,
+  type InvariantVerdict,
+} from './verify/verify.js';
+export {
+  buildReport,
+  reportHash,
+  passedBitmap,
+  EMPTY_AUX_CAMPAIGN,
+  REPORT_JSON,
+  CERT_FAILED_EXIT_CODE,
+  type Report,
+  type RunSummaryLike,
+  type AuxCampaignSummary,
+  type BuildReportInput,
+} from './cert/report.js';
+export {
+  RegistryClient,
+  RegistryError,
+  evidenceHash,
+  certificateRegistryAbi,
+  CERT_STATUS,
+  type IssueParams,
+  type Certificate,
+  type CertStatusName,
+  type TxOutcome,
+} from './cert/registry.js';

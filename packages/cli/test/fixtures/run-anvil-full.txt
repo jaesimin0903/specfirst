@@ -1,0 +1,58 @@
+spec     StakingVault  7 invariants  spec/staking-vault.spec.yaml
+lock     ok  specHash 0xeef8d3d9  propertyHash 0x23617d7f
+run      20260928-161055-7a50df  agent replay fixtures/fix-reentrancy.patch  base 0649047
+impl     src/StakingVault.sol exists, implement step skipped
+fuzz #1  forge runs=64 depth=64
+         4 fail, 3 pass  2.4s
+  ✗ INV-1  INV-1 totalStaked != sum(balances)
+      1. Handler.deposit(419, 3) sender=0x86e09593ae75a78eae1a1d3f8211839f178e67fc target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+      2. Handler.deposit(189674568, 19233592199457957425409905481) sender=0x00000000000000000000000000000000c9e45ace target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+      3. Handler.withdraw(44812743959748784, 114728451694916140070940278787290940245229953855051348354383351066573553606935) sender=0x0000000000000000000000000000000000000417 target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+  ✗ INV-2  INV-2 vault MON < sum(balances)
+      1. Handler.deposit(4, 100000000000000000000) sender=0x00000000000000000000000000000000ffa18649 target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+      2. Handler.deposit(2212360736910326425399189702673794485, 307082103062117273205627266200) sender=0x0000000000000000000000000000000000001df5 target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+      3. Handler.withdraw(3180861878619398385791178284713242874, 3688726164792363010240085332135542650109299982066610174990766) sender=0x0000000000000000000000000000000000000d2e target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+  ✗ INV-3  INV-3 withdraw debit or payout != withdrawn amount
+      1. Handler.deposit(2569, 4193946682212426359782748334493328956422529175578517947137699710011858811) sender=0x000000000000000000000000000000000000150d target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+      2. Handler.withdraw(85672419125767836665710596176936518513777894, 29639998023302197132142305758399078344644860895612941556489740679334820946) sender=0x0000000000000000000000000000000000000494 target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+  ✗ INV-4  INV-4 withdrew more than own balance
+      1. Handler.deposit(0, 115792089237316195423570985008687907853269984665640564039457584007913129639934) sender=0x2e234dae75c793f67a35089c9d99245e1c58470a target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+      2. Handler.deposit(1479203863948074631601914666631870245797964237690150975448675740874, 702421991026271233599116220303926297337349) sender=0x60ce333e15e7d0946f01f80d6ce54988fe7b1d63 target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+      3. Handler.withdraw(587448471163419598072833101403926313654352635398930389464, 416950072691000370158) sender=0x0000000000000000000000000000000000000552 target=0x2e234dae75c793f67a35089c9d99245e1c58470b
+  ✓ INV-5
+  ✓ INV-6
+  ✓ INV-7
+fix #1   replay fixtures/fix-reentrancy.patch
+         changed src/StakingVault.sol  $0.00
+         accepted 5059f49
+fuzz #2  forge runs=64 depth=64
+         7/7 pass  1.2s
+  ✓ INV-1
+  ✓ INV-2
+  ✓ INV-3
+  ✓ INV-4
+  ✓ INV-5
+  ✓ INV-6
+  ✓ INV-7
+loop     passed in 2 iterations  exit 0  cost $0.00
+         .specfirst/runs/20260928-161055-7a50df/run.json
+deploy   StakingVault 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0  anvil 31337
+         tx 0xc9882a209b3be96a9db3e469c31b5329e4abf3850e88fe4cfb7f2c485e0a66a6  block 3  gas 372385/446862  codeHash 0x36061144
+rehearse 30 tx  25/25 normal ok  5/5 revert-expected reverted  selectors 5/5  blocks 4~39
+  ✓ # 7 user1 setRewardRate 1 (not owner)  reverted gas 23669/80000  Unauthorized
+  ✓ # 9 user2 deposit 100000000000000 while paused  reverted gas 23438/80000  PausedError
+  ✓ #14 attacker contract reentry attempt, withdraw 200000000000001 of 400000000000000 replayed once  reverted (inner) gas 64828/80150  InsufficientBalance
+  ✓ #16 attacker pause (not owner)  reverted gas 23409/80000  Unauthorized
+  ✓ #23 user0 withdraw 900000000000001 (balance + 1)  reverted gas 23755/80000  InsufficientBalance
+verify   fork block 39  runs 32  depositors 4 (1 getLogs chunk)
+  ✓ INV-1  fork block 39: property held
+  ✓ INV-2  fork block 39: property held
+  ✓ INV-3  fork block 39: property held
+  ✓ INV-4  fork block 39: property held  +2 evidence
+  ✓ INV-5  fork block 39: property held  +2 evidence
+  ✓ INV-6  fork block 39: property held  +1 evidence
+  ✓ INV-7  fork block 39: property held  +2 evidence
+         7/7 ok  .specfirst/runs/20260928-161055-7a50df/verify.json
+issue    certId 0  7/7  bitmap 0x7f  registry 0x5FbDB2315678afecb367f032d93F642f64180aa3
+         tx 0x99dc56902022ed7154379cb0ee163cb8f7a07ff0203acee8e1636ac8a3bbc052  block 40  reportHash 0x299cc722  certs/31337/0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0/0.json
+done     certificate 0 issued for 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0  exit 0

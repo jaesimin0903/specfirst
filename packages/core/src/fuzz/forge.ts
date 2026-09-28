@@ -185,7 +185,7 @@ export class ForgeBackend implements FuzzBackend {
     this.artifactDir = opts.artifactDir ?? path.join(tmpdir(), 'specfirst-forge');
   }
 
-  async run({ worktree, spec, params, persistDir }: FuzzRunInput): Promise<FuzzResult> {
+  async run({ worktree, spec, params, persistDir, target, forkUrl, forkBlockNumber, env: extraEnv }: FuzzRunInput): Promise<FuzzResult> {
     const n = ++this.calls;
     await mkdir(this.artifactDir, { recursive: true });
     const failurePersistDir = persistDir ?? path.join(this.artifactDir, `forge-persist-${Date.now()}-${n}`);
@@ -199,9 +199,17 @@ export class ForgeBackend implements FuzzBackend {
       FOUNDRY_INVARIANT_FAILURE_PERSIST_DIR: failurePersistDir,
     };
     if (params.seed !== undefined) env.FOUNDRY_FUZZ_SEED = params.seed;
+    // Fork mode (plan 3.6 item 3): setUp attaches to SPECFIRST_TARGET instead of deploying.
+    if (target !== undefined) env.SPECFIRST_TARGET = target;
+    Object.assign(env, extraEnv ?? {});
+    const args = ['test', '--match-path', INVARIANTS_TEST_PATH, '--json'];
+    if (forkUrl !== undefined) {
+      args.push('--fork-url', forkUrl);
+      if (forkBlockNumber !== undefined) args.push('--fork-block-number', forkBlockNumber.toString());
+    }
 
     const started = Date.now();
-    const proc = await execa(this.forgeBin, ['test', '--match-path', INVARIANTS_TEST_PATH, '--json'], {
+    const proc = await execa(this.forgeBin, args, {
       cwd: worktree,
       env,
       reject: false,

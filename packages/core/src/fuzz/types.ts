@@ -64,6 +64,10 @@ export interface FuzzRunInput {
    * The fix loop passes .specfirst/runs/<runId>/iter-N/forge-persist/.
    */
   persistDir?: string;
+  /** Fork mode: pinned block for --fork-block-number. Used only with forkUrl. */
+  forkBlockNumber?: bigint;
+  /** Extra environment for the property suite, e.g. SPECFIRST_DEPOSITORS in fork mode. */
+  env?: Record<string, string>;
 }
 
 export interface FuzzBackend {
