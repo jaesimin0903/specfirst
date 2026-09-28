@@ -1,0 +1,920 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CertificateView, four states > partial: only some invariants passed 1`] = `
+<div>
+  <main
+    class="page"
+  >
+    <div
+      class="bar"
+    >
+      <span
+        class="url"
+      >
+        specfirst / c / 
+        0x4a1f00000000000000000000000000000000c9e2
+      </span>
+    </div>
+    <div
+      class="row header-row"
+    >
+      <span
+        class="pill pill-warn"
+      >
+        Partial verification
+      </span>
+      <span
+        class="muted"
+      >
+        issued 
+        3 days ago
+      </span>
+    </div>
+    <h1
+      class="h"
+    >
+      StakingVault
+    </h1>
+    <dl
+      class="meta-list"
+    >
+      <div>
+        <dt>
+          address
+        </dt>
+        <dd>
+          0x4a1f00000000000000000000000000000000c9e2
+          , monad-testnet (
+          10143
+          )
+        </dd>
+      </div>
+      <div>
+        <dt>
+          spec
+        </dt>
+        <dd>
+          0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
+        </dd>
+      </div>
+      <div>
+        <dt>
+          invariant set
+        </dt>
+        <dd>
+          0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+        </dd>
+      </div>
+      <div>
+        <dt>
+          property
+        </dt>
+        <dd>
+          0xd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4
+        </dd>
+      </div>
+      <div>
+        <dt>
+          code
+        </dt>
+        <dd>
+          0xe5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5
+        </dd>
+      </div>
+    </dl>
+    <p
+      class="notice warn"
+    >
+      Partial certificate: only 
+      5
+       of 
+      7
+       invariants passed. A partial certificate never replaces a complete earlier one.
+    </p>
+    <div
+      class="grid-2"
+    >
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Verified invariants (
+          2
+          )
+        </div>
+        <ul
+          class="check-list"
+        >
+          <li
+            class="ok"
+          >
+            <span
+              class="mark"
+            >
+              ✓
+            </span>
+            <span>
+              total supply equals the sum of minted balances
+            </span>
+          </li>
+          <li
+            class="ok"
+          >
+            <span
+              class="mark"
+            >
+              ✓
+            </span>
+            <span>
+              only the owner can withdraw
+            </span>
+          </li>
+        </ul>
+      </div>
+      <div
+        class="box box-dashed"
+      >
+        <div
+          class="box-label"
+        >
+          Not verified (
+          2
+          )
+        </div>
+        <ul
+          class="plain-list"
+        >
+          <li>
+            oracle manipulation
+          </li>
+          <li>
+            economic attacks
+          </li>
+        </ul>
+      </div>
+    </div>
+    <div
+      class="grid-2"
+    >
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Fuzzing
+        </div>
+        <div>
+          summary not available
+        </div>
+      </div>
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Post-deploy verification
+        </div>
+        <div>
+          30
+           rehearsal tx, 
+          5
+          /
+          7
+           invariants held
+        </div>
+      </div>
+    </div>
+    <div
+      class="row actions"
+    >
+      <a
+        class="btn"
+        href="https://testnet.monadvision.com/address/0x4a1f00000000000000000000000000000000c9e2"
+        rel="noreferrer"
+        target="_blank"
+      >
+        view on explorer
+      </a>
+      <a
+        class="btn"
+        href="https://example.test/report.json"
+        rel="noreferrer"
+        target="_blank"
+      >
+        report.json
+      </a>
+      <span
+        class="hash-check muted"
+      >
+        report hash not verified (
+        no network in tests
+        )
+      </span>
+    </div>
+    <p
+      class="muted small"
+    >
+      report hash 
+      0xf6f6f6...f6f6f6
+    </p>
+  </main>
+</div>
+`;
+
+exports[`CertificateView, four states > revoked: no longer counts as certified 1`] = `
+<div>
+  <main
+    class="page"
+  >
+    <div
+      class="bar"
+    >
+      <span
+        class="url"
+      >
+        specfirst / c / 
+        0x4a1f00000000000000000000000000000000c9e2
+      </span>
+    </div>
+    <div
+      class="row header-row"
+    >
+      <span
+        class="pill pill-bad"
+      >
+        Revoked
+      </span>
+      <span
+        class="muted"
+      >
+        issued 
+        3 days ago
+      </span>
+    </div>
+    <h1
+      class="h"
+    >
+      StakingVault
+    </h1>
+    <dl
+      class="meta-list"
+    >
+      <div>
+        <dt>
+          address
+        </dt>
+        <dd>
+          0x4a1f00000000000000000000000000000000c9e2
+          , monad-testnet (
+          10143
+          )
+        </dd>
+      </div>
+      <div>
+        <dt>
+          spec
+        </dt>
+        <dd>
+          0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
+        </dd>
+      </div>
+      <div>
+        <dt>
+          invariant set
+        </dt>
+        <dd>
+          0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+        </dd>
+      </div>
+      <div>
+        <dt>
+          property
+        </dt>
+        <dd>
+          0xd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4
+        </dd>
+      </div>
+      <div>
+        <dt>
+          code
+        </dt>
+        <dd>
+          0xe5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5
+        </dd>
+      </div>
+    </dl>
+    <p
+      class="notice bad"
+    >
+      This certificate was revoked. It no longer counts as certified.
+    </p>
+    <div
+      class="grid-2"
+    >
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Verified invariants (
+          2
+          )
+        </div>
+        <ul
+          class="check-list"
+        >
+          <li
+            class="ok"
+          >
+            <span
+              class="mark"
+            >
+              ✓
+            </span>
+            <span>
+              total supply equals the sum of minted balances
+            </span>
+          </li>
+          <li
+            class="ok"
+          >
+            <span
+              class="mark"
+            >
+              ✓
+            </span>
+            <span>
+              only the owner can withdraw
+            </span>
+          </li>
+        </ul>
+      </div>
+      <div
+        class="box box-dashed"
+      >
+        <div
+          class="box-label"
+        >
+          Not verified (
+          2
+          )
+        </div>
+        <ul
+          class="plain-list"
+        >
+          <li>
+            oracle manipulation
+          </li>
+          <li>
+            economic attacks
+          </li>
+        </ul>
+      </div>
+    </div>
+    <div
+      class="grid-2"
+    >
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Fuzzing
+        </div>
+        <div>
+          summary not available
+        </div>
+      </div>
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Post-deploy verification
+        </div>
+        <div>
+          30
+           rehearsal tx, 
+          7
+          /
+          7
+           invariants held
+        </div>
+      </div>
+    </div>
+    <div
+      class="row actions"
+    >
+      <a
+        class="btn"
+        href="https://testnet.monadvision.com/address/0x4a1f00000000000000000000000000000000c9e2"
+        rel="noreferrer"
+        target="_blank"
+      >
+        view on explorer
+      </a>
+      <a
+        class="btn"
+        href="https://example.test/report.json"
+        rel="noreferrer"
+        target="_blank"
+      >
+        report.json
+      </a>
+      <span
+        class="hash-check muted"
+      >
+        report hash not verified (
+        no network in tests
+        )
+      </span>
+    </div>
+    <p
+      class="muted small"
+    >
+      report hash 
+      0xf6f6f6...f6f6f6
+    </p>
+  </main>
+</div>
+`;
+
+exports[`CertificateView, four states > superseded: certified, newer version available 1`] = `
+<div>
+  <main
+    class="page"
+  >
+    <div
+      class="bar"
+    >
+      <span
+        class="url"
+      >
+        specfirst / c / 
+        0x4a1f00000000000000000000000000000000c9e2
+      </span>
+    </div>
+    <div
+      class="row header-row"
+    >
+      <span
+        class="pill pill-warn"
+      >
+        Certified, newer version available
+      </span>
+      <span
+        class="muted"
+      >
+        issued 
+        3 days ago
+      </span>
+    </div>
+    <h1
+      class="h"
+    >
+      StakingVault
+    </h1>
+    <dl
+      class="meta-list"
+    >
+      <div>
+        <dt>
+          address
+        </dt>
+        <dd>
+          0x4a1f00000000000000000000000000000000c9e2
+          , monad-testnet (
+          10143
+          )
+        </dd>
+      </div>
+      <div>
+        <dt>
+          spec
+        </dt>
+        <dd>
+          0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
+        </dd>
+      </div>
+      <div>
+        <dt>
+          invariant set
+        </dt>
+        <dd>
+          0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+        </dd>
+      </div>
+      <div>
+        <dt>
+          property
+        </dt>
+        <dd>
+          0xd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4
+        </dd>
+      </div>
+      <div>
+        <dt>
+          code
+        </dt>
+        <dd>
+          0xe5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5
+        </dd>
+      </div>
+    </dl>
+    <p
+      class="notice warn"
+    >
+      A newer version of this project is certified at
+       
+      <a
+        href="/c/0x111111111111111111111111111111111111aaaa"
+      >
+        0x111111111111111111111111111111111111aaaa
+      </a>
+      . This address remains certified: its code has not changed since it was verified.
+    </p>
+    <div
+      class="grid-2"
+    >
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Verified invariants (
+          2
+          )
+        </div>
+        <ul
+          class="check-list"
+        >
+          <li
+            class="ok"
+          >
+            <span
+              class="mark"
+            >
+              ✓
+            </span>
+            <span>
+              total supply equals the sum of minted balances
+            </span>
+          </li>
+          <li
+            class="ok"
+          >
+            <span
+              class="mark"
+            >
+              ✓
+            </span>
+            <span>
+              only the owner can withdraw
+            </span>
+          </li>
+        </ul>
+      </div>
+      <div
+        class="box box-dashed"
+      >
+        <div
+          class="box-label"
+        >
+          Not verified (
+          2
+          )
+        </div>
+        <ul
+          class="plain-list"
+        >
+          <li>
+            oracle manipulation
+          </li>
+          <li>
+            economic attacks
+          </li>
+        </ul>
+      </div>
+    </div>
+    <div
+      class="grid-2"
+    >
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Fuzzing
+        </div>
+        <div>
+          summary not available
+        </div>
+      </div>
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Post-deploy verification
+        </div>
+        <div>
+          30
+           rehearsal tx, 
+          7
+          /
+          7
+           invariants held
+        </div>
+      </div>
+    </div>
+    <div
+      class="box"
+    >
+      <div
+        class="box-label"
+      >
+        Lineage
+      </div>
+      <ul
+        class="plain-list"
+      >
+        <li>
+          <strong>
+            0x4a1f00000000000000000000000000000000c9e2
+          </strong>
+           (this page)
+        </li>
+        <li>
+          <a
+            href="/c/0x111111111111111111111111111111111111aaaa"
+          >
+            0x111111111111111111111111111111111111aaaa
+          </a>
+           (
+          certified
+          )
+        </li>
+      </ul>
+    </div>
+    <div
+      class="row actions"
+    >
+      <a
+        class="btn"
+        href="https://testnet.monadvision.com/address/0x4a1f00000000000000000000000000000000c9e2"
+        rel="noreferrer"
+        target="_blank"
+      >
+        view on explorer
+      </a>
+      <a
+        class="btn"
+        href="https://example.test/report.json"
+        rel="noreferrer"
+        target="_blank"
+      >
+        report.json
+      </a>
+      <span
+        class="hash-check muted"
+      >
+        report hash not verified (
+        no network in tests
+        )
+      </span>
+    </div>
+    <p
+      class="muted small"
+    >
+      report hash 
+      0xf6f6f6...f6f6f6
+    </p>
+  </main>
+</div>
+`;
+
+exports[`CertificateView, four states > valid: certified with no caveats 1`] = `
+<div>
+  <main
+    class="page"
+  >
+    <div
+      class="bar"
+    >
+      <span
+        class="url"
+      >
+        specfirst / c / 
+        0x4a1f00000000000000000000000000000000c9e2
+      </span>
+    </div>
+    <div
+      class="row header-row"
+    >
+      <span
+        class="pill pill-good"
+      >
+        Certified
+      </span>
+      <span
+        class="muted"
+      >
+        issued 
+        3 days ago
+      </span>
+    </div>
+    <h1
+      class="h"
+    >
+      StakingVault
+    </h1>
+    <dl
+      class="meta-list"
+    >
+      <div>
+        <dt>
+          address
+        </dt>
+        <dd>
+          0x4a1f00000000000000000000000000000000c9e2
+          , monad-testnet (
+          10143
+          )
+        </dd>
+      </div>
+      <div>
+        <dt>
+          spec
+        </dt>
+        <dd>
+          0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2
+        </dd>
+      </div>
+      <div>
+        <dt>
+          invariant set
+        </dt>
+        <dd>
+          0xc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3
+        </dd>
+      </div>
+      <div>
+        <dt>
+          property
+        </dt>
+        <dd>
+          0xd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4
+        </dd>
+      </div>
+      <div>
+        <dt>
+          code
+        </dt>
+        <dd>
+          0xe5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5
+        </dd>
+      </div>
+    </dl>
+    <div
+      class="grid-2"
+    >
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Verified invariants (
+          2
+          )
+        </div>
+        <ul
+          class="check-list"
+        >
+          <li
+            class="ok"
+          >
+            <span
+              class="mark"
+            >
+              ✓
+            </span>
+            <span>
+              total supply equals the sum of minted balances
+            </span>
+          </li>
+          <li
+            class="ok"
+          >
+            <span
+              class="mark"
+            >
+              ✓
+            </span>
+            <span>
+              only the owner can withdraw
+            </span>
+          </li>
+        </ul>
+      </div>
+      <div
+        class="box box-dashed"
+      >
+        <div
+          class="box-label"
+        >
+          Not verified (
+          2
+          )
+        </div>
+        <ul
+          class="plain-list"
+        >
+          <li>
+            oracle manipulation
+          </li>
+          <li>
+            economic attacks
+          </li>
+        </ul>
+      </div>
+    </div>
+    <div
+      class="grid-2"
+    >
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Fuzzing
+        </div>
+        <div>
+          summary not available
+        </div>
+      </div>
+      <div
+        class="box"
+      >
+        <div
+          class="box-label"
+        >
+          Post-deploy verification
+        </div>
+        <div>
+          30
+           rehearsal tx, 
+          7
+          /
+          7
+           invariants held
+        </div>
+      </div>
+    </div>
+    <div
+      class="row actions"
+    >
+      <a
+        class="btn"
+        href="https://testnet.monadvision.com/address/0x4a1f00000000000000000000000000000000c9e2"
+        rel="noreferrer"
+        target="_blank"
+      >
+        view on explorer
+      </a>
+      <a
+        class="btn"
+        href="https://example.test/report.json"
+        rel="noreferrer"
+        target="_blank"
+      >
+        report.json
+      </a>
+      <span
+        class="hash-check muted"
+      >
+        report hash not verified (
+        no network in tests
+        )
+      </span>
+    </div>
+    <p
+      class="muted small"
+    >
+      report hash 
+      0xf6f6f6...f6f6f6
+    </p>
+  </main>
+</div>
+`;

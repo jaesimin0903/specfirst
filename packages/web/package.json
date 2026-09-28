@@ -1,0 +1,31 @@
+{
+  "name": "@specfirst/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/sync-abi.mjs && next build",
+    "dev": "node scripts/sync-abi.mjs && next dev",
+    "start": "next start",
+    "test": "node scripts/sync-abi.mjs && vitest run",
+    "lint": "node scripts/sync-abi.mjs && tsc --noEmit"
+  },
+  "dependencies": {
+    "@specfirst/core": "workspace:*",
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

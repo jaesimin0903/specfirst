@@ -11,3 +11,6 @@ broadcast/
 *.log
 .DS_Store
 packages/cli/src/abi/*.json
+packages/web/lib/abi/*.json
+packages/web/.next/
+*.tsbuildinfo
