@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./hash": {
+      "types": "./dist/spec/hash.d.ts",
+      "import": "./dist/spec/hash.js"
     }
   },
   "files": [

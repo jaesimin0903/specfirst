@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { keccak256, toHex } from 'viem';
-import { canonicalJson } from '@specfirst/core';
+import { canonicalJson } from '@specfirst/core/hash';
 import { ReportHashCheck } from '../components/ReportHashCheck';
 
 afterEach(() => {

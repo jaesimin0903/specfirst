@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { keccak256, toHex } from 'viem';
-import { canonicalJson } from '@specfirst/core';
+import { canonicalJson } from '@specfirst/core/hash';
 import { computeReportHash } from '../lib/report';
 
 describe('computeReportHash', () => {

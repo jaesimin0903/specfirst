@@ -149,7 +149,8 @@ describe.skipIf(SKIP_ANVIL)('specfirst on anvil: deploy, rehearse, verify, cert'
     expect(latest.codeMatches).toBe(true);
 
     const report = JSON.parse(await readFile(path.join(dir, `certs/31337/${v1.address}/0.json`), 'utf8'));
-    expect(report).toMatchObject({ passedCount: 7, totalCount: 7, auxCampaign: { note: '보조 캠페인 미실행' }, verify: { path: 'fork' } });
+    expect(report).toMatchObject({ passedCount: 7, totalCount: 7, specfirst: 1, verifyMethod: 'fork' });
+    expect(report).not.toHaveProperty('auxiliary');
 
     const st = await cli('status', v1.address, '--rpc', anvil.url, '--registry', registry.address);
     expect(st.out.join('\n')).toMatch(/certified:\s+true/);

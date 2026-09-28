@@ -285,9 +285,9 @@ export async function issueStage(i: IssueStageInput): Promise<IssueOutcome> {
     out = await registry.issue({
       target: deploy.address,
       projectId: projectIdHash(run.spec.projectId),
-      specHash: report.hashes.specHash,
-      invariantSetHash: report.hashes.invariantSetHash,
-      propertyHash: report.hashes.propertyHash,
+      specHash: report.specHash,
+      invariantSetHash: report.invariantSetHash,
+      propertyHash: report.propertyHash,
       reportHash: hash,
       passedCount: report.passedCount,
       totalCount: report.totalCount,

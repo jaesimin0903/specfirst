@@ -215,12 +215,15 @@ export {
   buildReport,
   reportHash,
   passedBitmap,
-  EMPTY_AUX_CAMPAIGN,
   REPORT_JSON,
   CERT_FAILED_EXIT_CODE,
   type Report,
+  type ReportInvariant,
+  type ReportInvariantStatus,
+  type ReportAuxiliary,
+  type ReportEnvWarning,
+  type AuxFindingStatus,
   type RunSummaryLike,
-  type AuxCampaignSummary,
   type BuildReportInput,
 } from './cert/report.js';
 export {

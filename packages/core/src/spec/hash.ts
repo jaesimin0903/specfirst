@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { keccak256, toHex, type Hex } from 'viem';
+import { keccak256, sha256, toBytes, toHex, type Hex } from 'viem';
 import type { Spec } from './schema.js';
 
 export type Bytes32 = Hex;
@@ -25,8 +24,12 @@ function sortKeys(value: unknown): unknown {
   return value;
 }
 
+/**
+ * sha256 of a UTF-8 string or raw bytes. Uses viem (no node:crypto), so this module also runs in the
+ * browser; packages/web imports it through the "@specfirst/core/hash" subpath.
+ */
 export function sha256Hex(data: string | Uint8Array): Bytes32 {
-  return `0x${createHash('sha256').update(data).digest('hex')}`;
+  return sha256(typeof data === 'string' ? toBytes(data) : data);
 }
 
 /** sha256 over the canonical JSON of the whole parsed spec. Comments and whitespace do not matter. */

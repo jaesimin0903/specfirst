@@ -1,14 +1,12 @@
 import { keccak256, toHex, type Hex } from 'viem';
-import { canonicalJson } from '@specfirst/core';
+import { canonicalJson } from '@specfirst/core/hash';
 
 /**
- * report.json shape. `specfirst cert issue` is not implemented yet (packages/cli/src/commands/
- * cert.ts is a stub as of this writing), so there is no shared schema to import from @specfirst/
- * core or @specfirst/cli. This is this package's own working definition, built from docs/plan.md
- * 3.10 ("report JSON에는 CLI 버전, Foundry 버전, 모델명, ... 보조 캠페인 요약, 환경 분기 경고가
- * 들어간다") and 3.5 (auxiliary campaign fields). Intentionally permissive (most fields optional
- * beyond what the certificate page renders) so it does not break once the real writer exists;
- * the writer should treat this as a draft, not a contract.
+ * report.json as written by `specfirst cert issue` (packages/core/src/cert/report.ts buildReport,
+ * docs/plan.md 3.10). Mirrors core's Report type field for field; this package cannot import that
+ * type without pulling Node-only code into the client bundle, so the two must be edited together.
+ * Only `specfirst`, `invariants` and `unverified` are required here so the page still renders a
+ * partial or older report defensively; core always writes every field.
  */
 
 export type ReportInvariantKind = 'invariant' | 'access' | 'postcondition';
@@ -18,7 +16,12 @@ export interface ReportInvariantResult {
   id: string;
   kind: ReportInvariantKind;
   text: string;
+  /** Combined: pass only when the forge judge passed and post-deploy verification confirmed it. */
   status: ReportInvariantStatus;
+  /** Fix loop judge result. */
+  fuzz?: ReportInvariantStatus | null;
+  /** Post-deploy verification; null when not judged on that path (e.g. INV-3 without a fork). */
+  verify?: boolean | null;
 }
 
 export type AuxFindingStatus = 'confirmed' | 'needs-review' | 'candidate' | 'duplicate' | 'false-positive' | 'wont-fix' | 'fixed';
@@ -41,34 +44,69 @@ export interface ReportAuxiliary {
   note: string;
 }
 
+export interface ReportEnvWarning {
+  kind: string;
+  file: string;
+  line: number;
+  text: string;
+  iteration?: number;
+}
+
 export interface Report {
   specfirst: 1;
-  projectId: string;
-  name: string;
-  target: string;
-  chainId: number;
+  projectId?: string;
+  projectIdHash?: Hex;
+  name?: string;
+  target?: string;
+  chainId?: number;
+  codeHash?: Hex;
+  specHash?: Hex;
+  invariantSetHash?: Hex;
+  propertyHash?: Hex;
   cliVersion?: string;
-  foundryVersion?: string;
-  model?: string;
-  claudeCliVersion?: string;
-  fuzz?: { runs: number; depth: number; timeoutSec?: number; seed?: number };
+  foundryVersion?: string | null;
+  model?: string | null;
+  claudeCliVersion?: string | null;
+  agent?: { kind: string; calls: number };
+  fuzz?: { backend?: 'forge'; runs: number; depth: number; timeoutSec?: number; seed?: string; maxIterations?: number };
   iterations?: number;
   costUsd?: number;
+  costTotalUsd?: number;
+  history?: unknown[];
   invariants: ReportInvariantResult[];
   unverified: string[];
-  rehearsal?: { normalTx: number; expectRevertTx: number };
-  verifyMethod?: 'fork' | 'latest-proxy' | 'probe';
+  passedCount?: number;
+  totalCount?: number;
+  passedBitmap?: Hex;
+  run?: { runId: string; baseCommit: string; finalCommit: string; status: string; stopReason: string; startedAt: string; finishedAt: string };
+  deploy?: { txHash: Hex; blockNumber: string; gasUsed: string; gasLimit: string; deployer: string };
+  rehearsal?: {
+    normalTx: number;
+    expectRevertTx: number;
+    summary?: Record<string, number>;
+    actors?: Array<{ name: string; role: string; address: string }>;
+    expectRevert?: Array<{ hash: Hex; kind: string | null; verdict: string; selector: string }>;
+  } | null;
+  /** The latest-substitution proxy path was dropped (docs/adr/0001); fork or SpecfirstProbe remain. */
+  verifyMethod?: 'fork' | 'probe' | null;
   verifyNotes?: string[];
+  verify?: {
+    forkBlock: string | null;
+    probeBlock: string | null;
+    depositors: number;
+    passed: number;
+    violated: number;
+    unjudged: number;
+  } | null;
+  /** Absent when no auxiliary campaign ran. */
   auxiliary?: ReportAuxiliary;
-  envWarnings?: string[];
-  issuedAt?: string;
+  envWarnings?: ReportEnvWarning[];
 }
 
 /**
- * keccak256(toHex(canonicalJson(report))), matching the pattern of every other on-chain hash in
- * @specfirst/core (invariantSetHash, propertyHash): canonicalJson is imported from @specfirst/
- * core rather than reimplemented here, per the task's instruction, so this hash stays byte-for-
- * byte identical to whatever the CLI computes once `cert issue` is implemented there.
+ * keccak256(toHex(canonicalJson(report))), the same formula as reportHash in
+ * packages/core/src/cert/report.ts. canonicalJson comes from the browser-safe @specfirst/core/hash
+ * subpath rather than being reimplemented, so the hash stays byte-for-byte identical to the CLI's.
  */
 export function computeReportHash(report: unknown): Hex {
   return keccak256(toHex(canonicalJson(report)));
