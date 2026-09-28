@@ -49,22 +49,31 @@ const run: RunSummaryLike = {
   startedAt: 't0',
   finishedAt: 't1',
 };
-const deploy = {
+const deploy: DeployRecord = {
+  version: 1,
   chainId: 31337,
+  contract: { name: 'StakingVault', sourceFile: 'src/StakingVault.sol' },
   address: '0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0',
-  codeHash: h,
+  deployer: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
+  constructorArgs: ['0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'],
   txHash: h,
   blockNumber: '3',
+  codeHash: h,
   gasUsed: '1',
   gasLimit: '2',
-  deployer: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
-} as unknown as DeployRecord;
-const verify = {
+  gasEstimate: '1',
+  sourceDir: '/tmp/specfirst-fixture',
+  deployedAt: 't0',
+};
+const verify: VerifyRecord = {
+  version: 1,
+  chainId: 31337,
+  target: deploy.address,
   path: 'probe',
   note: 'fork 대조 미사용',
-  fork: null,
+  fork: { url: 'http://127.0.0.1:1', block: '9', runs: 32, wallclockSec: 0.1, rawArtifactPath: '/tmp/forge-1.json', error: 'fork failed' },
   probe: { block: '9', inv1: true, inv2: true, inv6: true },
-  depositors: { count: 4 },
+  depositors: { fromBlock: '3', toBlock: '9', chunks: 1, count: 4, addresses: [] },
   invariants: [
     { id: 'INV-1', kind: 'invariant', ok: true, evidence: [] },
     { id: 'INV-3', kind: 'postcondition', ok: null, evidence: [] },
@@ -73,7 +82,9 @@ const verify = {
   passed: 2,
   violated: 0,
   unjudged: 1,
-} as unknown as VerifyRecord;
+  ok: false,
+  verifiedAt: 't1',
+};
 
 describe('report.json schema shared with packages/web/lib/report.ts', () => {
   const report = buildReport({ spec, run, fuzzStatus: { 'INV-1': 'pass', 'INV-3': 'pass', 'INV-5': 'pass' }, deploy, rehearsal: null, verify });
