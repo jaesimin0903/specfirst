@@ -1,0 +1,1 @@
+{"test/specfirst/Invariants.t.sol:SpecfirstInvariants":{"duration":"335µs 333ns","test_results":{"setUp()":{"status":"Failure","reason":"boom","counterexample":null,"logs":[],"decoded_logs":[],"kind":{"Unit":{"gas":0}},"traces":[],"labeled_addresses":{},"duration":"0s","breakpoints":{},"gas_snapshots":{}}},"warnings":[]}}

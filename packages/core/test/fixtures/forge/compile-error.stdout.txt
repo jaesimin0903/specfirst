@@ -1,0 +1,7 @@
+Compiler run failed:
+Error (6933): Expected primary expression.
+  --> src/Vault.sol:13:50:
+   |
+13 | contract Broken { function f() public { uint x = ; } }
+   |                                                  ^
+
