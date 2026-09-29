@@ -19,7 +19,7 @@ contract Vault {
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     uint256 public totalSupply;
-    uint256 public mode; // 0 ok, 1 maxDeposit reverts "rate limit exceeded", 2 maxDeposit reverts "paused", 3 maxRedeem reverts "HTTP error 503", 4 deposit reverts for any non-zero amount while maxDeposit is unlimited, 5 decimals reverts
+    uint256 public mode; // 0 ok, 1 maxDeposit reverts "rate limit exceeded", 2 maxDeposit reverts "paused", 3 maxRedeem reverts "HTTP error 503", 4 deposit reverts for any non-zero amount while maxDeposit is unlimited
     constructor(MockToken t, uint256 m) { tok = t; mode = m; }
     function asset() external view returns (address) { return address(tok); }
     function decimals() external pure returns (uint8) { return 6; }
@@ -55,4 +55,27 @@ contract Vault {
         if (msg.sender != o) { uint256 al = allowance[o][msg.sender]; if (al != type(uint256).max) allowance[o][msg.sender] = al - s; }
         balanceOf[o] -= s; totalSupply -= s;
     }
+}
+
+/// Balance packed above a 64-bit field in one slot, like AUSD on Monad: forge-std deal writes the whole
+/// slot and fails with "checked_write ... Failed to write value."; the packed slot search succeeds.
+contract PackedToken {
+    struct Acct { uint64 flags; uint128 bal; }
+    mapping(address => Acct) internal acct;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+    function decimals() external pure returns (uint8) { return 6; }
+    function balanceOf(address a) external view returns (uint256) { return acct[a].bal; }
+    function approve(address s, uint256 a) external returns (bool) { allowance[msg.sender][s] = a; return true; }
+    function transfer(address to, uint256 a) external returns (bool) { _move(msg.sender, to, a); return true; }
+    function transferFrom(address f, address to, uint256 a) external returns (bool) {
+        if (allowance[f][msg.sender] != type(uint256).max) allowance[f][msg.sender] -= a;
+        _move(f, to, a); return true;
+    }
+    function _move(address f, address t, uint256 a) internal { acct[f].bal -= uint128(a); acct[t].bal += uint128(a); acct[t].flags = 1; }
+}
+
+/// A token without decimals().
+contract NoDecimalsToken {
+    function balanceOf(address) external pure returns (uint256) { return 0; }
 }

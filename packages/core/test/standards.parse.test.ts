@@ -91,7 +91,7 @@ describe('parseStandardForgeJson on real forge output (forge 1.5.1)', () => {
   it('asset without storage balances: deal failure is inconclusive, not fail', async () => {
     const results = await parse('local-computed.json');
     expect(summarize(results)).toEqual({ pass: 0, fail: 0, inconclusive: 26, notApplicable: 0 });
-    expect(results[0]!.reason).toMatch(/^deal could not fund test users \(non-standard token\): stdStorage find/);
+    expect(results[0]!.reason).toMatch(/^the asset's balance slot cannot be written, test users cannot be funded \(non-standard token\): stdStorage find/);
   });
 
   it('setUp revert (asset() on a plain token): every property is not_applicable', async () => {
@@ -179,6 +179,23 @@ describe('review reproductions (forge 1.5.1, review/ fixtures)', () => {
     expect(setup[0]!.reason).toBe('setUp failed: rate limit exceeded');
   });
 
+  it('packed balance slot (AUSD shape): the previous harness failed all 26 on checked_write; that is inconclusive, never fail', async () => {
+    const old = await suites('review/packed-asset-old-harness.json');
+    const results = parseStandardForgeJson(old.get('ModePackedAsset')!, ERC4626_PROPERTIES)!;
+    expect(summarize(results)).toEqual({ pass: 0, fail: 0, inconclusive: 26, notApplicable: 0 });
+    expect(new Set(results.map((r) => r.reason))).toEqual(
+      new Set([
+        "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage checked_write(StdStorage): Failed to write value.",
+      ]),
+    );
+    expect(results.every((r) => r.counterexample === undefined)).toBe(true);
+  });
+
+  it('packed balance slot: the current harness falls back to the packed slot write and all 26 pass', async () => {
+    const now = await suites('review/packed-asset-new-harness.json');
+    expect(summarize(parseStandardForgeJson(now.get('ModePackedAsset')!, ERC4626_PROPERTIES)!)).toEqual({ pass: 26, fail: 0, inconclusive: 0, notApplicable: 0 });
+  });
+
   it('M1: with the new harness a reverting maxDeposit fails test_maxDeposit only', async () => {
     const now = await suites('review/modes-new-harness.json');
     expect(statuses(parseStandardForgeJson(now.get('ModePaused')!, ERC4626_PROPERTIES)!)).toEqual([['maxDeposit', 'fail', 'paused']]);
@@ -233,6 +250,9 @@ describe('H2: forge messages are matched only as forge writes them', () => {
   it('the exact forge and forge-std prefixes are inconclusive', () => {
     expect(status('`vm.assume` rejected too many inputs (65536 allowed)').status).toBe('inconclusive');
     expect(status('stdStorage find(StdStorage): Slot(s) not found.').status).toBe('inconclusive');
+    expect(status('stdStorage checked_write(StdStorage): Failed to write value.').status).toBe('inconclusive');
+    expect(status('x stdStorage checked_write(StdStorage): Failed to write value.').status).toBe('fail');
+    expect(status('stdStorage write(StdStorage): x').status).toBe('fail');
     expect(status('EVM error; database error: failed to get storage for 0x1').status).toBe('inconclusive');
   });
 

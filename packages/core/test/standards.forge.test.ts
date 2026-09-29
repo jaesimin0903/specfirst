@@ -16,6 +16,7 @@ import {
   forgeEnv,
   parseStandardForgeJson,
   prepareErc4626Workspace,
+  summarize,
   type StandardWorkspace,
 } from '../src/index.js';
 
@@ -75,12 +76,18 @@ describe.skipIf(SKIP)('ERC-4626 harness with forge, offline (pinned cache presen
     }
   });
 
-  it('M1 and L3 on mock vaults: a reverting maxDeposit fails maxDeposit only; deposit reverts below maxDeposit are recorded', async () => {
+  it('mock vaults: maxDeposit revert fails maxDeposit only, packed balances are funded, decimals falls back, deposit reverts are recorded', async () => {
     await copyFile(path.join(here, 'fixtures/standards/review/M.sol'), path.join(ws.dir, 'src/M.sol'));
     await copyFile(path.join(here, 'fixtures/standards/review/Exp.t.sol'), path.join(ws.dir, 'test/Exp.t.sol'));
     const paused = await forge(['test', '--offline', '--match-contract', '^ModePaused$', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '--json', '-vv']);
     const results = parseStandardForgeJson(String(paused.stdout), ERC4626_PROPERTIES)!;
     expect(results.filter((r) => r.status !== 'pass').map((r) => [r.id, r.status, r.reason])).toEqual([['maxDeposit', 'fail', 'paused']]);
+
+    const packed = await forge(['test', '--offline', '--match-contract', '^ModePackedAsset$', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '--json', '-vv']);
+    expect(summarize(parseStandardForgeJson(String(packed.stdout), ERC4626_PROPERTIES)!)).toEqual({ pass: 26, fail: 0, inconclusive: 0, notApplicable: 0 });
+
+    const decimals = await forge(['test', '--offline', '--match-contract', '^DecimalsFallback$', '--match-test', 'test_decimalsFallback', '--json']);
+    expect(decimals.exitCode, String(decimals.stdout)).toBe(0);
 
     const closed = await forge(['test', '--offline', '--match-contract', '^ModeDepositRevertsBelowMax$', '--match-test', 'test_deposit\\(', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '--json', '-vv']);
     const events = await readFile(path.join(ws.dir, EVENTS_DIR, 'offline-test.deposit-below-max.log'), 'utf8');

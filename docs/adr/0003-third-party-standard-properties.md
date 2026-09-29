@@ -24,7 +24,7 @@ Add a read-only path that runs a public property suite, written and maintained b
   | 1 | | the check could not run (bad arguments, no code at the address, forge produced no JSON, RPC unreachable) |
 
 - Per-property status: `pass`; `fail` with the reason, forge's decoded assertion lines and the failing call; `inconclusive` when forge rejected every input (for example maxDeposit is 0 and deposit reverts), `deal` could not fund users, or the fork RPC failed, in a test or in setUp; `not_applicable` when setUp reverts for another reason (for example no `asset()`) or the vault is an ERC-7535 native-asset vault. The upstream assertions call `fail()` after emitting log lines, so forge's reason is often null or empty; that is still `fail`, and the first decoded log line becomes the reason.
-- Classification only recognises the messages forge and forge-std write, anchored at the start of the reason: `EVM error; database error: ` (fork RPC), `` `vm.assume` rejected too many inputs (N allowed) `` (every input rejected), `stdStorage find(StdStorage): ` (`deal` failed). A vault revert that merely reads like RPC trouble, such as "rate limit exceeded" or "HTTP error 503", stays `fail`.
+- Classification only recognises the messages forge and forge-std write, anchored at the start of the reason: `EVM error; database error: ` (fork RPC), `` `vm.assume` rejected too many inputs (N allowed) `` (every input rejected), `stdStorage find(StdStorage): ` or `stdStorage checked_write(StdStorage): ` (the asset's balance slot cannot be found or written). A vault revert that merely reads like RPC trouble, such as "rate limit exceeded" or "HTTP error 503", stays `fail`.
 - Policy: only `pass` counts as verified. `inconclusive` and `not_applicable` never count as pass and lead to exit 17. A contract's revert string becomes forge's reason verbatim, so an adversarial author can imitate one of the prefixes above and turn a `fail` into `inconclusive`; what they get is "not verified", never "verified".
 
 ## Upstream and license
@@ -34,7 +34,7 @@ Our harness template (`packages/core/src/standards/erc4626/SpecfirstERC4626.t.so
 
 ## How the harness differs from upstream
 The upstream `ERC4626Test` assumes a mock underlying token it can mint and burn. Against a live vault that is not possible, so the harness changes three things:
-1. Balances come from forge-std `deal` instead of the mock token's `mint`.
+1. Balances come from forge-std `deal` instead of the mock token's `mint`. When plain `deal` fails, the harness retries with forge-std's packed slot search (`stdstore.enable_packed_slots()...checked_write`), each attempt in its own external self-call so a failed one leaves no state. Monad's AUSD (0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a) keeps the balance packed with other fields in one slot: plain `deal` fails there with "checked_write ... Failed to write value." while the packed write sets the balance exactly. Before this fallback, the Upshift earnAUSD vault 0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E was recorded as 26 fails; that is a harness limitation, not a vault bug.
 2. Amounts are bounded to `min(maxDeposit(user), 1e6 whole tokens)`, so the fuzzer does not spend its runs on amounts no live vault accepts.
 3. No synthetic yield: `setUpYield` is never called, so the vault's own share price at the fork block is what gets tested.
 
@@ -57,7 +57,7 @@ Proxies followed automatically: EIP-1167 minimal clones, and the EIP-1967 implem
 ## Limitations
 - No synthetic yield or loss. Properties are checked at the vault's current share price only; bugs that appear only after a gain or a loss are out of reach.
 - Amounts are capped at `min(maxDeposit, 1e6 whole tokens)`. Overflow and rounding at larger amounts are not explored.
-- Tokens whose balances `deal` cannot write (rebasing, computed balances, some proxies) make every property `inconclusive`, never `pass`.
+- Tokens whose balance slot neither `deal` nor the packed slot write can set (rebasing, computed balances, some proxies) make every property `inconclusive`, never `pass` or `fail`.
 - ERC-7535 native-asset vaults (`asset()` returns 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE, for example FastLane shMONAD 0x1B68..E19c) are `not_applicable`: the harness funds users with ERC-20 `deal` and `approve`. forge is not started for them.
 - Checks that share an `implementationKey` ran the same code and count once. Masking every PUSH32 immediate also masks real constants (event topics, magic numbers), so two contracts that differ only in such a constant are grouped together.
 - `pass` means no counterexample in `runs` fuzz cases at one block, not a proof. At 32 runs the full suite took 9 min 35 s against the public Monad RPC.
@@ -72,10 +72,11 @@ Proxies followed automatically: EIP-1167 minimal clones, and the EIP-1967 implem
 - The same harness on a local vault that mints one extra share per deposit: 4 round-trip properties fail with the upstream "a <=~ b" lines (delta 1), exit 16.
 - Positive control: BrokenVault (previewDeposit promises 1% more shares than deposit mints) created inside the same fork over Monad USDC, 8 runs: previewDeposit is the only fail, the other 25 pass. A harness that passed this vault could not catch the bug. `SPECFIRST_LIVE=1` tests assert this.
 - Local anvil fixtures (code placed with `anvil_setCode`) cover fail with a null reason, every input rejected, `deal` failure and setUp revert (packages/core/test/fixtures/standards).
+- Packed balances (fixtures/standards/review/packed-asset-*): a token shaped like AUSD fails all 26 with the first harness (`checked_write ... Failed to write value.`, now classified `inconclusive`) and passes all 26 with the packed fallback.
 - Code review reproductions (fixtures/standards/review): vault reverts "rate limit exceeded" and "HTTP error 503" stay `fail`; a setUp that hits HTTP 429 on the fork is `inconclusive`; with the current harness a reverting maxDeposit fails `test_maxDeposit` only; a vault whose deposit always reverts below maxDeposit logs about 41,000 discards per property at the default reject limit.
 
 ## Workspace hygiene
-The cache workspace is `<cacheDir>/standards/erc4626-<upstream 12>-<forge-std 12>`, one per pin pair, so two versions never share (or race on) one directory. A pinned checkout is reused only when HEAD is the pin and `git status --porcelain --untracked-files=all` is empty; otherwise it is fetched again. Everything the workspace does not own is removed before each run: other files under `test/` and `src/`, other libraries under `lib/`, and any other top-level entry (forge reads `remappings.txt` and `.env` from the project root). Files are written through a temp file outside the workspace and renamed, and git runs without `GIT_*` variables.
+The cache workspace is `<cacheDir>/standards/erc4626-<upstream 12>-<forge-std 12>`, one per pin pair, so two versions never share (or race on) one directory. A pinned checkout is reused only when HEAD is the pin and `git status --porcelain --untracked-files=all` is empty; otherwise it is fetched again. Everything the workspace does not own is removed before each run: other files under `test/` and `src/`, other libraries under `lib/`, and any other top-level entry (forge reads `remappings.txt` and `.env` from the project root). Files are written through a temp file outside the workspace and renamed, and git runs without `GIT_*` variables. Event files in `sf-events/` are removed by the run that wrote them; one left by a crashed run is removed after a day.
 
 ## Safety
 `check` is the only command allowed on `monad-mainnet` (chain 143). Three layers keep transactions off it, each fixed by tests:

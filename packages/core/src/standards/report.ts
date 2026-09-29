@@ -157,8 +157,12 @@ export function summarize(results: readonly Pick<StandardPropertyResult, 'status
  */
 /** forge rejected every generated input via vm.assume, so nothing was checked. */
 const TOO_MANY_REJECTS = /^`vm\.assume` rejected too many inputs \(\d+ allowed\)$/;
-/** forge-std `deal` found no balance slot to write: a non-standard token (rebasing, computed balances). */
-const DEAL_FAILED = /^stdStorage find\(StdStorage\): /;
+/**
+ * forge-std could not find or write the asset's balance slot, even with the harness's packed-slot fallback:
+ * a non-standard token (rebasing, computed balances). "find" when no slot is found, "checked_write" when the
+ * write does not show up in balanceOf (seen on Monad AUSD before the packed fallback existed).
+ */
+const DEAL_FAILED = /^stdStorage (find|checked_write)\(StdStorage\): /;
 /**
  * The fork backend could not read state (HTTP 429 from a rate-limited RPC, timeouts). Seen live:
  * "EVM error; database error: failed to get account for 0x..: Max retries exceeded HTTP error 429".
@@ -228,7 +232,7 @@ function classify(p: StandardProperty, r: ForgeTestResult): StandardPropertyResu
   if (TOO_MANY_REJECTS.test(reason)) return { ...base, status: 'inconclusive', ...withRuns, reason };
   if (FORK_ERROR.test(reason)) return { ...base, status: 'inconclusive', ...withRuns, reason: `${FORK_ERROR_NOTE}: ${reason}` };
   if (DEAL_FAILED.test(reason)) {
-    return { ...base, status: 'inconclusive', ...withRuns, reason: `deal could not fund test users (non-standard token): ${reason}` };
+    return { ...base, status: 'inconclusive', ...withRuns, reason: `the asset's balance slot cannot be written, test users cannot be funded (non-standard token): ${reason}` };
   }
   // Upstream assertions call fail() after emitting log lines, so forge's reason is often null or "".
   return {

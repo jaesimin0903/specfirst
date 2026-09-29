@@ -37,5 +37,11 @@ review/ (reproductions from the code review of the first version)
                      Used to show that vault reverts which merely read like RPC trouble stay fail.
   modes-new-harness.json  The same with the current harness, --fuzz-runs 16 --fuzz-seed 0x1: a reverting
                      maxDeposit fails test_maxDeposit only; mode 4 rejects every input.
+  packed-asset-old-harness.json, packed-asset-new-harness.json
+                     ModePackedAsset: PackedToken keeps the balance above a 64-bit field in one slot, like AUSD
+                     (0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a) on Monad. The first harness's plain deal failed
+                     all 26 with "stdStorage checked_write(StdStorage): Failed to write value."; the current
+                     harness falls back to the packed slot write and all 26 pass. --fuzz-runs 16 --fuzz-seed 0x1.
+                     DecimalsFallback checks that decimals() falls back to 18 (run by standards.forge.test.ts).
   setup-fork429.json setUp against a stub RPC answering HTTP 429 for the vault: forge prints an ANSI log line,
                      then setUp() Failure "EVM error; database error: ... HTTP error 429". Must be inconclusive.

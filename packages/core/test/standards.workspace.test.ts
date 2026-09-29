@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -112,6 +112,18 @@ describe('prepareErc4626Workspace (local repositories, no network)', () => {
     expect(await readFile(path.join(ws.dir, ERC4626_HARNESS_PATH), 'utf8')).toBe(await readFile(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8'));
     const left = (await run('find', ['.', '-path', './lib', '-prune', '-o', '-type', 'f', '-print'], { cwd: ws.dir })).stdout.trim().split('\n').sort();
     expect(left).toEqual(['./foundry.toml', `./${ERC4626_CONTROL_VAULT_PATH}`, `./${ERC4626_CONTROL_PATH}`, `./${ERC4626_HARNESS_PATH}`].sort());
+  });
+
+  it('removes event files left by crashed runs after a day, keeps fresh ones', async () => {
+    const { cacheDir, pins } = await setup();
+    const ws = await prepareErc4626Workspace({ cacheDir, ...pins() });
+    const events = path.join(ws.dir, EVENTS_DIR);
+    await writeFile(path.join(events, 'old.deposit-below-max.log'), 'x');
+    await writeFile(path.join(events, 'fresh.deposit-below-max.log'), 'x');
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await utimes(path.join(events, 'old.deposit-below-max.log'), twoDaysAgo, twoDaysAgo);
+    await prepareErc4626Workspace({ cacheDir, ...pins() });
+    expect(await readdir(events)).toEqual(['fresh.deposit-below-max.log']);
   });
 
   it('fails on a commit the repository does not have and leaves no partial checkout', async () => {

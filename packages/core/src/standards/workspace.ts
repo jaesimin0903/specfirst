@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { execa } from 'execa';
@@ -135,6 +135,7 @@ async function writeIfChanged(file: string, content: string, tmpRoot: string): P
 /** Top-level entries a workspace may hold. forge reads remappings.txt and .env from here, so nothing else. */
 const TOP_LEVEL = new Set(['lib', 'src', 'test', 'foundry.toml', 'out', 'cache', EVENTS_DIR]);
 const LIB = new Set(['erc4626-tests', 'forge-std']);
+const STALE_EVENTS_MS = 24 * 60 * 60 * 1000;
 
 async function listFiles(dir: string, rel = ''): Promise<string[]> {
   if (!existsSync(dir)) return [];
@@ -203,6 +204,11 @@ export async function prepareErc4626Workspace(input: PrepareWorkspaceInput = {})
   const removed = await prune(dir, new Set(Object.keys(files)));
   for (const [rel, content] of Object.entries(files)) await writeIfChanged(path.join(dir, rel), content, tmpRoot);
   await mkdir(path.join(dir, EVENTS_DIR), { recursive: true });
+  // Event files are removed by the run that wrote them; one left by a crashed run goes after a day.
+  for (const f of await readdir(path.join(dir, EVENTS_DIR))) {
+    const file = path.join(dir, EVENTS_DIR, f);
+    if (Date.now() - (await stat(file)).mtimeMs > STALE_EVENTS_MS) await rm(file, { force: true });
+  }
 
   return {
     dir,
