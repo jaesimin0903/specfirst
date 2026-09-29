@@ -237,7 +237,7 @@ async function runForgeSuite(i: {
     await mkdir(path.dirname(eventsFile), { recursive: true });
     const proc = await execa(forgeBin, args, {
       cwd: i.ws.dir,
-      env: forgeEnv({ ...i.env, SF_RUN_ID: runId, FOUNDRY_FUZZ_FAILURE_PERSIST_DIR: path.join(persist, 'failures') }),
+      env: forgeEnv({ ...i.env, SF_RUN_ID: runId, SF_POOL_SALT: BigInt(seed).toString(), FOUNDRY_FUZZ_FAILURE_PERSIST_DIR: path.join(persist, 'failures') }),
       extendEnv: false,
       reject: false,
       timeout: timeoutSec * 1000,

@@ -15,7 +15,11 @@ interface IDecimals {
 /// Differences from the upstream harness:
 ///   1. balances come from forge-std `deal` (or a packed-slot write) instead of the mock token's `mint`,
 ///   2. amounts are bounded to min(maxDeposit, 1e6 whole tokens),
-///   3. no synthetic yield is injected (setUpYield is never called).
+///   3. no synthetic yield is injected (setUpYield is never called),
+///   4. fuzzed users are mapped onto a pool of USER_POOL addresses derived from SF_POOL_SALT (the run's
+///      recorded fuzz seed). A fresh address costs uncached fork reads for every balance and allowance slot
+///      it touches, which on a rate-limited public RPC turned whole runs inconclusive; a pool is read once.
+///      The salt changes per run, so a vault cannot predict the addresses.
 /// Users are EOAs above the precompile range and never the vault or its asset.
 /// A reverting maxDeposit or decimals is not held against every property: setUpVault falls back to the
 /// cap and decimals to 18, so a reverting maxDeposit fails test_maxDeposit ("MUST NOT revert") only.
@@ -23,6 +27,8 @@ contract SpecfirstERC4626Test is ERC4626Test {
     using stdStorage for StdStorage;
 
     uint256 internal _cap;
+    uint256 internal _poolSalt;
+    uint256 internal constant USER_POOL = 16;
 
     function setUp() public virtual override {
         _vault_ = vm.envAddress("SF_VAULT");
@@ -31,6 +37,13 @@ contract SpecfirstERC4626Test is ERC4626Test {
         _vaultMayBeEmpty = false;
         _unlimitedAmount = false;
         _cap = 1_000_000 * 10 ** uint256(_decimalsOr18(_underlying_));
+        _poolSalt = vm.envOr("SF_POOL_SALT", uint256(keccak256("specfirst.erc4626.pool")));
+    }
+
+    /// Pool member for a fuzzed address. The test body reads init.user after setUpVault returns; the struct
+    /// is passed by reference (internal call to a public function), so rewriting it here reaches the test.
+    function _poolUser(address fuzzed) internal view returns (address) {
+        return address(uint160(uint256(keccak256(abi.encode(_poolSalt, uint256(uint160(fuzzed)) % USER_POOL)))));
     }
 
     function _decimalsOr18(address token) internal view returns (uint8) {
@@ -43,6 +56,7 @@ contract SpecfirstERC4626Test is ERC4626Test {
 
     function setUpVault(Init memory init) public override {
         for (uint256 i = 0; i < N; i++) {
+            init.user[i] = _poolUser(init.user[i]);
             address user = init.user[i];
             vm.assume(_isEOA(user) && uint160(user) > 0xffff);
             vm.assume(user != _vault_ && user != _underlying_);
