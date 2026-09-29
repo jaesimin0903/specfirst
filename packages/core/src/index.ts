@@ -140,13 +140,18 @@ export {
 } from './budget/budget.js';
 export {
   monadTestnet,
+  monadMainnet,
   anvilChain,
   chainFor,
   networkDefaults,
+  isWriteForbidden,
   NETWORKS,
+  WRITE_FORBIDDEN_CHAIN_IDS,
   MONAD_TESTNET_CHAIN_ID,
+  MONAD_MAINNET_CHAIN_ID,
   ANVIL_CHAIN_ID,
   MONAD_TESTNET_DEFAULT_RPC,
+  MONAD_MAINNET_DEFAULT_RPC,
   ANVIL_DEFAULT_RPC,
   type NetworkName,
   type NetworkDefaults,

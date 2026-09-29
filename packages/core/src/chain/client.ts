@@ -9,7 +9,7 @@ import {
   type WalletClient,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { networkDefaults } from './chains.js';
+import { isWriteForbidden, networkDefaults } from './chains.js';
 import { rpcTransport, type RpcTransportOptions } from './transport.js';
 
 export type SpecfirstPublicClient = PublicClient<Transport, Chain>;
@@ -27,7 +27,7 @@ export interface ChainClients {
   rpcUrls: readonly string[];
   transport: Transport;
   publicClient: SpecfirstPublicClient;
-  /** Wallet client for one private key, sharing the rate-limited transport. */
+  /** Wallet client for one private key, sharing the rate-limited transport. Throws on write-forbidden chains. */
   wallet(privateKey: Hex): SpecfirstWalletClient;
 }
 
@@ -43,7 +43,12 @@ export function createChainClients(input: ClientFactoryInput): ChainClients {
     rpcUrls,
     transport,
     publicClient,
-    wallet: (privateKey) =>
-      createWalletClient({ account: privateKeyToAccount(privateKey), chain, transport, pollingInterval }) as SpecfirstWalletClient,
+    wallet: (privateKey) => {
+      // Last line of defence behind the CLI's network check: no signer ever exists for mainnet.
+      if (isWriteForbidden(chain.id)) {
+        throw new Error(`refusing to create a wallet client for ${chain.name} (chain ${chain.id}): specfirst only reads from this chain`);
+      }
+      return createWalletClient({ account: privateKeyToAccount(privateKey), chain, transport, pollingInterval }) as SpecfirstWalletClient;
+    },
   };
 }

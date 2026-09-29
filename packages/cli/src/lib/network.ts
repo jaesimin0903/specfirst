@@ -3,6 +3,9 @@ import {
   ANVIL_DEFAULT_RPC,
   chainFor,
   createChainClients,
+  isWriteForbidden,
+  MONAD_MAINNET_CHAIN_ID,
+  MONAD_MAINNET_DEFAULT_RPC,
   MONAD_TESTNET_DEFAULT_RPC,
   type ChainClients,
 } from '@specfirst/core';
@@ -15,6 +18,7 @@ export const DEPLOYER_KEY_ENV = 'DEPLOYER_PRIVATE_KEY';
 export const ISSUER_KEY_ENV = 'ISSUER_PRIVATE_KEY';
 export const MONAD_RPC_ENV = 'MONAD_TESTNET_RPC';
 export const MONAD_RPC_FALLBACKS_ENV = 'MONAD_TESTNET_RPC_FALLBACKS';
+export const MONAD_MAINNET_RPC_ENV = 'MONAD_MAINNET_RPC';
 export const ANVIL_RPC_ENV = 'ANVIL_RPC';
 
 export function registryEnvVar(chainId: number): string {
@@ -46,13 +50,27 @@ function list(v: string | undefined): string[] {
   return (v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-/** --network anvil|monad-testnet with RPC from --rpc, then env, then the public default; fallbacks after it. */
-export function resolveNetwork(opts: NetworkOptions, env: NodeJS.ProcessEnv = process.env): ResolvedNetwork {
+export interface ResolveMode {
+  /** Only commands that never send a transaction (check) pass true; it unlocks monad-mainnet. */
+  readOnly?: boolean;
+}
+
+/**
+ * --network anvil|monad-testnet|monad-mainnet with RPC from --rpc, then env, then the public default;
+ * fallbacks after it. monad-mainnet is refused unless the caller is read-only: deploy, rehearse (inside
+ * verify and run), cert issue and cert revoke send transactions and must never reach mainnet.
+ */
+export function resolveNetwork(opts: NetworkOptions, env: NodeJS.ProcessEnv = process.env, mode: ResolveMode = {}): ResolvedNetwork {
   const name = opts.network ?? 'monad-testnet';
   const chain = chainFor(name);
+  if (isWriteForbidden(chain.id) && !mode.readOnly) {
+    throw new ConfigError(`--network ${name} is read-only: this command sends transactions; only \`specfirst check\` may use ${name}`);
+  }
   let urls: string[];
   if (chain.id === ANVIL_CHAIN_ID) {
     urls = [opts.rpc ?? env[ANVIL_RPC_ENV] ?? ANVIL_DEFAULT_RPC];
+  } else if (chain.id === MONAD_MAINNET_CHAIN_ID) {
+    urls = [opts.rpc ?? env[MONAD_MAINNET_RPC_ENV] ?? MONAD_MAINNET_DEFAULT_RPC];
   } else {
     urls = [opts.rpc ?? env[MONAD_RPC_ENV] ?? MONAD_TESTNET_DEFAULT_RPC, ...list(env[MONAD_RPC_FALLBACKS_ENV])];
   }

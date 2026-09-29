@@ -1,7 +1,16 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { anvilChain, chainFor, createChainClients, isRateLimited, monadTestnet, TokenBucket } from '../src/index.js';
+import {
+  anvilChain,
+  chainFor,
+  createChainClients,
+  isRateLimited,
+  isWriteForbidden,
+  monadMainnet,
+  monadTestnet,
+  TokenBucket,
+} from '../src/index.js';
 
 describe('chains', () => {
   it('defines monadTestnet 10143 and anvil 31337', () => {
@@ -10,6 +19,24 @@ describe('chains', () => {
     expect(chainFor('monad-testnet').id).toBe(10143);
     expect(chainFor('anvil').id).toBe(31337);
     expect(() => chainFor('mainnet')).toThrow(/unknown network/);
+  });
+
+  it('defines monad-mainnet 143 as write-forbidden; testnet and anvil stay writable', () => {
+    expect(monadMainnet.id).toBe(143);
+    expect(chainFor('monad-mainnet').id).toBe(143);
+    expect(monadMainnet.rpcUrls.default.http).toEqual(['https://rpc.monad.xyz']);
+    expect(isWriteForbidden(143)).toBe(true);
+    expect(isWriteForbidden(10143)).toBe(false);
+    expect(isWriteForbidden(31337)).toBe(false);
+  });
+
+  it('never builds a wallet client for monad-mainnet, even with a valid key', () => {
+    const key = `0x${'11'.repeat(32)}` as const;
+    const mainnet = createChainClients({ chain: monadMainnet, rpcUrls: ['http://127.0.0.1:1'] });
+    expect(() => mainnet.wallet(key)).toThrow(/refusing to create a wallet client for Monad \(chain 143\)/);
+    expect(mainnet.publicClient.chain.id).toBe(143);
+    const testnet = createChainClients({ chain: monadTestnet, rpcUrls: ['http://127.0.0.1:1'] });
+    expect(testnet.wallet(key).account.address).toMatch(/^0x[0-9a-fA-F]{40}$/);
   });
 });
 
