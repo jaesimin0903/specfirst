@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { concat, keccak256, type Address, type Hex } from 'viem';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -32,8 +35,15 @@ const PLAIN_IMPL: Hex = `0x60806040526001${IPFS_TAIL.replace('11'.repeat(32), '2
 /** Two unrelated implementations without metadata (bytecode_hash = none). */
 const IMPL_A: Hex = `0x6080604052600160005560026001550000${SOLC_ONLY_TAIL}`;
 const IMPL_B: Hex = `0x60806040527fdeadbeef00000000000000000000000000000000000000000000000000000000ff${SOLC_ONLY_TAIL}`;
-/** A large contract (over 1 KB of logic) with a DELEGATECALL: never treated as a proxy. */
-const BIG_WITH_DELEGATECALL: Hex = `0x${'5b'.repeat(1100)}f4${IPFS_TAIL}`;
+/** A large contract (over 4 KB of logic) with a DELEGATECALL: never treated as a proxy. */
+const BIG_WITH_DELEGATECALL: Hex = `0x${'5b'.repeat(4200)}f4${IPFS_TAIL}`;
+/**
+ * Runtime code of the OpenZeppelin TransparentUpgradeableProxy in front of Upshift earnAUSD
+ * (0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E, Monad block 109061472), 2,001 bytes, read from forge's local
+ * fork cache. keccak256 = 0xa60c40de9979a21d4ec81b613b9da678727c39ef441c3227d78330cf649233b0.
+ */
+const UPSHIFT_PROXY = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/standards/upshift-proxy-143-109061472.hex'), 'utf8').trim() as Hex;
+const UPSHIFT_IMPL = '0xfd2f793c248dd673c830df610a95a045054de267' as Address;
 const keyOf = (code: Hex) => fingerprintKey(analyzeCode(code).fingerprint).key;
 
 const word = (a: Address) => `0x${a.slice(2).toLowerCase().padStart(64, '0')}` as Hex;
@@ -112,6 +122,29 @@ describe('identifyImplementation', () => {
     expect(a.metadataHash).toBe(b.metadataHash);
     expect(a.implementationKeyKind).toEqual({ of: 'implementation', hash: 'maskedCodeHash' });
     expect(a.implementationKey).toBe(a.implementation!.maskedCodeHash);
+    expect(a.implementationKey).not.toBe(b.implementationKey);
+  });
+
+  it('a 2,001-byte OpenZeppelin TransparentUpgradeableProxy (Upshift earnAUSD) is an EIP-1967 proxy keyed by its implementation', async () => {
+    expect(keccak256(UPSHIFT_PROXY)).toBe('0xa60c40de9979a21d4ec81b613b9da678727c39ef441c3227d78330cf649233b0');
+    expect((UPSHIFT_PROXY.length - 2) / 2).toBe(2001);
+    const id = await identifyImplementation(
+      mockClient({ code: { [lc(VAULT)]: UPSHIFT_PROXY, [UPSHIFT_IMPL]: PLAIN_IMPL }, slots: { [EIP1967_IMPLEMENTATION_SLOT]: word(UPSHIFT_IMPL) } }),
+      VAULT,
+      BLOCK,
+    );
+    expect(id.proxy).toEqual({ kind: 'eip1967', implementation: '0xFd2F793C248Dd673C830DF610a95a045054de267' });
+    expect(id.implementationKeyKind.of).toBe('implementation');
+    expect(id.implementationKey).toBe(keyOf(PLAIN_IMPL));
+  });
+
+  it('two vaults behind the same OpenZeppelin proxy build but different implementations are not merged', async () => {
+    const other = '0x4444444444444444444444444444444444444444' as Address;
+    const mk = (impl: Address, code: Hex) =>
+      mockClient({ code: { [lc(VAULT)]: UPSHIFT_PROXY, [lc(impl)]: code }, slots: { [EIP1967_IMPLEMENTATION_SLOT]: word(impl) } });
+    const a = await identifyImplementation(mk(UPSHIFT_IMPL, IMPL_A), VAULT, BLOCK);
+    const b = await identifyImplementation(mk(other, IMPL_B), VAULT, BLOCK);
+    expect(a.codeHash).toBe(b.codeHash);
     expect(a.implementationKey).not.toBe(b.implementationKey);
   });
 

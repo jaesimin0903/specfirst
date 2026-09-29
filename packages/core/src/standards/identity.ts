@@ -6,11 +6,13 @@ export const EIP1967_IMPLEMENTATION_SLOT: Hex = '0x360894a13ba1a3210667c828492db
 export const EIP1967_BEACON_SLOT: Hex = '0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50';
 /**
  * Only code below this size (before the CBOR tail) that contains a DELEGATECALL is treated as a proxy.
- * EIP-1967 slots of anything larger are ignored: a full contract can write any address into its own slot,
- * and must not borrow another contract's identity that way. Recognised slots give eip1967 or
- * eip1967-beacon; none gives kind 'unknown'.
+ * 4 KB takes in OpenZeppelin's ERC1967Proxy, BeaconProxy and TransparentUpgradeableProxy (Upshift's on
+ * Monad is 2,001 bytes) and stays below a minimal ERC-4626 vault. EIP-1967 slots of anything larger are
+ * ignored: a full contract can write any address into its own slot and must not borrow another contract's
+ * identity that way. The implementation only counts when its address holds code. Recognised slots give
+ * eip1967 or eip1967-beacon; none gives kind 'unknown'.
  */
-export const PROXY_MAX_CODE_SIZE = 1024;
+export const PROXY_MAX_CODE_SIZE = 4096;
 
 const beaconAbi = [
   { type: 'function', name: 'implementation', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
