@@ -56,8 +56,12 @@ export {
   parseForgeJson,
   invariantIdFromTestName,
   formatForgeCall,
+  callsOf,
+  extractJson,
   INVARIANTS_TEST_PATH,
   type ForgeBackendOptions,
+  type ForgeCall,
+  type ForgeTestResult,
 } from './fuzz/forge.js';
 export { MockBackend, type MockScenario } from './fuzz/mock.js';
 export type { ImplAgent, AgentResult, IterationRecord, ImplementInput, FixInput } from './agent/types.js';
@@ -242,3 +246,67 @@ export {
   type CertStatusName,
   type TxOutcome,
 } from './cert/registry.js';
+export {
+  ERC4626_PROPERTIES,
+  ERC4626_UPSTREAM,
+  FORGE_STD_PIN,
+  ERC4626_HARNESS_PATH,
+  ERC4626_CONTROL_PATH,
+  ERC4626_CONTROL_VAULT_PATH,
+  erc4626SourceFile,
+  type StandardProperty,
+  type PinnedRepo,
+} from './standards/erc4626.js';
+export {
+  prepareErc4626Workspace,
+  defaultCacheDir,
+  CACHE_DIR_ENV,
+  ERC4626_FOUNDRY_TOML,
+  type StandardWorkspace,
+  type PrepareWorkspaceInput,
+} from './standards/workspace.js';
+export {
+  identifyImplementation,
+  analyzeCode,
+  solidityMetadata,
+  EIP1967_IMPLEMENTATION_SLOT,
+  EIP1967_BEACON_SLOT,
+  UNKNOWN_PROXY_MAX_CODE_SIZE,
+  type ImplementationIdentity,
+  type ImplementationKeyKind,
+  type CodeFingerprint,
+  type IdentityClient,
+  type ProxyKind,
+} from './standards/identity.js';
+export {
+  parseStandardForgeJson,
+  summarize,
+  standardCheckReportSchema,
+  standardPropertyResultSchema,
+  standardPropertyStatusSchema,
+  standardNameSchema,
+  implementationIdentitySchema,
+  STANDARD_CHECK_SCHEMA_VERSION,
+  STANDARD_CHECK_FAILED_EXIT_CODE,
+  STANDARDS,
+  type StandardCheckReport,
+  type StandardCheckSummary,
+  type StandardPropertyResult,
+  type StandardPropertyStatus,
+  type StandardName,
+} from './standards/report.js';
+export {
+  runStandardCheck,
+  runErc4626Control,
+  standardCheckPath,
+  StandardCheckError,
+  ERC7535_NATIVE_ASSET,
+  NATIVE_ASSET_REASON,
+  CHECKS_DIR,
+  DEFAULT_STANDARD_RUNS,
+  DEFAULT_STANDARD_TIMEOUT_SEC,
+  type RunStandardCheckInput,
+  type RunErc4626ControlInput,
+  type StandardCheckEvent,
+  type StandardCheckClient,
+} from './standards/check.js';

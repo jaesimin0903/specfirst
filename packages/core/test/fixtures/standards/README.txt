@@ -1,0 +1,28 @@
+forge Version: 1.5.1-Homebrew. Raw `forge test --json` stdout of the ERC-4626 standard harness,
+with the raw "logs" and "traces" arrays emptied to keep the files small (decoded_logs are kept).
+The upstream suite is a16z/erc4626-tests at ac485460e014f22807c1ff687e0b4dc3af96ee40.
+
+morpho-143-109061472-runs32.json
+  Monad mainnet (chain 143), fork block 109061472, Morpho vault 0x802c91d807A8DaCA257c4708ab264B6520964e44,
+  --fuzz-runs 32, run from the proof-of-concept harness (suite name LiveVaultTest, same logic as
+  SpecfirstERC4626.t.sol, without -vv). All 26 tests Success, forge reported 9m 35s.
+
+morpho-143-109061472-runs8-rpc429.json
+  The same vault and block through `specfirst check --runs 8` against the public RPC (https://rpc.monad.xyz).
+  The RPC answered HTTP 429 (50 requests per second) mid-run: forge printed an ERROR log line before the
+  JSON and reported test_withdraw as Failure with "EVM error; database error: ... HTTP error 429". The
+  other 25 are Success. Kept with its leading log line; it must parse as inconclusive, never fail.
+
+control-143-109061472-runs8.json
+  Positive control: SpecfirstERC4626Control (BrokenVault over Monad USDC 0x754704Bc059F8C67012fEd69BC8A327a5aafb603)
+  on the same fork block, --fuzz-runs 8 -vv, via runErc4626Control. Only test_previewDeposit fails
+  (forge reason null, the assertion is in decoded_logs); the other 25 pass. forge reported 4m 10s.
+
+local-*.json
+  runStandardCheck against contracts placed with anvil_setCode on a local anvil (no transaction, no key),
+  fork block 1, --fuzz-runs 8 -vv. Sources: mock-vaults.sol in this directory (MIT, fixture only).
+  local-buggy.json     BuggyVault: mints one extra share per deposit, four round-trip properties fail
+                       (forge reason null, the assertion is in decoded_logs).
+  local-closed.json    ClosedVault: maxDeposit 0 and deposit reverts, every input rejected (too many rejects).
+  local-computed.json  ComputedAssetVault: the asset keeps no balances in storage, so forge-std deal fails.
+  local-notvault.json  SF_VAULT is the plain token: asset() reverts, setUp fails.

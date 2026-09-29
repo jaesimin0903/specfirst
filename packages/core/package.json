@@ -16,7 +16,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src/standards/**/*.sol"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

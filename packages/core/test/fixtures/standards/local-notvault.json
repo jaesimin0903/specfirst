@@ -1,0 +1,1 @@
+{"test/SpecfirstERC4626.t.sol:SpecfirstERC4626Test":{"duration":"2ms 585\u00b5s 291ns","test_results":{"setUp()":{"status":"Failure","reason":"EvmError: Revert","counterexample":null,"logs":[],"decoded_logs":[],"kind":{"Unit":{"gas":0}},"traces":[],"labeled_addresses":{},"duration":"0s","breakpoints":{},"gas_snapshots":{}}},"warnings":[]}}

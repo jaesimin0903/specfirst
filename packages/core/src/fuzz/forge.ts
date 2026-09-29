@@ -27,7 +27,7 @@ export function invariantIdFromTestName(name: string): string | null {
   return m ? m[1]!.replace(/_/g, '-') : null;
 }
 
-interface ForgeCall {
+export interface ForgeCall {
   sender?: string;
   addr?: string;
   calldata?: string;
@@ -38,11 +38,13 @@ interface ForgeCall {
   raw_args?: string | null;
 }
 
-interface ForgeTestResult {
+export interface ForgeTestResult {
   status: string;
   reason: string | null;
   counterexample: null | { Sequence?: unknown; Single?: unknown };
-  kind?: { Invariant?: { runs?: number; calls?: number } };
+  /** Filled with -vv or higher, e.g. the "a <=~ b not satisfied" lines of an assertion. */
+  decoded_logs?: string[];
+  kind?: { Invariant?: { runs?: number; calls?: number }; Fuzz?: { runs?: number } };
 }
 
 interface ForgeSuite {
@@ -61,7 +63,7 @@ export function formatForgeCall(c: ForgeCall): string {
  * forge 1.x writes `{"Sequence": [originalLength, [calls...]]}` for invariant failures.
  * Older builds and fuzz tests use `{"Sequence": [calls...]}` or `{"Single": call}`; all three are accepted.
  */
-function callsOf(ce: ForgeTestResult['counterexample']): ForgeCall[] {
+export function callsOf(ce: ForgeTestResult['counterexample']): ForgeCall[] {
   if (!ce) return [];
   if (ce.Single && typeof ce.Single === 'object') return [ce.Single as ForgeCall];
   const seq = ce.Sequence;
@@ -70,7 +72,7 @@ function callsOf(ce: ForgeTestResult['counterexample']): ForgeCall[] {
   return (list as unknown[]).filter((c): c is ForgeCall => !!c && typeof c === 'object');
 }
 
-function extractJson(text: string): unknown {
+export function extractJson(text: string): unknown {
   const trimmed = text.trim();
   try {
     return JSON.parse(trimmed);
