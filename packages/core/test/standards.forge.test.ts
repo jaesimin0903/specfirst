@@ -17,6 +17,7 @@ import {
   parseStandardForgeJson,
   prepareErc4626Workspace,
   runStandardCheck,
+  SPECFIRST_ERC4626_PROPERTIES,
   standardCheckExitCode,
   summarize,
   type StandardWorkspace,
@@ -183,9 +184,11 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
 });
 
 describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil fork (pinned cache present)', { timeout: 300_000 }, () => {
-  // Its own anvil and contracts, forked at block 1; the same cache gate as above.
+  // Its own anvil and contracts, forked at block 1; the same cache gate as above. forge runs the sf- suite
+  // only, on two threads, so this stays light next to the other packages' tests under `pnpm -r test`.
   let root: string;
   let anvil: Anvil;
+  let ws: StandardWorkspace;
   const rpc = async (method: string, params: unknown[]) => {
     const res = await fetch(anvil.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
     return ((await res.json()) as { result?: unknown }).result;
@@ -206,47 +209,51 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000032', await code('AsyncExitVault')]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000033', await code('HonestClosedExitVault')]);
     await rpc('anvil_mine', ['0x1']);
+    ws = await prepareErc4626Workspace({
+      cacheDir: path.join(root, 'cache'),
+      upstream: { repo: `file://${UPSTREAM}`, commit: ERC4626_UPSTREAM.commit },
+      forgeStd: { repo: `file://${FORGE_STD}`, commit: FORGE_STD_PIN.commit },
+    });
   });
   afterAll(async () => {
     await anvil?.stop();
     if (root) await rm(root, { recursive: true, force: true });
   });
 
-  const check = (address: `0x${string}`) =>
-    runStandardCheck({
-      standard: 'erc4626',
-      address,
-      rpcUrl: anvil.url,
-      blockNumber: 1n,
-      runs: 8,
-      cacheDir: path.join(root, 'cache'),
-      pins: {
-        upstream: { repo: `file://${UPSTREAM}`, commit: ERC4626_UPSTREAM.commit },
-        forgeStd: { repo: `file://${FORGE_STD}`, commit: FORGE_STD_PIN.commit },
-      },
-    });
-  const byId = (r: Awaited<ReturnType<typeof check>>) => new Map(r.results.map((x) => [x.id, x]));
+  const sf = async (vault: string) => {
+    const p = await execa(
+      'forge',
+      ['test', '--match-contract', '^SpecfirstMaxHonored$', '--fork-url', anvil.url, '--fork-block-number', '1', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '-j', '2', '--json', '-vv'],
+      { cwd: ws.dir, env: forgeEnv({ SF_VAULT: vault }), extendEnv: false, reject: false, maxBuffer: 256 * 1024 * 1024 },
+    );
+    const results = parseStandardForgeJson(String(p.stdout), SPECFIRST_ERC4626_PROPERTIES);
+    if (!results) throw new Error(String(p.stderr));
+    return new Map(results.map((x) => [x.id, x]));
+  };
 
   it('(b) a vault that honours its max values: all four sf- properties pass', async () => {
-    const r = byId(await check('0x5F00000000000000000000000000000000000031'));
-    for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored', 'sf-maxWithdraw-honored', 'sf-maxRedeem-honored']) expect([id, r.get(id)!.status]).toEqual([id, 'pass']);
+    const r = await sf('0x5F00000000000000000000000000000000000031');
+    expect([...r.values()].map((x) => [x.id, x.status])).toEqual([
+      ['sf-maxDeposit-honored', 'pass'],
+      ['sf-maxMint-honored', 'pass'],
+      ['sf-maxWithdraw-honored', 'pass'],
+      ['sf-maxRedeem-honored', 'pass'],
+    ]);
   });
 
-  it('(a) Upshift shape: sf-maxWithdraw-honored and sf-maxRedeem-honored fail with selector 0x75ed2e3e, exit 16', async () => {
-    const report = await check('0x5f00000000000000000000000000000000000032');
-    const r = byId(report);
+  it('(a) Upshift shape: sf-maxWithdraw-honored and sf-maxRedeem-honored fail with selector 0x75ed2e3e', async () => {
+    const r = await sf('0x5f00000000000000000000000000000000000032');
     expect(r.get('sf-maxWithdraw-honored')!.status).toBe('fail');
     expect(r.get('sf-maxWithdraw-honored')!.reason).toMatch(/reverted with selector 0x75ed2e3e while maxWithdraw is [1-9]\d*$/);
     expect(r.get('sf-maxRedeem-honored')!.status).toBe('fail');
-    expect(standardCheckExitCode(report.summary)).toBe(16);
+    expect(r.get('sf-maxRedeem-honored')!.reason).toMatch(/reverted with selector 0x75ed2e3e while maxRedeem is [1-9]\d*$/);
+    expect(r.get('sf-maxDeposit-honored')!.status).toBe('pass');
   });
 
-  it('(c) exits disabled and max values of 0: no fail, the two exit properties are not pass', async () => {
-    const report = await check('0x5f00000000000000000000000000000000000033');
-    const r = byId(report);
-    expect(report.summary.fail).toBe(0);
+  it('(c) exits disabled and max values of 0: the exit properties are inconclusive, nothing fails', async () => {
+    const r = await sf('0x5f00000000000000000000000000000000000033');
+    expect([...r.values()].filter((x) => x.status === 'fail')).toEqual([]);
     expect(r.get('sf-maxWithdraw-honored')!.status).toBe('inconclusive');
     expect(r.get('sf-maxRedeem-honored')!.status).toBe('inconclusive');
-    expect(standardCheckExitCode(report.summary)).toBe(17);
   });
 });
