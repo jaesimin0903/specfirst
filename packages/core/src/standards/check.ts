@@ -101,7 +101,11 @@ async function runForgeSuite(i: {
     i.blockNumber.toString(),
     '--fuzz-runs',
     String(i.runs),
-    // Public RPCs rate-limit (Monad's answers HTTP 429 above 50 rps); retry longer than forge's default.
+    // Public RPCs rate-limit (Monad's answers HTTP 429 above 50 rps). At forge's default 330 compute units
+    // per second two runs of the Morpho vault each lost one property to a 429; at 100 the same run was clean
+    // and faster (246 s instead of 540 s). Retries cover what still slips through.
+    '--compute-units-per-second',
+    '100',
     '--fork-retries',
     '10',
     '--fork-retry-backoff',
