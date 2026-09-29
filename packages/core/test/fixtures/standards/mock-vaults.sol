@@ -6,6 +6,7 @@ pragma solidity 0.8.28;
 
 address constant TOKEN = 0x5F00000000000000000000000000000000000001;
 address constant COMPUTED_TOKEN = 0x5F00000000000000000000000000000000000002;
+address constant PACKED_TOKEN = 0x5F00000000000000000000000000000000000003;
 
 /// Plain ERC-20 with storage balances, 6 decimals.
 contract MockToken {
@@ -120,4 +121,34 @@ contract ClosedVault is VaultBase {
 /// Vault over a token whose balances `deal` cannot write.
 contract ComputedAssetVault is VaultBase {
     function asset() public pure override returns (address) { return COMPUTED_TOKEN; }
+}
+
+/// Balance packed above a 64-bit field in one slot, like AUSD on Monad: plain deal fails, the packed write works.
+contract PackedToken {
+    struct Acct { uint64 flags; uint128 bal; }
+    mapping(address => Acct) internal acct;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+
+    function decimals() external pure returns (uint8) { return 6; }
+    function balanceOf(address a) external view returns (uint256) { return acct[a].bal; }
+    function approve(address s, uint256 a) external returns (bool) { allowance[msg.sender][s] = a; return true; }
+    function transfer(address to, uint256 a) external returns (bool) { _move(msg.sender, to, a); return true; }
+
+    function transferFrom(address f, address to, uint256 a) external returns (bool) {
+        if (allowance[f][msg.sender] != type(uint256).max) allowance[f][msg.sender] -= a;
+        _move(f, to, a);
+        return true;
+    }
+
+    function _move(address f, address t, uint256 a) internal {
+        acct[f].bal -= uint128(a);
+        acct[t].bal += uint128(a);
+        acct[t].flags = 1;
+    }
+}
+
+/// Correct 1:1 vault over the packed-balance token.
+contract PackedAssetVault is VaultBase {
+    function asset() public pure override returns (address) { return PACKED_TOKEN; }
 }

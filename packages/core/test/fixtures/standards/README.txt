@@ -26,6 +26,8 @@ local-*.json
   local-closed.json    ClosedVault: maxDeposit 0 and deposit reverts, every input rejected (too many rejects).
   local-computed.json  ComputedAssetVault: the asset keeps no balances in storage, so forge-std deal fails.
   local-notvault.json  SF_VAULT is the plain token: asset() reverts, setUp fails.
+  mock-vaults.sol also holds PackedToken (0x5F..03) and PackedAssetVault (0x5F..21), used live by
+  standards.forge.test.ts on a local anvil fork: all 26 pass through the harness's packed-slot fallback.
 
 review/ (reproductions from the code review of the first version)
   M.sol, Exp.t.sol   MockToken and Vault(mode) created in setUp, no fork. Modes: 1 maxDeposit reverts
