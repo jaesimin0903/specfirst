@@ -160,7 +160,14 @@ export {
   type NetworkName,
   type NetworkDefaults,
 } from './chain/chains.js';
-export { TokenBucket, rpcTransport, isRateLimited, isTransportFailure, type RpcTransportOptions } from './chain/transport.js';
+export {
+  TokenBucket,
+  rpcTransport,
+  isRateLimited,
+  isTransportFailure,
+  WriteTargetError,
+  type RpcTransportOptions,
+} from './chain/transport.js';
 export {
   createChainClients,
   type ChainClients,

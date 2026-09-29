@@ -1,4 +1,5 @@
 import { custom, http, type EIP1193RequestFn, type Transport } from 'viem';
+import { isWriteForbidden } from './chains.js';
 
 /** Simple token bucket: `rps` tokens per second, burst of `rps`. acquire() waits for a token. */
 export class TokenBucket {
@@ -45,6 +46,12 @@ export interface RpcTransportOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   timeoutMs?: number;
+  /**
+   * Chain id every URL must report (eth_chainId) before it is sent a transaction. Checked once per URL,
+   * right before its first eth_sendRawTransaction or eth_sendTransaction. Without it, sends are still
+   * refused on a URL that reports a write-forbidden chain.
+   */
+  writeChainId?: number;
   /** Called on every retry or failover, for logs and tests. */
   onRetry?: (info: { url: string; attempt: number; delayMs: number; reason: string }) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -97,6 +104,16 @@ export function isTransportFailure(err: unknown): boolean {
   ) && !chain(err).some((e) => e.name === 'RpcRequestError');
 }
 
+const SEND_METHODS = new Set(['eth_sendRawTransaction', 'eth_sendTransaction']);
+
+/** A transaction was about to reach an RPC on the wrong or a write-forbidden chain. Never retried. */
+export class WriteTargetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WriteTargetError';
+  }
+}
+
 /**
  * viem transport over a list of RPC URLs: one shared token bucket, exponential backoff on 429 per URL,
  * failover to the next URL on transport failures or exhausted retries (plan 3.6 item 4).
@@ -113,9 +130,34 @@ export function rpcTransport(urls: readonly string[], opts: RpcTransportOptions 
     request: http(url, { retryCount: 0, timeout: opts.timeoutMs ?? 30_000 })({ retryCount: 0 }).request as EIP1193RequestFn,
   }));
 
+  const verified = new Set<string>();
+  /** Refuses to send a transaction to a URL that serves another chain than the wallet's, or mainnet. */
+  const verifyWriteTarget = async (url: string, send: EIP1193RequestFn): Promise<void> => {
+    if (verified.has(url)) return;
+    await bucket.acquire();
+    const reported = Number(await send({ method: 'eth_chainId' } as Parameters<EIP1193RequestFn>[0]));
+    if (opts.writeChainId !== undefined && reported !== opts.writeChainId) {
+      throw new WriteTargetError(`refusing to send a transaction: the RPC reports chain ${reported}, the wallet is for chain ${opts.writeChainId}`);
+    }
+    if (isWriteForbidden(reported)) throw new WriteTargetError(`refusing to send a transaction: the RPC reports chain ${reported}, which specfirst only reads`);
+    verified.add(url);
+  };
+
   const request = async (args: { method: string; params?: unknown }): Promise<unknown> => {
     let lastErr: unknown;
+    const isSend = SEND_METHODS.has(args.method);
     for (const { url, request: send } of inner) {
+      if (isSend) {
+        try {
+          await verifyWriteTarget(url, send);
+        } catch (err) {
+          if (err instanceof WriteTargetError) throw err;
+          lastErr = err;
+          // An unreachable or rate-limited URL is skipped like any other failover.
+          if (isRateLimited(err) || isTransportFailure(err)) continue;
+          throw err;
+        }
+      }
       for (let attempt = 0; ; attempt++) {
         await bucket.acquire();
         try {

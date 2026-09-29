@@ -46,14 +46,15 @@ export const NETWORKS: Record<NetworkName, Chain> = {
 /** Chains specfirst never sends a transaction to. Read-only commands (check) may still use them. */
 export const WRITE_FORBIDDEN_CHAIN_IDS: ReadonlySet<number> = new Set([MONAD_MAINNET_CHAIN_ID]);
 
+/** True for chains specfirst must never write to, and for ids that are not safe integers at all. */
 export function isWriteForbidden(chainId: number): boolean {
-  return WRITE_FORBIDDEN_CHAIN_IDS.has(chainId);
+  return !Number.isSafeInteger(chainId) || WRITE_FORBIDDEN_CHAIN_IDS.has(chainId);
 }
 
 export function chainFor(network: string): Chain {
-  const chain = NETWORKS[network as NetworkName];
-  if (!chain) throw new Error(`unknown network "${network}" (expected ${Object.keys(NETWORKS).join(' or ')})`);
-  return chain;
+  // Own keys only: "toString" or "__proto__" must not resolve to Object.prototype members.
+  if (!Object.hasOwn(NETWORKS, network)) throw new Error(`unknown network "${network}" (expected ${Object.keys(NETWORKS).join(' or ')})`);
+  return NETWORKS[network as NetworkName];
 }
 
 /**

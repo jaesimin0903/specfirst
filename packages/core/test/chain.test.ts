@@ -9,7 +9,9 @@ import {
   isWriteForbidden,
   monadMainnet,
   monadTestnet,
+  rpcTransport,
   TokenBucket,
+  WriteTargetError,
 } from '../src/index.js';
 
 describe('chains', () => {
@@ -19,6 +21,12 @@ describe('chains', () => {
     expect(chainFor('monad-testnet').id).toBe(10143);
     expect(chainFor('anvil').id).toBe(31337);
     expect(() => chainFor('mainnet')).toThrow(/unknown network/);
+  });
+
+  it('resolves own network names only, never Object.prototype members', () => {
+    for (const name of ['toString', '__proto__', 'constructor', 'hasOwnProperty', 'valueOf']) {
+      expect(() => chainFor(name)).toThrow(/unknown network/);
+    }
   });
 
   it('defines monad-mainnet 143 as write-forbidden; testnet and anvil stay writable', () => {
@@ -37,6 +45,15 @@ describe('chains', () => {
     expect(mainnet.publicClient.chain.id).toBe(143);
     const testnet = createChainClients({ chain: monadTestnet, rpcUrls: ['http://127.0.0.1:1'] });
     expect(testnet.wallet(key).account.address).toMatch(/^0x[0-9a-fA-F]{40}$/);
+  });
+
+  it('never builds a wallet client for a chain id that is not a safe integer', () => {
+    const key = `0x${'11'.repeat(32)}` as const;
+    for (const id of [Number.NaN, 1.5, 2 ** 60, -0.5]) {
+      const clients = createChainClients({ chain: { ...monadTestnet, id }, rpcUrls: ['http://127.0.0.1:1'] });
+      expect(() => clients.wallet(key)).toThrow(/refusing to create a wallet client/);
+    }
+    expect(isWriteForbidden(Number.NaN)).toBe(true);
   });
 });
 
@@ -62,8 +79,12 @@ describe('TokenBucket', () => {
 });
 
 /** JSON-RPC stub: answers eth_chainId and eth_blockNumber, returning HTTP 429 for the first `fail429` requests. */
-function stub(fail429: number, opts: { down?: boolean } = {}): Promise<{ server: Server; url: string; hits: () => number }> {
+function stub(
+  fail429: number,
+  opts: { down?: boolean; chainId?: string } = {},
+): Promise<{ server: Server; url: string; hits: () => number; methods: string[] }> {
   let hits = 0;
+  const methods: string[] = [];
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
@@ -78,13 +99,14 @@ function stub(fail429: number, opts: { down?: boolean } = {}): Promise<{ server:
         return;
       }
       const { id, method } = JSON.parse(body) as { id: number; method: string };
-      const result = method === 'eth_chainId' ? '0x7a69' : '0x2a';
+      methods.push(method);
+      const result = method === 'eth_chainId' ? (opts.chainId ?? '0x7a69') : method === 'eth_sendRawTransaction' ? `0x${'ab'.repeat(32)}` : '0x2a';
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id, result }));
     });
   });
   return new Promise((resolve) =>
     server.listen(0, '127.0.0.1', () =>
-      resolve({ server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, hits: () => hits }),
+      resolve({ server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, hits: () => hits, methods }),
     ),
   );
 }
@@ -129,6 +151,52 @@ describe('rpcTransport', () => {
     expect(await publicClient.getBlockNumber({ cacheTime: 0 })).toBe(42n);
     expect(reasons).toEqual(['down:failover', 'limited:429', 'limited:429', 'limited:failover']);
     expect(good.hits()).toBe(1);
+  });
+
+  const RAW = `0x${'02'.repeat(40)}` as const;
+  const sendRaw = (url: string, writeChainId?: number) =>
+    rpcTransport([url], { writeChainId })({}).request({ method: 'eth_sendRawTransaction', params: [RAW] });
+
+  it('checks eth_chainId of the URL before its first send, then forwards sends', async () => {
+    const s = await stub(0, { chainId: '0x279f' }); // 10143
+    servers.push(s.server);
+    await expect(sendRaw(s.url, 10143)).resolves.toBe(`0x${'ab'.repeat(32)}`);
+    expect(s.methods).toEqual(['eth_chainId', 'eth_sendRawTransaction']);
+  });
+
+  it('refuses to send when the RPC serves another chain than the wallet (testnet config, mainnet RPC)', async () => {
+    const s = await stub(0, { chainId: '0x8f' }); // 143
+    servers.push(s.server);
+    const err = await sendRaw(s.url, 10143).catch((e: unknown) => e);
+    // viem wraps transport errors; the WriteTargetError is in the cause chain.
+    const chain: unknown[] = [];
+    for (let e: unknown = err; e; e = (e as { cause?: unknown }).cause) chain.push(e);
+    expect(chain.some((e) => e instanceof WriteTargetError)).toBe(true);
+    expect(String((err as Error).message)).toMatch(/the RPC reports chain 143, the wallet is for chain 10143/);
+    expect(s.methods).not.toContain('eth_sendRawTransaction');
+  });
+
+  it('refuses to send to a write-forbidden chain even without an expected chain id', async () => {
+    const s = await stub(0, { chainId: '0x8f' });
+    servers.push(s.server);
+    await expect(sendRaw(s.url)).rejects.toThrow(/reports chain 143, which specfirst only reads/);
+    expect(s.methods).toEqual(['eth_chainId']);
+  });
+
+  it('a wallet client built for testnet never reaches eth_sendRawTransaction on a mainnet RPC', async () => {
+    const s = await stub(0, { chainId: '0x8f' });
+    servers.push(s.server);
+    const { wallet } = createChainClients({ chain: monadTestnet, rpcUrls: [s.url] });
+    await expect(wallet(`0x${'11'.repeat(32)}`).sendRawTransaction({ serializedTransaction: RAW })).rejects.toThrow(/reports chain 143/);
+    expect(s.methods).not.toContain('eth_sendRawTransaction');
+  });
+
+  it('reads are not gated by the chain check', async () => {
+    const s = await stub(0, { chainId: '0x8f' });
+    servers.push(s.server);
+    const { publicClient } = createChainClients({ chain: monadTestnet, rpcUrls: [s.url] });
+    expect(await publicClient.getBlockNumber({ cacheTime: 0 })).toBe(42n);
+    expect(s.methods).toEqual(['eth_blockNumber']);
   });
 
   it('isRateLimited recognises status, code and message forms', () => {

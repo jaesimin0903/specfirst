@@ -35,7 +35,8 @@ export interface ChainClients {
 export function createChainClients(input: ClientFactoryInput): ChainClients {
   const { chain, rpcUrls } = input;
   const defaults = networkDefaults(chain.id);
-  const transport = rpcTransport(rpcUrls, { rps: defaults.rps, ...input });
+  // Every send is preceded by an eth_chainId check of the URL it goes to (see rpcTransport writeChainId).
+  const transport = rpcTransport(rpcUrls, { rps: defaults.rps, ...input, writeChainId: chain.id });
   const pollingInterval = input.pollingIntervalMs ?? defaults.pollingIntervalMs;
   const publicClient = createPublicClient({ chain, transport, pollingInterval }) as SpecfirstPublicClient;
   return {
@@ -44,8 +45,8 @@ export function createChainClients(input: ClientFactoryInput): ChainClients {
     transport,
     publicClient,
     wallet: (privateKey) => {
-      // Last line of defence behind the CLI's network check: no signer ever exists for mainnet.
-      if (isWriteForbidden(chain.id)) {
+      // Behind the CLI's network check: no signer ever exists for mainnet or for a malformed chain id.
+      if (!Number.isSafeInteger(chain.id) || isWriteForbidden(chain.id)) {
         throw new Error(`refusing to create a wallet client for ${chain.name} (chain ${chain.id}): specfirst only reads from this chain`);
       }
       return createWalletClient({ account: privateKeyToAccount(privateKey), chain, transport, pollingInterval }) as SpecfirstWalletClient;
