@@ -1,9 +1,10 @@
-import { keccak256, type Address, type Hex } from 'viem';
+import { concat, keccak256, type Address, type Hex } from 'viem';
 import { describe, expect, it, vi } from 'vitest';
 import {
   analyzeCode,
   EIP1967_BEACON_SLOT,
   EIP1967_IMPLEMENTATION_SLOT,
+  fingerprintKey,
   identifyImplementation,
   implementationIdentitySchema,
   solidityMetadata,
@@ -28,6 +29,12 @@ const withImmutable = (word: string, push1 = '00'): Hex => `0x7f${word.padStart(
 const IPFS_TAIL = `a2646970667358221220${'11'.repeat(32)}64736f6c63430008180033`;
 const PLAIN: Hex = `0x6080604052${IPFS_TAIL}`;
 const PLAIN_IMPL: Hex = `0x60806040526001${IPFS_TAIL.replace('11'.repeat(32), '22'.repeat(32))}`;
+/** Two unrelated implementations without metadata (bytecode_hash = none). */
+const IMPL_A: Hex = `0x6080604052600160005560026001550000${SOLC_ONLY_TAIL}`;
+const IMPL_B: Hex = `0x60806040527fdeadbeef00000000000000000000000000000000000000000000000000000000ff${SOLC_ONLY_TAIL}`;
+/** A large contract (over 1 KB of logic) with a DELEGATECALL: never treated as a proxy. */
+const BIG_WITH_DELEGATECALL: Hex = `0x${'5b'.repeat(1100)}f4${IPFS_TAIL}`;
+const keyOf = (code: Hex) => fingerprintKey(analyzeCode(code).fingerprint).key;
 
 const word = (a: Address) => `0x${a.slice(2).toLowerCase().padStart(64, '0')}` as Hex;
 
@@ -70,12 +77,13 @@ describe('solidityMetadata and analyzeCode', () => {
 });
 
 describe('identifyImplementation', () => {
-  it('non-proxy with ipfs metadata: keyed by its own metadataHash', async () => {
+  it('non-proxy with ipfs metadata: keyed by keccak(metadataHash || maskedCodeHash), never metadata alone', async () => {
     const id = await identifyImplementation(mockClient({ code: { [lc(VAULT)]: PLAIN } }), VAULT, BLOCK);
     expect(id.proxy).toBeNull();
     expect(id.implementation).toBeNull();
-    expect(id.implementationKeyKind).toEqual({ of: 'self', hash: 'metadataHash' });
-    expect(id.implementationKey).toBe(`0x1220${'11'.repeat(32)}`);
+    expect(id.implementationKeyKind).toEqual({ of: 'self', hash: 'metadataHash+maskedCodeHash' });
+    expect(id.implementationKey).toBe(keccak256(concat([`0x1220${'11'.repeat(32)}`, id.maskedCodeHash!])));
+    expect(id.implementationKey).not.toBe(id.metadataHash);
     expect(id.codeSize).toBe((PLAIN.length - 2) / 2);
     expect(implementationIdentitySchema.parse(id)).toEqual(id);
   });
@@ -88,6 +96,49 @@ describe('identifyImplementation', () => {
     expect(a.implementationKeyKind).toEqual({ of: 'self', hash: 'maskedCodeHash' });
   });
 
+  it('a copied CBOR tail on different code does not share the key', () => {
+    const spoof: Hex = `0x60006000fd${IPFS_TAIL}`;
+    expect(analyzeCode(spoof).fingerprint.metadataHash).toBe(analyzeCode(PLAIN).fingerprint.metadataHash);
+    expect(keyOf(spoof)).not.toBe(keyOf(PLAIN));
+  });
+
+  it('EIP-1967 proxies of one build over different implementations get different keys (implementation only)', async () => {
+    const mk = (impl: Address, code: Hex) =>
+      mockClient({ code: { [lc(VAULT)]: EULER_PROXY, [lc(impl)]: code }, slots: { [EIP1967_IMPLEMENTATION_SLOT]: word(impl) } });
+    const A = '0x2222222222222222222222222222222222222222' as Address;
+    const B = '0x3333333333333333333333333333333333333333' as Address;
+    const a = await identifyImplementation(mk(A, IMPL_A), VAULT, BLOCK);
+    const b = await identifyImplementation(mk(B, IMPL_B), VAULT, BLOCK);
+    expect(a.metadataHash).toBe(b.metadataHash);
+    expect(a.implementationKeyKind).toEqual({ of: 'implementation', hash: 'maskedCodeHash' });
+    expect(a.implementationKey).toBe(a.implementation!.maskedCodeHash);
+    expect(a.implementationKey).not.toBe(b.implementationKey);
+  });
+
+  it('EIP-1967 slots on code that is not proxy-shaped are ignored (no borrowed identity)', async () => {
+    for (const code of [PLAIN, BIG_WITH_DELEGATECALL]) {
+      const client = mockClient({ code: { [lc(VAULT)]: code, [lc(IMPL)]: PLAIN_IMPL }, slots: { [EIP1967_IMPLEMENTATION_SLOT]: word(IMPL) } });
+      const id = await identifyImplementation(client, VAULT, BLOCK);
+      expect(id.proxy).toBeNull();
+      expect(id.implementationKeyKind.of).toBe('self');
+      expect(client.getStorageAt).not.toHaveBeenCalled();
+    }
+  });
+
+  it('beacon whose implementation() reverts or returns zero: proxy of unknown kind, the check goes on', async () => {
+    for (const readContract of [
+      vi.fn(async () => {
+        throw new Error('execution reverted');
+      }),
+      vi.fn(async () => '0x0000000000000000000000000000000000000000'),
+    ]) {
+      const client = { ...mockClient({ code: { [lc(VAULT)]: EULER_PROXY }, slots: { [EIP1967_BEACON_SLOT]: word(BEACON) } }), readContract } as unknown as IdentityClient;
+      const id = await identifyImplementation(client, VAULT, BLOCK);
+      expect(id.proxy).toEqual({ kind: 'unknown' });
+      expect(id.implementationKeyKind).toEqual({ of: 'self', hash: 'metadataHash+maskedCodeHash' });
+    }
+  });
+
   it('EIP-1967 proxy: follows the implementation slot and keys by the implementation metadataHash', async () => {
     const client = mockClient({
       code: { [lc(VAULT)]: EULER_PROXY, [lc(IMPL)]: PLAIN_IMPL },
@@ -96,8 +147,8 @@ describe('identifyImplementation', () => {
     const id = await identifyImplementation(client, VAULT, BLOCK);
     expect(id.proxy).toEqual({ kind: 'eip1967', implementation: IMPL });
     expect(id.implementation).toMatchObject({ address: IMPL, codeHash: keccak256(PLAIN_IMPL), metadataHash: `0x1220${'22'.repeat(32)}` });
-    expect(id.implementationKeyKind).toEqual({ of: 'implementation', hash: 'metadataHash' });
-    expect(id.implementationKey).toBe(`0x1220${'22'.repeat(32)}`);
+    expect(id.implementationKeyKind).toEqual({ of: 'implementation', hash: 'metadataHash+maskedCodeHash' });
+    expect(id.implementationKey).toBe(keyOf(PLAIN_IMPL));
     expect(client.getCode).toHaveBeenCalledWith({ address: IMPL, blockNumber: BLOCK });
   });
 
@@ -119,15 +170,15 @@ describe('identifyImplementation', () => {
     const id = await identifyImplementation(client, VAULT, BLOCK);
     expect(id.proxy).toEqual({ kind: 'eip1167', implementation: IMPL });
     expect(client.getStorageAt).not.toHaveBeenCalled();
-    expect(id.implementationKey).toBe(`0x1220${'22'.repeat(32)}`);
+    expect(id.implementationKey).toBe(keyOf(PLAIN_IMPL));
   });
 
   it('small DELEGATECALL code with empty slots is a proxy of unknown kind, keyed by its own code', async () => {
     const id = await identifyImplementation(mockClient({ code: { [lc(VAULT)]: EULER_PROXY } }), VAULT, BLOCK);
     expect(id.proxy).toEqual({ kind: 'unknown' });
     expect(id.implementation).toBeNull();
-    expect(id.implementationKeyKind).toEqual({ of: 'self', hash: 'metadataHash' });
-    expect(id.implementationKey).toBe(EULER_IPFS);
+    expect(id.implementationKeyKind).toEqual({ of: 'self', hash: 'metadataHash+maskedCodeHash' });
+    expect(id.implementationKey).toBe(keyOf(EULER_PROXY));
     expect(implementationIdentitySchema.parse(id)).toEqual(id);
   });
 
@@ -136,7 +187,7 @@ describe('identifyImplementation', () => {
     const id = await identifyImplementation(client, VAULT, BLOCK);
     expect(id.proxy).toEqual({ kind: 'eip1967', implementation: IMPL });
     expect(id.implementation).toBeNull();
-    expect(id.implementationKeyKind).toEqual({ of: 'self', hash: 'metadataHash' });
+    expect(id.implementationKeyKind).toEqual({ of: 'self', hash: 'metadataHash+maskedCodeHash' });
   });
 
   it('no code: size 0, no masked hash, keyed by codeHash', async () => {

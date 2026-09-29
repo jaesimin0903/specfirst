@@ -156,8 +156,8 @@ describe('standardCheckReportSchema', () => {
     expect(standardCheckReportSchema.parse(r).identity.proxy).toEqual({ kind: 'unknown' });
     r.identity.proxy = { kind: 'eip1967-beacon', implementation: VAULT, beacon: VAULT };
     r.identity.implementation = { address: VAULT, codeHash: `0x${'03'.repeat(32)}`, metadataHash: `0x1220${'04'.repeat(32)}`, maskedCodeHash: `0x${'05'.repeat(32)}` };
-    r.identity.implementationKey = `0x1220${'04'.repeat(32)}`;
-    r.identity.implementationKeyKind = { of: 'implementation', hash: 'metadataHash' };
+    r.identity.implementationKey = `0x${'06'.repeat(32)}`;
+    r.identity.implementationKeyKind = { of: 'implementation', hash: 'metadataHash+maskedCodeHash' };
     expect(standardCheckReportSchema.parse(r)).toEqual(r);
   });
 });

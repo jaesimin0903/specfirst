@@ -68,9 +68,9 @@ export const implementationIdentitySchema = z
       ])
       .nullable(),
     implementation: z.object({ address, ...fingerprintShape }).strict().nullable(),
-    implementationKey: hexBytes,
+    implementationKey: hex32,
     implementationKeyKind: z
-      .object({ of: z.enum(['implementation', 'self']), hash: z.enum(['metadataHash', 'maskedCodeHash', 'codeHash']) })
+      .object({ of: z.enum(['implementation', 'self']), hash: z.enum(['metadataHash+maskedCodeHash', 'maskedCodeHash', 'codeHash']) })
       .strict(),
   })
   .strict();

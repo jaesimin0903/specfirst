@@ -1,11 +1,16 @@
-import { getAddress, keccak256, toHex, type Address, type Hex, type PublicClient } from 'viem';
+import { concat, getAddress, keccak256, toHex, type Address, type Hex, type PublicClient } from 'viem';
 
 /** EIP-1967 implementation slot: bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1). */
 export const EIP1967_IMPLEMENTATION_SLOT: Hex = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
 /** EIP-1967 beacon slot: bytes32(uint256(keccak256('eip1967.proxy.beacon')) - 1). */
 export const EIP1967_BEACON_SLOT: Hex = '0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50';
-/** Code below this size with a DELEGATECALL and no recognised slot is reported as a proxy of unknown kind. */
-export const UNKNOWN_PROXY_MAX_CODE_SIZE = 1024;
+/**
+ * Only code below this size (before the CBOR tail) that contains a DELEGATECALL is treated as a proxy.
+ * EIP-1967 slots of anything larger are ignored: a full contract can write any address into its own slot,
+ * and must not borrow another contract's identity that way. Recognised slots give eip1967 or
+ * eip1967-beacon; none gives kind 'unknown'.
+ */
+export const PROXY_MAX_CODE_SIZE = 1024;
 
 const beaconAbi = [
   { type: 'function', name: 'implementation', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
@@ -37,19 +42,27 @@ export interface CodeFingerprint {
 }
 
 export interface ImplementationKeyKind {
+  /** implementation when a proxy's implementation code was found, self otherwise. Never mixed. */
   of: 'implementation' | 'self';
-  hash: 'metadataHash' | 'maskedCodeHash' | 'codeHash';
+  /**
+   * metadataHash+maskedCodeHash: keccak256(metadataHash || maskedCodeHash). The CBOR tail is declared by
+   * the contract itself and can be copied, so it never keys alone; the masked code must match too.
+   */
+  hash: 'metadataHash+maskedCodeHash' | 'maskedCodeHash' | 'codeHash';
 }
 
 export interface ImplementationIdentity extends CodeFingerprint {
   codeSize: number;
-  /** kind 'unknown': small code with a DELEGATECALL but no EIP-1967 slot and not an EIP-1167 clone. */
+  /**
+   * kind 'unknown': proxy-shaped code (small, with a DELEGATECALL) whose implementation could not be
+   * resolved: no EIP-1967 slot, or a beacon whose implementation() reverted or returned zero.
+   */
   proxy: { kind: ProxyKind; implementation: Address; beacon?: Address } | { kind: 'unknown' } | null;
   implementation: (CodeFingerprint & { address: Address }) | null;
   /**
-   * The first of implementation metadataHash, own metadataHash, implementation maskedCodeHash, own
-   * maskedCodeHash, implementation codeHash, own codeHash. Checks with the same key ran the same code,
-   * so N vaults of one factory count as one checked implementation, not N.
+   * From the implementation's fingerprint when its code was found, else from the contract's own:
+   * keccak256(metadataHash || maskedCodeHash) when there is metadata, else maskedCodeHash, else codeHash.
+   * Checks with the same key ran the same code, so N vaults of one factory count as one, not N.
    */
   implementationKey: Hex;
   implementationKeyKind: ImplementationKeyKind;
@@ -167,25 +180,23 @@ function slotAddress(word: Hex | undefined): Address | null {
   return /^0x0{40}$/.test(addr) ? null : getAddress(addr);
 }
 
+/** Key of one fingerprint: metadata bound to the masked code, else the masked code, else the raw code. */
+export function fingerprintKey(fp: CodeFingerprint): { key: Hex; hash: ImplementationKeyKind['hash'] } {
+  if (fp.metadataHash && fp.maskedCodeHash) return { key: keccak256(concat([fp.metadataHash, fp.maskedCodeHash])), hash: 'metadataHash+maskedCodeHash' };
+  if (fp.maskedCodeHash) return { key: fp.maskedCodeHash, hash: 'maskedCodeHash' };
+  return { key: fp.codeHash, hash: 'codeHash' };
+}
+
 function pickKey(self: CodeFingerprint, impl: CodeFingerprint | null): { key: Hex; kind: ImplementationKeyKind } {
-  const order: Array<[ImplementationKeyKind['of'], CodeFingerprint | null, ImplementationKeyKind['hash']]> = [
-    ['implementation', impl, 'metadataHash'],
-    ['self', self, 'metadataHash'],
-    ['implementation', impl, 'maskedCodeHash'],
-    ['self', self, 'maskedCodeHash'],
-    ['implementation', impl, 'codeHash'],
-  ];
-  for (const [of, fp, hash] of order) {
-    const v = fp?.[hash];
-    if (v) return { key: v, kind: { of, hash } };
-  }
-  return { key: self.codeHash, kind: { of: 'self', hash: 'codeHash' } };
+  const of: ImplementationKeyKind['of'] = impl ? 'implementation' : 'self';
+  const { key, hash } = fingerprintKey(impl ?? self);
+  return { key, kind: { of, hash } };
 }
 
 /**
  * Identifies the code behind `address` at `blockNumber`: fingerprints of its runtime code and, for an
- * EIP-1967 proxy (implementation or beacon slot) or an EIP-1167 clone, of the implementation's code.
- * Other proxies are only flagged (kind 'unknown') and keyed by their own code.
+ * EIP-1167 clone or a proxy-shaped contract with an EIP-1967 implementation or beacon slot, of the
+ * implementation's code. Other proxy-shaped code is flagged (kind 'unknown') and keyed by its own code.
  */
 export async function identifyImplementation(client: IdentityClient, address: Address, blockNumber: bigint): Promise<ImplementationIdentity> {
   const code = (await client.getCode({ address, blockNumber })) ?? '0x';
@@ -196,18 +207,19 @@ export async function identifyImplementation(client: IdentityClient, address: Ad
   const clone = EIP1167.exec(code);
   if (clone) {
     proxy = { kind: 'eip1167', implementation: getAddress(`0x${clone[1]}`) };
-  } else if (codeSize > 0) {
+  } else if (hasDelegatecall && logicSize < PROXY_MAX_CODE_SIZE) {
     const impl = slotAddress(await client.getStorageAt({ address, slot: EIP1967_IMPLEMENTATION_SLOT, blockNumber }));
     if (impl) {
       proxy = { kind: 'eip1967', implementation: impl };
     } else {
       const beacon = slotAddress(await client.getStorageAt({ address, slot: EIP1967_BEACON_SLOT, blockNumber }));
-      if (beacon) {
-        const implementation = (await client.readContract({ address: beacon, abi: beaconAbi, functionName: 'implementation', blockNumber })) as Address;
-        proxy = { kind: 'eip1967-beacon', implementation: getAddress(implementation), beacon };
-      } else if (hasDelegatecall && logicSize < UNKNOWN_PROXY_MAX_CODE_SIZE) {
-        proxy = { kind: 'unknown' };
-      }
+      const implementation = beacon
+        ? await client
+            .readContract({ address: beacon, abi: beaconAbi, functionName: 'implementation', blockNumber })
+            .then((a) => slotAddress(`0x${(a as string).slice(2).padStart(64, '0')}`))
+            .catch(() => null)
+        : null;
+      proxy = beacon && implementation ? { kind: 'eip1967-beacon', implementation, beacon } : { kind: 'unknown' };
     }
   }
 
