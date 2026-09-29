@@ -102,6 +102,8 @@ export const standardCheckReportSchema = z
     standard: standardNameSchema,
     upstream: z.object({ repo: z.string().url(), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
     harnessSha256: hex32,
+    /** sha256 of Specfirst's own properties (SpecfirstMaxHonored.t.sol). */
+    sfPropertiesSha256: hex32,
     runs: z.number().int().positive(),
     /** SF_DELTA, tolerated absolute error in asset base units, decimal. */
     delta: decimal,
@@ -115,6 +117,8 @@ export const standardCheckReportSchema = z
         forgeVersion: z.string().min(1).nullable(),
         forgeStd: z.object({ repo: z.string().url(), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
         foundryTomlSha256: hex32,
+        /** forge fuzz max_test_rejects from foundry.toml. */
+        maxTestRejects: z.number().int().positive(),
       })
       .strict(),
     identity: implementationIdentitySchema,
@@ -257,8 +261,8 @@ export interface ParseStandardOptions {
 
 /**
  * Turns `forge test --json` stdout of a standard suite into one result per property, in `properties` order.
- * A failed setUp() makes every property not_applicable, or inconclusive when the failure is a fork RPC
- * error. A property forge did not report is inconclusive.
+ * A property whose suite's setUp() failed is not_applicable, or inconclusive when the failure is a fork RPC
+ * error. Any other property forge did not report is inconclusive.
  * Returns null when the output holds no forge JSON (compile error, fork error); the caller reports stderr.
  */
 export function parseStandardForgeJson(
@@ -276,7 +280,7 @@ export function parseStandardForgeJson(
     for (const [key, r] of Object.entries(suite.test_results)) {
       keys.push(key);
       const name = testName(key);
-      if (name === 'setUp' && r.status !== 'Success') setupFailure = r.reason || 'setUp reverted';
+      if (name === 'setUp' && r.status !== 'Success') setupFailure ??= r.reason || 'setUp reverted';
       else byTest.set(name, r);
     }
   }
@@ -285,12 +289,14 @@ export function parseStandardForgeJson(
   const deposits = opts.depositRevertEvents ? depositRevertCounts(opts.depositRevertEvents, keys) : new Map<string, number>();
   return [...properties, ...extra].map((p): StandardPropertyResult => {
     const base = { id: p.id, test: p.test, description: p.description };
-    if (setupFailure !== null) {
+    const r = byTest.get(p.test);
+    // A suite whose setUp failed reports no tests; its properties take the setUp reason. Properties of a
+    // suite that did run keep their own results.
+    if (!r && setupFailure !== null) {
       return FORK_ERROR.test(setupFailure)
         ? { ...base, status: 'inconclusive', reason: `${FORK_ERROR_NOTE}: setUp failed: ${setupFailure}` }
         : { ...base, status: 'not_applicable', reason: `setUp failed: ${setupFailure}` };
     }
-    const r = byTest.get(p.test);
     if (!r) return { ...base, status: 'inconclusive', reason: 'no result in forge output' };
     return withDepositNote(classify(p, r), deposits.get(p.test));
   });

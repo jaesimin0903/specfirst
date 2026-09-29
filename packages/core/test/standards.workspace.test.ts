@@ -12,6 +12,7 @@ import {
   ERC4626_CONTROL_VAULT_PATH,
   ERC4626_FOUNDRY_TOML,
   ERC4626_HARNESS_PATH,
+  ERC4626_SF_PROPERTIES_PATH,
   erc4626SourceFile,
   erc4626WorkspaceDir,
   EVENTS_DIR,
@@ -62,6 +63,13 @@ describe('prepareErc4626Workspace (local repositories, no network)', () => {
     expect(first.harnessSha256).toBe(sha256Hex(harness));
     expect(first.foundryTomlSha256).toBe(sha256Hex(ERC4626_FOUNDRY_TOML));
     expect(ERC4626_FOUNDRY_TOML).toContain(`fs_permissions = [{ access = "write", path = "./${EVENTS_DIR}" }]`);
+    expect(ERC4626_FOUNDRY_TOML).toContain('[profile.default.fuzz]\nmax_test_rejects = 4096\n');
+    const sf = await readFile(erc4626SourceFile('SpecfirstMaxHonored.t.sol'), 'utf8');
+    expect(sf.startsWith('// SPDX-License-Identifier: MIT')).toBe(true);
+    // It imports forge-std only, never the upstream suite.
+    expect(sf.match(/^import .*$/gm)).toEqual(['import {Test} from "forge-std/Test.sol";', 'import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";']);
+    expect(await readFile(path.join(first.dir, ERC4626_SF_PROPERTIES_PATH), 'utf8')).toBe(sf);
+    expect(first.sfPropertiesSha256).toBe(sha256Hex(sf));
     expect(harness.startsWith('// SPDX-License-Identifier: AGPL-3.0')).toBe(true);
     expect(await readFile(path.join(first.dir, ERC4626_CONTROL_VAULT_PATH), 'utf8')).toMatch(/^\/\/ SPDX-License-Identifier: MIT/);
     expect(existsSync(path.join(first.dir, ERC4626_CONTROL_PATH))).toBe(true);
@@ -111,7 +119,7 @@ describe('prepareErc4626Workspace (local repositories, no network)', () => {
     expect(again.removed.sort()).toEqual(['.env', 'lib/evil', 'remappings.txt', 'script', 'src/Other.sol', 'test/Evil.t.sol', 'test/sub/X.sol']);
     expect(await readFile(path.join(ws.dir, ERC4626_HARNESS_PATH), 'utf8')).toBe(await readFile(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8'));
     const left = (await run('find', ['.', '-path', './lib', '-prune', '-o', '-type', 'f', '-print'], { cwd: ws.dir })).stdout.trim().split('\n').sort();
-    expect(left).toEqual(['./foundry.toml', `./${ERC4626_CONTROL_VAULT_PATH}`, `./${ERC4626_CONTROL_PATH}`, `./${ERC4626_HARNESS_PATH}`].sort());
+    expect(left).toEqual(['./foundry.toml', `./${ERC4626_CONTROL_VAULT_PATH}`, `./${ERC4626_CONTROL_PATH}`, `./${ERC4626_HARNESS_PATH}`, `./${ERC4626_SF_PROPERTIES_PATH}`].sort());
   });
 
   it('removes event files left by crashed runs after a day, keeps fresh ones', async () => {

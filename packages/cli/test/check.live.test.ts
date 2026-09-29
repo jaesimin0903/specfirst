@@ -35,11 +35,11 @@ describe.skipIf(!LIVE)('specfirst check on Monad mainnet (SPECFIRST_LIVE=1)', { 
 
   it('Morpho vault at a pinned block: no property fails, report and raw forge output are saved', async () => {
     const r = await cli(MORPHO, '--standard', 'erc4626', '--block', BLOCK, '--runs', '8');
-    // 0 when all 26 pass; 17 if the public RPC rate-limited a property into inconclusive. Never 16.
+    // 0 when all 30 pass; 17 if the public RPC rate-limited a property into inconclusive. Never 16.
     expect([0, 17]).toContain(r.code);
     const summary = r.events.find((e) => e.type === 'check-summary')!;
     expect(summary).toMatchObject({ chainId: 143, blockNumber: BLOCK, exitCode: r.code, reportPath: `.specfirst/checks/143/${MORPHO.toLowerCase()}/${BLOCK}.json` });
-    expect(r.events.filter((e) => e.type === 'check-property')).toHaveLength(26);
+    expect(r.events.filter((e) => e.type === 'check-property')).toHaveLength(30);
     const report = standardCheckReportSchema.parse(JSON.parse(await readFile(path.join(dir, summary.reportPath as string), 'utf8')));
     expect(report.summary.fail).toBe(0);
     expect(report.identity.implementationKeyKind).toEqual({ of: 'self', hash: 'maskedCodeHash' });
@@ -50,6 +50,6 @@ describe.skipIf(!LIVE)('specfirst check on Monad mainnet (SPECFIRST_LIVE=1)', { 
     const r = await cli(SHMONAD, '--standard', 'erc4626', '--block', BLOCK, '--runs', '8');
     expect(r.code).toBe(17);
     expect(r.events.some((e) => e.type === 'check-skip')).toBe(true);
-    expect(r.events.find((e) => e.type === 'check-summary')!.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 26 });
+    expect(r.events.find((e) => e.type === 'check-summary')!.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
   });
 });

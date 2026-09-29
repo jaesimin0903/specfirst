@@ -80,10 +80,12 @@ describe('runStandardCheck without forge', () => {
     expect(report).toMatchObject({ seed: null, sender: null, toolchain: { forgeVersion: null, forgeStd: { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit } } });
     expect(events).toEqual(['check-start', 'check-identity', 'check-skip']);
     expect(report.blockNumber).toBe('5');
-    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 26 });
+    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
     expect(report.results.every((r) => r.status === 'not_applicable' && r.reason === NATIVE_ASSET_REASON)).toBe(true);
     expect(report.upstream).toEqual(ERC4626_UPSTREAM);
     expect(report.harnessSha256).toBe(sha256Hex(await readFile(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8')));
+    expect(report.sfPropertiesSha256).toBe(sha256Hex(await readFile(erc4626SourceFile('SpecfirstMaxHonored.t.sol'), 'utf8')));
+    expect(report.results.slice(26).map((r) => r.id)).toEqual(['sf-maxDeposit-honored', 'sf-maxMint-honored', 'sf-maxWithdraw-honored', 'sf-maxRedeem-honored']);
     const written = JSON.parse(await readFile(recordPath, 'utf8')) as StandardCheckReport;
     expect(standardCheckReportSchema.parse(written)).toEqual(report);
   });
@@ -213,7 +215,14 @@ describe('runStandardCheck with a stand-in forge (M6, M7, L3, L6, L7)', () => {
     expect(BigInt(report.sender!)).toBeGreaterThan(0xffffn);
     expect(argAfter(args, '--fork-url')).toBe(RPC);
     expect(argAfter(args, '--fork-block-number')).toBe('42');
-    expect(report.toolchain).toEqual({ forgeVersion: 'forge Version: 1.5.1-fake', forgeStd: input.pins.forgeStd, foundryTomlSha256: sha256Hex(ERC4626_FOUNDRY_TOML) });
+    expect(report.toolchain).toEqual({
+      forgeVersion: 'forge Version: 1.5.1-fake',
+      forgeStd: input.pins.forgeStd,
+      foundryTomlSha256: sha256Hex(ERC4626_FOUNDRY_TOML),
+      maxTestRejects: 4096,
+    });
+    // Both the upstream suite (through the harness) and Specfirst's own properties run; the control does not.
+    expect(argAfter(args, '--match-contract')).toBe('^(SpecfirstERC4626Test|SpecfirstMaxHonored)$');
     expect(forgeEvents[0]!.args).toContain('<rpc>');
     expect(forgeEvents[0]!.args.join(' ')).not.toMatch(/secretkey123/i);
 
@@ -277,11 +286,12 @@ describe('standardCheckReportSchema', () => {
     standard: 'erc4626',
     upstream: { ...ERC4626_UPSTREAM },
     harnessSha256: `0x${'ab'.repeat(32)}`,
+    sfPropertiesSha256: `0x${'ac'.repeat(32)}`,
     runs: 8,
     delta: '0',
     seed: `0x${'0a'.repeat(32)}`,
     sender: '0x00000000000000000000000000000000000abcde',
-    toolchain: { forgeVersion: 'forge Version: 1.5.1-Homebrew', forgeStd: { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit }, foundryTomlSha256: `0x${'0b'.repeat(32)}` },
+    toolchain: { forgeVersion: 'forge Version: 1.5.1-Homebrew', forgeStd: { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit }, foundryTomlSha256: `0x${'0b'.repeat(32)}`, maxTestRejects: 4096 },
     identity: {
       codeHash: `0x${'01'.repeat(32)}`,
       metadataHash: null,

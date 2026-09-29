@@ -10,6 +10,7 @@ import {
   ERC4626_CONTROL_PATH,
   ERC4626_CONTROL_VAULT_PATH,
   ERC4626_HARNESS_PATH,
+  ERC4626_SF_PROPERTIES_PATH,
   ERC4626_UPSTREAM,
   erc4626SourceFile,
   FORGE_STD_PIN,
@@ -20,6 +21,13 @@ export const CACHE_DIR_ENV = 'SPECFIRST_CACHE_DIR';
 /** Directory (inside the workspace) the harness may write its event files to; see fs_permissions. */
 export const EVENTS_DIR = 'sf-events';
 
+/**
+ * Rejected inputs forge tolerates per test before it gives up ("too many rejects"). forge's default, 65536,
+ * let a vault whose withdraw always reverts run into the one-hour timeout; at 4096 such a property ends
+ * inconclusive within minutes.
+ */
+export const FUZZ_MAX_TEST_REJECTS = 4096;
+
 /** The Foundry project every ERC-4626 check runs in. Pinned solc keeps compiles reproducible. */
 export const ERC4626_FOUNDRY_TOML = `[profile.default]
 src = "src"
@@ -29,6 +37,9 @@ solc_version = "0.8.28"
 evm_version = "prague"
 remappings = ["forge-std/=lib/forge-std/src/", "erc4626-tests/=lib/erc4626-tests/"]
 fs_permissions = [{ access = "write", path = "./${EVENTS_DIR}" }]
+
+[profile.default.fuzz]
+max_test_rejects = ${FUZZ_MAX_TEST_REJECTS}
 `;
 
 /** $SPECFIRST_CACHE_DIR, else $XDG_CACHE_HOME/specfirst, else ~/.cache/specfirst. */
@@ -49,6 +60,8 @@ export interface StandardWorkspace {
   /** Harness path relative to dir. */
   harnessPath: string;
   harnessSha256: Hex;
+  /** sha256 of SpecfirstMaxHonored.t.sol, Specfirst's own properties. */
+  sfPropertiesSha256: Hex;
   foundryTomlSha256: Hex;
   upstream: PinnedRepo;
   forgeStd: PinnedRepo;
@@ -177,9 +190,9 @@ async function prune(dir: string, expected: ReadonlySet<string>): Promise<string
 
 /**
  * Prepares (or reuses) `<cacheDir>/standards/erc4626-<pins>`: the pinned upstream suite and forge-std under
- * lib/, foundry.toml, the harness and its positive control under test/, the control vault under src/, and
- * nothing else. The cache lives outside any project because the upstream code is AGPL-3.0 and must not end
- * up committed in a user's repository.
+ * lib/, foundry.toml, the harness, Specfirst's own properties and the positive control under test/, the
+ * control vault under src/, and nothing else. The cache lives outside any project because the upstream
+ * code is AGPL-3.0 and must not end up committed in a user's repository.
  */
 export async function prepareErc4626Workspace(input: PrepareWorkspaceInput = {}): Promise<StandardWorkspace> {
   const upstream = input.upstream ?? ERC4626_UPSTREAM;
@@ -196,6 +209,7 @@ export async function prepareErc4626Workspace(input: PrepareWorkspaceInput = {})
 
   const files: Record<string, string> = {
     [ERC4626_HARNESS_PATH]: await readFile(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8'),
+    [ERC4626_SF_PROPERTIES_PATH]: await readFile(erc4626SourceFile('SpecfirstMaxHonored.t.sol'), 'utf8'),
     // The positive control compiles with the harness but only runs under its own --match-path.
     [ERC4626_CONTROL_PATH]: await readFile(erc4626SourceFile('control/SpecfirstERC4626Control.t.sol'), 'utf8'),
     [ERC4626_CONTROL_VAULT_PATH]: await readFile(erc4626SourceFile('control/BrokenVault.sol'), 'utf8'),
@@ -214,6 +228,7 @@ export async function prepareErc4626Workspace(input: PrepareWorkspaceInput = {})
     dir,
     harnessPath: ERC4626_HARNESS_PATH,
     harnessSha256: sha256Hex(files[ERC4626_HARNESS_PATH]!),
+    sfPropertiesSha256: sha256Hex(files[ERC4626_SF_PROPERTIES_PATH]!),
     foundryTomlSha256: sha256Hex(ERC4626_FOUNDRY_TOML),
     upstream,
     forgeStd,

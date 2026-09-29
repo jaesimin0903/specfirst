@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 import { toFunctionSelector } from 'viem';
 import {
   depositRevertCounts,
+  ERC4626_CHECK_PROPERTIES,
   ERC4626_PROPERTIES,
+  SPECFIRST_ERC4626_PROPERTIES,
   parseStandardForgeJson,
   STANDARD_CHECK_FAILED_EXIT_CODE,
   STANDARD_CHECK_INCOMPLETE_EXIT_CODE,
@@ -273,5 +275,50 @@ describe('M2: standardCheckExitCode', () => {
     expect(standardCheckExitCode(s(0, 0, 0, 26))).toBe(17);
     expect(standardCheckExitCode(s(0, 0, 0, 0))).toBe(17);
     expect(standardCheckExitCode(s(26, 0, 0, 0))).toBe(0);
+  });
+});
+
+describe('Specfirst properties sf-* (real forge output, local anvil with anvil_setCode)', () => {
+  const check = async (name: string) => parseStandardForgeJson(await fx(name), ERC4626_CHECK_PROPERTIES)!;
+
+  it('the table: four sf- ids after the 26 upstream ones, each description names the EIP-4626 rule', () => {
+    expect(SPECFIRST_ERC4626_PROPERTIES.map((p) => p.id)).toEqual(['sf-maxDeposit-honored', 'sf-maxMint-honored', 'sf-maxWithdraw-honored', 'sf-maxRedeem-honored']);
+    expect(ERC4626_CHECK_PROPERTIES).toHaveLength(30);
+    for (const p of SPECFIRST_ERC4626_PROPERTIES) expect(p.description).toMatch(/\(EIP-4626: /);
+  });
+
+  it('(b) a vault that honours its max values passes all 30', async () => {
+    expect(summarize(await check('local-sf-honouring.json'))).toEqual({ pass: 30, fail: 0, inconclusive: 0, notApplicable: 0 });
+  });
+
+  it('(a) async exits (Upshift shape): sf-maxWithdraw and sf-maxRedeem fail with the raw selector and the max; upstream only runs out of inputs', async () => {
+    const results = await check('local-sf-async-exit.json');
+    const r = byId(results);
+    expect(r.get('sf-maxWithdraw-honored')).toMatchObject({ status: 'fail' });
+    expect(r.get('sf-maxWithdraw-honored')!.reason).toMatch(/^withdraw\(\d+\) reverted with selector 0x75ed2e3e while maxWithdraw is \d+$/);
+    expect(r.get('sf-maxRedeem-honored')!.reason).toMatch(/^redeem\(\d+\) reverted with selector 0x75ed2e3e while maxRedeem is \d+$/);
+    expect(r.get('sf-maxWithdraw-honored')!.counterexample!.calls[0]).toMatch(/^test_sf_maxWithdraw_honored\(/);
+    expect(r.get('sf-maxDeposit-honored')!.status).toBe('pass');
+    expect(r.get('sf-maxMint-honored')!.status).toBe('pass');
+    expect(summarize(results)).toEqual({ pass: 16, fail: 2, inconclusive: 12, notApplicable: 0 });
+    expect(results.filter((x) => x.status === 'inconclusive').every((x) => /^`vm\.assume` rejected too many inputs \(4096 allowed\)$/.test(x.reason!))).toBe(true);
+  });
+
+  it('(c) exits disabled and max values of 0: nothing fails, sf-maxWithdraw and sf-maxRedeem end inconclusive', async () => {
+    const results = await check('local-sf-honest-closed.json');
+    const r = byId(results);
+    expect(r.get('sf-maxWithdraw-honored')!.status).toBe('inconclusive');
+    expect(r.get('sf-maxRedeem-honored')!.status).toBe('inconclusive');
+    expect(summarize(results)).toEqual({ pass: 16, fail: 0, inconclusive: 14, notApplicable: 0 });
+  });
+
+  it('a suite whose setUp failed only affects its own properties', () => {
+    const doc = JSON.stringify({
+      'test/SpecfirstERC4626.t.sol:SpecfirstERC4626Test': { test_results: { 'test_asset((address[4],uint256[4],uint256[4],int256))': { status: 'Success', reason: null, counterexample: null } } },
+      'test/SpecfirstMaxHonored.t.sol:SpecfirstMaxHonored': { test_results: { 'setUp()': { status: 'Failure', reason: 'EvmError: Revert', counterexample: null } } },
+    });
+    const r = byId(parseStandardForgeJson(doc, [ERC4626_PROPERTIES[0]!, SPECFIRST_ERC4626_PROPERTIES[2]!])!);
+    expect(r.get('asset')!.status).toBe('pass');
+    expect(r.get('sf-maxWithdraw-honored')).toMatchObject({ status: 'not_applicable', reason: 'setUp failed: EvmError: Revert' });
   });
 });

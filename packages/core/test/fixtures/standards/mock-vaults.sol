@@ -69,8 +69,8 @@ abstract contract VaultBase {
     function convertToAssets(uint256 s) public pure returns (uint256) { return s; }
     function maxDeposit(address) public view virtual returns (uint256) { return type(uint256).max; }
     function maxMint(address) public view virtual returns (uint256) { return type(uint256).max; }
-    function maxWithdraw(address o) public view returns (uint256) { return balanceOf[o]; }
-    function maxRedeem(address o) public view returns (uint256) { return balanceOf[o]; }
+    function maxWithdraw(address o) public view virtual returns (uint256) { return balanceOf[o]; }
+    function maxRedeem(address o) public view virtual returns (uint256) { return balanceOf[o]; }
     function previewDeposit(uint256 a) public pure returns (uint256) { return a; }
     function previewMint(uint256 s) public pure returns (uint256) { return s; }
     function previewWithdraw(uint256 a) public pure returns (uint256) { return a; }
@@ -86,12 +86,12 @@ abstract contract VaultBase {
         IERC20Min(asset()).transferFrom(msg.sender, address(this), a);
         balanceOf[r] += s; totalSupply += s;
     }
-    function withdraw(uint256 a, address r, address o) public returns (uint256 s) {
+    function withdraw(uint256 a, address r, address o) public virtual returns (uint256 s) {
         s = a;
         _spend(o, s);
         IERC20Min(asset()).transfer(r, a);
     }
-    function redeem(uint256 s, address r, address o) public returns (uint256 a) {
+    function redeem(uint256 s, address r, address o) public virtual returns (uint256 a) {
         a = s;
         _spend(o, s);
         IERC20Min(asset()).transfer(r, a);
@@ -151,4 +151,24 @@ contract PackedToken {
 /// Correct 1:1 vault over the packed-balance token.
 contract PackedAssetVault is VaultBase {
     function asset() public pure override returns (address) { return PACKED_TOKEN; }
+}
+
+/// Correct 1:1 vault over MockToken: every max is honoured.
+contract HonouringVault is VaultBase {}
+
+error WithdrawalRequestRequired();
+
+/// Shaped like Upshift earnAUSD on Monad: withdraw and redeem always revert (exits go through an async
+/// request flow), yet maxWithdraw and maxRedeem report the holder's balance. EIP-4626 says they MUST be 0.
+contract AsyncExitVault is VaultBase {
+    function withdraw(uint256, address, address) public pure override returns (uint256) { revert WithdrawalRequestRequired(); }
+    function redeem(uint256, address, address) public pure override returns (uint256) { revert WithdrawalRequestRequired(); }
+}
+
+/// Same exits, but honest about it: maxWithdraw and maxRedeem are 0.
+contract HonestClosedExitVault is VaultBase {
+    function maxWithdraw(address) public pure override returns (uint256) { return 0; }
+    function maxRedeem(address) public pure override returns (uint256) { return 0; }
+    function withdraw(uint256, address, address) public pure override returns (uint256) { revert WithdrawalRequestRequired(); }
+    function redeem(uint256, address, address) public pure override returns (uint256) { revert WithdrawalRequestRequired(); }
 }

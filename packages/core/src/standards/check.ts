@@ -7,13 +7,15 @@ import { createPublicClient, getAddress, toHex, type Address, type Hex, type Pub
 import { rpcTransport } from '../chain/transport.js';
 import { sha256Hex } from '../spec/hash.js';
 import {
+  ERC4626_CHECK_CONTRACTS,
+  ERC4626_CHECK_PROPERTIES,
   ERC4626_CONTROL_PATH,
-  ERC4626_HARNESS_PATH,
   ERC4626_PROPERTIES,
   ERC4626_UPSTREAM,
   erc4626SourceFile,
   FORGE_STD_PIN,
   type PinnedRepo,
+  type StandardProperty,
 } from './erc4626.js';
 import { identifyImplementation, type IdentityClient, type ImplementationIdentity } from './identity.js';
 import {
@@ -26,7 +28,7 @@ import {
   type StandardName,
   type StandardPropertyResult,
 } from './report.js';
-import { ERC4626_FOUNDRY_TOML, EVENTS_DIR, prepareErc4626Workspace, type StandardWorkspace } from './workspace.js';
+import { ERC4626_FOUNDRY_TOML, EVENTS_DIR, FUZZ_MAX_TEST_REJECTS, prepareErc4626Workspace, type StandardWorkspace } from './workspace.js';
 
 export const CHECKS_DIR = '.specfirst/checks';
 export const DEFAULT_STANDARD_RUNS = 32;
@@ -182,7 +184,9 @@ interface ForgeSuiteRun {
 
 async function runForgeSuite(i: {
   ws: StandardWorkspace;
-  matchPath: string;
+  /** forge flags choosing what runs, e.g. --match-contract or --match-path. */
+  select: string[];
+  properties: readonly StandardProperty[];
   rpcUrl: string;
   blockNumber: bigint;
   runs: number;
@@ -206,8 +210,7 @@ async function runForgeSuite(i: {
   const eventsFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.deposit-below-max.log`);
   const args = [
     'test',
-    '--match-path',
-    i.matchPath,
+    ...i.select,
     '--fork-url',
     i.rpcUrl,
     '--fork-block-number',
@@ -247,7 +250,7 @@ async function runForgeSuite(i: {
     const stdout = mask(String(proc.stdout ?? ''));
     const doc = extractForgeDoc(stdout);
     const events = await readFile(eventsFile, 'utf8').catch(() => '');
-    const results = doc ? parseStandardForgeJson(JSON.stringify(doc), ERC4626_PROPERTIES, { depositRevertEvents: events }) : null;
+    const results = doc ? parseStandardForgeJson(JSON.stringify(doc), i.properties, { depositRevertEvents: events }) : null;
     if (!doc || !results) {
       const out = mask([String(proc.stderr ?? '').trim(), stdout.trim()].filter(Boolean).join('\n'));
       throw new StandardCheckError(`forge produced no test results (exit ${proc.exitCode}): ${out.split('\n').slice(0, 12).join('\n') || 'no output'}`);
@@ -300,6 +303,7 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
   let upstream = input.pins?.upstream ?? ERC4626_UPSTREAM;
   let forgeStd: PinnedRepo = input.pins?.forgeStd ?? { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit };
   let harnessSha256: Hex;
+  let sfPropertiesSha256: Hex;
   let foundryTomlSha256: Hex = sha256Hex(ERC4626_FOUNDRY_TOML);
   // An asset() that reverts is left to forge, whose setUp failure becomes the recorded reason.
   const asset = await client
@@ -308,17 +312,20 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
   if (asset && asset.toLowerCase() === ERC7535_NATIVE_ASSET.toLowerCase()) {
     input.onEvent?.({ type: 'check-skip', reason: NATIVE_ASSET_REASON });
     harnessSha256 = sha256Hex(await readFile(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8'));
-    results = ERC4626_PROPERTIES.map((p) => ({ id: p.id, test: p.test, description: p.description, status: 'not_applicable', reason: NATIVE_ASSET_REASON }));
+    sfPropertiesSha256 = sha256Hex(await readFile(erc4626SourceFile('SpecfirstMaxHonored.t.sol'), 'utf8'));
+    results = ERC4626_CHECK_PROPERTIES.map((p) => ({ id: p.id, test: p.test, description: p.description, status: 'not_applicable', reason: NATIVE_ASSET_REASON }));
   } else {
     const ws = await prepareErc4626Workspace({ cacheDir: input.cacheDir, ...input.pins });
     input.onEvent?.({ type: 'check-workspace', dir: ws.dir, fetched: ws.fetched, harnessSha256: ws.harnessSha256 });
     upstream = ws.upstream;
     forgeStd = ws.forgeStd;
     harnessSha256 = ws.harnessSha256;
+    sfPropertiesSha256 = ws.sfPropertiesSha256;
     foundryTomlSha256 = ws.foundryTomlSha256;
     run = await runForgeSuite({
       ws,
-      matchPath: ERC4626_HARNESS_PATH,
+      select: ['--match-contract', `^(${ERC4626_CHECK_CONTRACTS.join('|')})$`],
+      properties: ERC4626_CHECK_PROPERTIES,
       rpcUrl: input.rpcUrl,
       blockNumber,
       runs,
@@ -340,11 +347,17 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
     standard: input.standard,
     upstream: { repo: upstream.repo, commit: upstream.commit },
     harnessSha256,
+    sfPropertiesSha256,
     runs,
     delta: delta.toString(),
     seed: run?.seed ?? null,
     sender: run?.sender ?? null,
-    toolchain: { forgeVersion: run?.forgeVersion ?? null, forgeStd: { repo: forgeStd.repo, commit: forgeStd.commit }, foundryTomlSha256 },
+    toolchain: {
+      forgeVersion: run?.forgeVersion ?? null,
+      forgeStd: { repo: forgeStd.repo, commit: forgeStd.commit },
+      foundryTomlSha256,
+      maxTestRejects: FUZZ_MAX_TEST_REJECTS,
+    },
     identity,
     results,
     summary: summarize(results),
@@ -380,7 +393,8 @@ export async function runErc4626Control(input: RunErc4626ControlInput): Promise<
   const ws = await prepareErc4626Workspace({ cacheDir: input.cacheDir });
   const run = await runForgeSuite({
     ws,
-    matchPath: ERC4626_CONTROL_PATH,
+    select: ['--match-path', ERC4626_CONTROL_PATH],
+    properties: ERC4626_PROPERTIES,
     rpcUrl: input.rpcUrl,
     blockNumber: input.blockNumber,
     runs: input.runs ?? DEFAULT_STANDARD_RUNS,

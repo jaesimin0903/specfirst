@@ -74,7 +74,12 @@ describe.skipIf(SKIP)('ERC-4626 harness with forge, offline (pinned cache presen
   it('the harness, the positive control and the control vault compile', async () => {
     const p = await forge(['build', '--offline']);
     expect(p.exitCode, String(p.stderr)).toBe(0);
-    for (const f of ['SpecfirstERC4626.t.sol/SpecfirstERC4626Test.json', 'SpecfirstERC4626Control.t.sol/SpecfirstERC4626Control.json', 'BrokenVault.sol/BrokenVault.json']) {
+    for (const f of [
+      'SpecfirstERC4626.t.sol/SpecfirstERC4626Test.json',
+      'SpecfirstMaxHonored.t.sol/SpecfirstMaxHonored.json',
+      'SpecfirstERC4626Control.t.sol/SpecfirstERC4626Control.json',
+      'BrokenVault.sol/BrokenVault.json',
+    ]) {
       expect(existsSync(path.join(ws.dir, 'out', f)), f).toBe(true);
     }
   });
@@ -123,7 +128,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await writeFile(path.join(mocks, 'foundry.toml'), '[profile.default]\nsrc = "src"\nsolc_version = "0.8.28"\nevm_version = "prague"\n');
     const built = await execa('forge', ['build', '--offline'], { cwd: mocks, env: forgeEnv({}), extendEnv: false, reject: false });
     if (built.exitCode !== 0) throw new Error(String(built.stderr));
-    for (const name of ['PackedToken', 'PackedAssetVault', 'ComputedToken', 'ComputedAssetVault']) {
+    for (const name of ['MockToken', 'PackedToken', 'PackedAssetVault', 'ComputedToken', 'ComputedAssetVault', 'HonouringVault', 'AsyncExitVault', 'HonestClosedExitVault']) {
       const art = JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${name}.json`), 'utf8')) as { deployedBytecode: { object: string } };
       code[name] = art.deployedBytecode.object;
     }
@@ -132,6 +137,10 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000021', code.PackedAssetVault]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000002', code.ComputedToken]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000013', code.ComputedAssetVault]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000001', code.MockToken]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000031', code.HonouringVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000032', code.AsyncExitVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000033', code.HonestClosedExitVault]);
     await rpc('anvil_mine', ['0x1']);
   });
   afterAll(async () => {
@@ -155,9 +164,10 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
       rawPath: path.join(root, 'reports', `${address}.forge.json`),
     });
 
-  it('a vault over a packed-balance token (AUSD shape) passes all 26 through the packed fallback, exit 0', async () => {
+  it('a vault over a packed-balance token (AUSD shape) passes all 30 through the packed fallback, exit 0', async () => {
     const report = await check('0x5F00000000000000000000000000000000000021');
-    expect(report.summary).toEqual({ pass: 26, fail: 0, inconclusive: 0, notApplicable: 0 });
+    expect(report.summary).toEqual({ pass: 30, fail: 0, inconclusive: 0, notApplicable: 0 });
+    expect(report.toolchain.maxTestRejects).toBe(4096);
     expect(standardCheckExitCode(report.summary)).toBe(0);
     expect(report.toolchain.forgeVersion).toMatch(/^forge Version: /);
     expect(report.seed).toMatch(/^0x[0-9a-f]{64}$/);
@@ -166,8 +176,77 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
 
   it('a vault over a token without storage balances is inconclusive, exit 17', async () => {
     const report = await check('0x5f00000000000000000000000000000000000013');
-    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 26, notApplicable: 0 });
+    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 30, notApplicable: 0 });
     expect(report.results[0]!.reason).toMatch(/^the asset's balance slot cannot be written, test users cannot be funded \(non-standard token\): stdStorage /);
+    expect(standardCheckExitCode(report.summary)).toBe(17);
+  });
+});
+
+describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil fork (pinned cache present)', { timeout: 300_000 }, () => {
+  // Its own anvil and contracts, forked at block 1; the same cache gate as above.
+  let root: string;
+  let anvil: Anvil;
+  const rpc = async (method: string, params: unknown[]) => {
+    const res = await fetch(anvil.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+    return ((await res.json()) as { result?: unknown }).result;
+  };
+
+  beforeAll(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'specfirst-sf-'));
+    const mocks = path.join(root, 'mocks');
+    await mkdir(path.join(mocks, 'src'), { recursive: true });
+    await copyFile(path.join(here, 'fixtures/standards/mock-vaults.sol'), path.join(mocks, 'src/MockVaults.sol'));
+    await writeFile(path.join(mocks, 'foundry.toml'), '[profile.default]\nsrc = "src"\nsolc_version = "0.8.28"\nevm_version = "prague"\n');
+    const built = await execa('forge', ['build', '--offline'], { cwd: mocks, env: forgeEnv({}), extendEnv: false, reject: false });
+    if (built.exitCode !== 0) throw new Error(String(built.stderr));
+    const code = async (n: string) => (JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${n}.json`), 'utf8')) as { deployedBytecode: { object: string } }).deployedBytecode.object;
+    anvil = await startAnvil();
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000001', await code('MockToken')]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000031', await code('HonouringVault')]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000032', await code('AsyncExitVault')]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000033', await code('HonestClosedExitVault')]);
+    await rpc('anvil_mine', ['0x1']);
+  });
+  afterAll(async () => {
+    await anvil?.stop();
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  const check = (address: `0x${string}`) =>
+    runStandardCheck({
+      standard: 'erc4626',
+      address,
+      rpcUrl: anvil.url,
+      blockNumber: 1n,
+      runs: 8,
+      cacheDir: path.join(root, 'cache'),
+      pins: {
+        upstream: { repo: `file://${UPSTREAM}`, commit: ERC4626_UPSTREAM.commit },
+        forgeStd: { repo: `file://${FORGE_STD}`, commit: FORGE_STD_PIN.commit },
+      },
+    });
+  const byId = (r: Awaited<ReturnType<typeof check>>) => new Map(r.results.map((x) => [x.id, x]));
+
+  it('(b) a vault that honours its max values: all four sf- properties pass', async () => {
+    const r = byId(await check('0x5F00000000000000000000000000000000000031'));
+    for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored', 'sf-maxWithdraw-honored', 'sf-maxRedeem-honored']) expect([id, r.get(id)!.status]).toEqual([id, 'pass']);
+  });
+
+  it('(a) Upshift shape: sf-maxWithdraw-honored and sf-maxRedeem-honored fail with selector 0x75ed2e3e, exit 16', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000032');
+    const r = byId(report);
+    expect(r.get('sf-maxWithdraw-honored')!.status).toBe('fail');
+    expect(r.get('sf-maxWithdraw-honored')!.reason).toMatch(/reverted with selector 0x75ed2e3e while maxWithdraw is [1-9]\d*$/);
+    expect(r.get('sf-maxRedeem-honored')!.status).toBe('fail');
+    expect(standardCheckExitCode(report.summary)).toBe(16);
+  });
+
+  it('(c) exits disabled and max values of 0: no fail, the two exit properties are not pass', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000033');
+    const r = byId(report);
+    expect(report.summary.fail).toBe(0);
+    expect(r.get('sf-maxWithdraw-honored')!.status).toBe('inconclusive');
+    expect(r.get('sf-maxRedeem-honored')!.status).toBe('inconclusive');
     expect(standardCheckExitCode(report.summary)).toBe(17);
   });
 });

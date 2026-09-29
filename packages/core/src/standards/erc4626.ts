@@ -34,6 +34,10 @@ export const FORGE_STD_PIN: PinnedRepo & { tag: string } = {
 
 /** Path of the harness inside the cached Foundry workspace, also forge's --match-path. */
 export const ERC4626_HARNESS_PATH = 'test/SpecfirstERC4626.t.sol';
+/** Specfirst's own properties (MIT, not derived from upstream) inside the workspace. */
+export const ERC4626_SF_PROPERTIES_PATH = 'test/SpecfirstMaxHonored.t.sol';
+/** Test contracts a check runs: the upstream suite through the harness, and Specfirst's own properties. */
+export const ERC4626_CHECK_CONTRACTS = ['SpecfirstERC4626Test', 'SpecfirstMaxHonored'] as const;
 /** Positive control (BrokenVault under the same harness) inside the workspace. */
 export const ERC4626_CONTROL_PATH = 'test/SpecfirstERC4626Control.t.sol';
 export const ERC4626_CONTROL_VAULT_PATH = 'src/BrokenVault.sol';
@@ -42,7 +46,9 @@ export const ERC4626_CONTROL_VAULT_PATH = 'src/BrokenVault.sol';
  * Solidity sources shipped with this package under src/standards/erc4626. Resolved from the package
  * root so it works from src (vitest) and from dist (built CLI): both sit two levels below it.
  */
-export function erc4626SourceFile(name: 'SpecfirstERC4626.t.sol' | 'control/SpecfirstERC4626Control.t.sol' | 'control/BrokenVault.sol'): string {
+export function erc4626SourceFile(
+  name: 'SpecfirstERC4626.t.sol' | 'SpecfirstMaxHonored.t.sol' | 'control/SpecfirstERC4626Control.t.sol' | 'control/BrokenVault.sol',
+): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.join(here, '..', '..', 'src', 'standards', 'erc4626', name);
 }
@@ -76,3 +82,34 @@ export const ERC4626_PROPERTIES: readonly StandardProperty[] = [
   { test: 'test_RT_withdraw_mint', id: 'RT-withdraw-mint', description: 'mint(withdraw(a)) costs at least a' },
   { test: 'test_RT_withdraw_deposit', id: 'RT-withdraw-deposit', description: 'deposit(a) mints no more than the shares withdraw(a) burned' },
 ];
+
+/**
+ * Specfirst's own properties (SpecfirstMaxHonored.t.sol, MIT). Ids start with "sf-" so reports keep them apart
+ * from the upstream suite. Each checks one EIP-4626 MUST that the upstream suite cannot fail on, because it
+ * discards inputs whose vault call reverts.
+ */
+export const SPECFIRST_ERC4626_PROPERTIES: readonly StandardProperty[] = [
+  {
+    test: 'test_sf_maxDeposit_honored',
+    id: 'sf-maxDeposit-honored',
+    description: 'deposit does not revert for amounts up to maxDeposit (EIP-4626: maxDeposit is the most deposit accepts without reverting)',
+  },
+  {
+    test: 'test_sf_maxMint_honored',
+    id: 'sf-maxMint-honored',
+    description: 'mint does not revert for shares up to maxMint (EIP-4626: maxMint is the most mint accepts without reverting)',
+  },
+  {
+    test: 'test_sf_maxWithdraw_honored',
+    id: 'sf-maxWithdraw-honored',
+    description: 'withdraw does not revert for assets up to maxWithdraw (EIP-4626: maxWithdraw MUST return 0 when withdrawals are disabled)',
+  },
+  {
+    test: 'test_sf_maxRedeem_honored',
+    id: 'sf-maxRedeem-honored',
+    description: 'redeem does not revert for shares up to maxRedeem (EIP-4626: maxRedeem MUST return 0 when redemptions are disabled)',
+  },
+];
+
+/** Everything a check reports: the 26 upstream properties, then Specfirst's own. */
+export const ERC4626_CHECK_PROPERTIES: readonly StandardProperty[] = [...ERC4626_PROPERTIES, ...SPECFIRST_ERC4626_PROPERTIES];
