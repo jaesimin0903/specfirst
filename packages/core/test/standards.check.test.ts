@@ -1,13 +1,21 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { Address, Hex } from 'viem';
+import { fileURLToPath } from 'node:url';
+import { toFunctionSelector, type Address, type Hex } from 'viem';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  badChecksum,
+  ERC4626_FOUNDRY_TOML,
   ERC4626_PROPERTIES,
   ERC4626_UPSTREAM,
   ERC7535_NATIVE_ASSET,
   erc4626SourceFile,
+  FORGE_STD_PIN,
+  forgeEnv,
+  maskRpcUrl,
+  MAX_UINT256,
   NATIVE_ASSET_REASON,
   runStandardCheck,
   sha256Hex,
@@ -17,7 +25,9 @@ import {
   type StandardCheckClient,
   type StandardCheckReport,
 } from '../src/index.js';
+import { localRepo } from './helpers/gitRepo.js';
 
+const here = path.dirname(fileURLToPath(import.meta.url));
 const VAULT = '0x1B68626dCa36c7fE922fD2d55E4f631d962dE19c' as Address;
 const CODE: Hex = `0x6080604052a2646970667358221220${'11'.repeat(32)}64736f6c63430008180033`;
 
@@ -50,6 +60,8 @@ describe('runStandardCheck without forge', () => {
   it('ERC-7535 native-asset vault: every property not_applicable with the reason, forge never runs', async () => {
     dir = await mkdtemp(path.join(tmpdir(), 'specfirst-check-'));
     const recordPath = path.join(dir, 'r.json');
+    const rawPath = path.join(dir, 'r.forge.json');
+    await writeFile(rawPath, '{"stale":true}');
     const events: string[] = [];
     const report = await runStandardCheck({
       standard: 'erc4626',
@@ -60,8 +72,12 @@ describe('runStandardCheck without forge', () => {
       cacheDir: path.join(dir, 'cache'),
       forgeBin: '/nonexistent/forge',
       recordPath,
+      rawPath,
       onEvent: (e) => void events.push(e.type),
     });
+    // L7: forge did not run, so no raw file, and a stale one from an earlier run is gone.
+    expect(existsSync(rawPath)).toBe(false);
+    expect(report).toMatchObject({ seed: null, sender: null, toolchain: { forgeVersion: null, forgeStd: { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit } } });
     expect(events).toEqual(['check-start', 'check-identity', 'check-skip']);
     expect(report.blockNumber).toBe('5');
     expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 26 });
@@ -87,8 +103,168 @@ describe('runStandardCheck without forge', () => {
   it('rejects bad runs, negative delta and unknown standards', async () => {
     const base = { address: VAULT, rpcUrl: 'http://127.0.0.1:1', client: client({ code: CODE }) };
     await expect(runStandardCheck({ ...base, standard: 'erc4626', runs: 0 })).rejects.toThrow(/runs must be a positive integer/);
-    await expect(runStandardCheck({ ...base, standard: 'erc4626', delta: -1n })).rejects.toThrow(/delta must not be negative/);
+    await expect(runStandardCheck({ ...base, standard: 'erc4626', delta: -1n })).rejects.toThrow(/delta must be a uint256/);
+    await expect(runStandardCheck({ ...base, standard: 'erc4626', delta: MAX_UINT256 + 1n })).rejects.toThrow(/delta must be a uint256/);
+    await expect(runStandardCheck({ ...base, standard: 'erc4626', seed: MAX_UINT256 + 1n })).rejects.toThrow(/seed must be a uint256/);
     await expect(runStandardCheck({ ...base, standard: 'erc20' as 'erc4626' })).rejects.toThrow(/unknown standard/);
+  });
+
+  it('L5: rejects a mixed-case address with a wrong checksum; lowercase and correct checksums pass validation', async () => {
+    expect(badChecksum(VAULT)).toBe(false);
+    expect(badChecksum(VAULT.toLowerCase())).toBe(false);
+    expect(badChecksum(`0x${VAULT.slice(2).toUpperCase()}`)).toBe(false);
+    expect(badChecksum('0x1B68626dCa36c7fE922fD2d55E4f631d962dE19C')).toBe(true);
+    await expect(
+      runStandardCheck({ standard: 'erc4626', address: '0x1B68626dCa36c7fE922fD2d55E4f631d962dE19C', rpcUrl: 'http://127.0.0.1:1', client: client({ code: CODE }) }),
+    ).rejects.toThrow(/wrong EIP-55 checksum/);
+  });
+});
+
+describe('maskRpcUrl and forgeEnv', () => {
+  it('L6: masks the URL, its host and key-like parts in any letter case', () => {
+    const url = 'https://Monad.Example.org:8443/v2/SecretKey123?apikey=Abcdef9876&x=1';
+    const text = [
+      'error sending request for url (https://monad.example.org:8443/v2/secretkey123?apikey=abcdef9876&x=1)',
+      'could not instantiate forked environment with provider MONAD.EXAMPLE.ORG',
+      'token SECRETKEY123 and ABCDEF9876 alone',
+    ].join('\n');
+    const out = maskRpcUrl(text, url);
+    expect(out).not.toMatch(/example\.org|secretkey123|abcdef9876/i);
+    expect(out.split('\n')[1]).toBe('could not instantiate forked environment with provider <rpc>');
+    expect(maskRpcUrl('0x5F00000000000000000000000000000000000011 reverted', 'http://127.0.0.1:8545')).toBe('0x5F00000000000000000000000000000000000011 reverted');
+  });
+
+  it('M6: forge gets PATH and HOME but no FOUNDRY_* or ETH_RPC_URL from the caller', () => {
+    const env = forgeEnv({ SF_VAULT: '0x1' }, { PATH: '/bin', HOME: '/h', FOUNDRY_FUZZ_RUNS: '1', FOUNDRY_ETH_RPC_URL: 'x', ETH_RPC_URL: 'y', DAPP_X: 'z' });
+    expect(env).toEqual({ PATH: '/bin', HOME: '/h', SF_VAULT: '0x1' });
+  });
+});
+
+/**
+ * A stand-in forge: records argv and environment, writes a deposit-below-max event file like the harness,
+ * prints a log line with the RPC URL and then a forge JSON document built from a real fixture.
+ */
+async function fakeForge(dir: string, doc: object, opts: { noJson?: boolean } = {}): Promise<{ bin: string; record: string }> {
+  const bin = path.join(dir, 'forge');
+  const record = path.join(dir, 'record.json');
+  const depositSel = toFunctionSelector(Object.keys((Object.values(doc)[0] as { test_results: object }).test_results).find((k) => k.startsWith('test_deposit('))!);
+  const script = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('forge Version: 1.5.1-fake'); console.log('Commit SHA: 0'); process.exit(0); }
+fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args, env: process.env, cwd: process.cwd() }));
+if (${JSON.stringify(!!opts.noJson)}) { console.error('Error: could not instantiate forked environment with provider RPC.EXAMPLE.ORG'); process.exit(1); }
+if (process.env.SF_RUN_ID) fs.appendFileSync(path.join('sf-events', process.env.SF_RUN_ID + '.deposit-below-max.log'), ${JSON.stringify(`${depositSel}\n${depositSel}\n`)});
+console.log('2026-09-30T00:00:00Z ERROR sharedbackend: failed for url HTTPS://RPC.EXAMPLE.ORG/SECRETKEY123/');
+console.log(${JSON.stringify(JSON.stringify(doc))});
+`;
+  await writeFile(bin, script.replace('#!/usr/bin/env node', '#!/usr/bin/env node\n'));
+  await chmod(bin, 0o755);
+  return { bin, record };
+}
+
+describe('runStandardCheck with a stand-in forge (M6, M7, L3, L6, L7)', () => {
+  const RPC = 'https://rpc.example.org/secretKey123/';
+  let root: string | undefined;
+  const saved = { ...process.env };
+  afterEach(async () => {
+    process.env = { ...saved };
+    if (root) await rm(root, { recursive: true, force: true });
+    root = undefined;
+  });
+
+  async function setup(opts: { noJson?: boolean } = {}) {
+    root = await mkdtemp(path.join(tmpdir(), 'specfirst-fake-forge-'));
+    const up = await localRepo(root, 'up', [{ 'ERC4626.test.sol': 'x' }]);
+    const std = await localRepo(root, 'std', [{ 'Test.sol': 'y' }]);
+    const doc = JSON.parse(await readFile(path.join(here, 'fixtures/standards/morpho-143-109061472-runs32.json'), 'utf8')) as Record<string, { test_results: Record<string, { status: string; reason: string | null }> }>;
+    const tests = Object.values(doc)[0]!.test_results;
+    const key = Object.keys(tests).find((k) => k.startsWith('test_withdraw('))!;
+    tests[key] = { ...tests[key]!, status: 'Failure', reason: 'EVM error; database error: failed to get account: error sending request for url (https://RPC.example.org/SecretKey123/)' };
+    const forge = await fakeForge(root, doc, opts);
+    const reportDir = path.join(root, 'out');
+    const input = {
+      standard: 'erc4626' as const,
+      address: VAULT,
+      rpcUrl: RPC,
+      blockNumber: 42n,
+      runs: 3,
+      client: client({ code: CODE, asset: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603' }),
+      cacheDir: path.join(root, 'cache'),
+      forgeBin: forge.bin,
+      recordPath: path.join(reportDir, '42.json'),
+      rawPath: path.join(reportDir, '42.forge.json'),
+      pins: { upstream: { repo: up.url, commit: up.shas[0]! }, forgeStd: { repo: std.url, commit: std.shas[0]! } },
+    };
+    return { forge, input, reportDir };
+  }
+  const recorded = async (f: string) => JSON.parse(await readFile(f, 'utf8')) as { args: string[]; env: Record<string, string>; cwd: string };
+  const argAfter = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
+
+  it('passes and records a random seed and sender, the forge version, forge-std and foundry.toml hashes', async () => {
+    const { forge, input } = await setup();
+    const forgeEvents: Array<{ seed: string; sender: string; args: string[] }> = [];
+    const report = await runStandardCheck({ ...input, onEvent: (e) => void (e.type === 'check-forge' && forgeEvents.push(e)) });
+    const { args } = await recorded(forge.record);
+    expect(argAfter(args, '--fuzz-seed')).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(report.seed).toBe(argAfter(args, '--fuzz-seed'));
+    expect(report.sender).toBe(argAfter(args, '--sender'));
+    expect(BigInt(report.sender!)).toBeGreaterThan(0xffffn);
+    expect(argAfter(args, '--fork-url')).toBe(RPC);
+    expect(argAfter(args, '--fork-block-number')).toBe('42');
+    expect(report.toolchain).toEqual({ forgeVersion: 'forge Version: 1.5.1-fake', forgeStd: input.pins.forgeStd, foundryTomlSha256: sha256Hex(ERC4626_FOUNDRY_TOML) });
+    expect(forgeEvents[0]!.args).toContain('<rpc>');
+    expect(forgeEvents[0]!.args.join(' ')).not.toMatch(/secretkey123/i);
+
+    const second = await runStandardCheck(input);
+    expect(second.seed).not.toBe(report.seed);
+    expect(second.sender).not.toBe(report.sender);
+    const fixed = await runStandardCheck({ ...input, seed: 7n, sender: '0x00000000000000000000000000000000000abcde' });
+    expect(fixed.seed).toBe(`0x${'0'.repeat(63)}7`);
+    expect(argAfter((await recorded(forge.record)).args, '--sender')).toBe('0x00000000000000000000000000000000000abcde');
+  });
+
+  it('M6: forge sees a minimal environment without the caller FOUNDRY_* or ETH_RPC_URL', async () => {
+    const { forge, input } = await setup();
+    Object.assign(process.env, { FOUNDRY_FUZZ_RUNS: '1', FOUNDRY_PROFILE: 'evil', ETH_RPC_URL: 'http://evil', UNRELATED_SECRET: 's' });
+    await runStandardCheck(input);
+    const { env, cwd } = await recorded(forge.record);
+    const keys = Object.keys(env);
+    expect(keys.filter((k) => k.startsWith('FOUNDRY_'))).toEqual(['FOUNDRY_FUZZ_FAILURE_PERSIST_DIR']);
+    expect(keys).not.toContain('ETH_RPC_URL');
+    expect(keys).not.toContain('UNRELATED_SECRET');
+    expect(env).toMatchObject({ SF_VAULT: VAULT, SF_DELTA: '0' });
+    expect(env.SF_RUN_ID).toMatch(/^\d+-\d+-[0-9a-f]{8}$/);
+    expect(path.basename(cwd)).toMatch(/^erc4626-[0-9a-f]{12}-[0-9a-f]{12}$/);
+  });
+
+  it('L3 + L6 + L7: counts deposit reverts, masks the RPC everywhere, stores only the JSON document next to the report', async () => {
+    const { input, reportDir } = await setup();
+    const report = await runStandardCheck(input);
+    const byId = new Map(report.results.map((r) => [r.id, r]));
+    expect(byId.get('deposit')!.reason).toBe('deposit reverted below maxDeposit 2 times (inputs discarded, EIP-4626 says it must not revert)');
+    expect(byId.get('deposit')!.status).toBe('pass');
+    expect(byId.get('withdraw')!.status).toBe('inconclusive');
+    expect(byId.get('withdraw')!.reason).toContain('(<rpc>)');
+    const raw = await readFile(input.rawPath, 'utf8');
+    expect(raw.startsWith('{')).toBe(true);
+    expect(Object.keys(JSON.parse(raw))).toEqual(['test/LiveVault.t.sol:LiveVaultTest']);
+    expect(raw).not.toMatch(/secretkey123|rpc\.example\.org|sharedbackend/i);
+    expect(await readFile(input.recordPath, 'utf8')).not.toMatch(/secretkey123|rpc\.example\.org/i);
+    expect((await readdir(reportDir)).sort()).toEqual(['42.forge.json', '42.json']);
+    const { cwd } = await recorded(path.join(root!, 'record.json'));
+    expect(await readdir(path.join(cwd, 'sf-events'))).toEqual([]);
+    expect(standardCheckReportSchema.parse(JSON.parse(await readFile(input.recordPath, 'utf8')))).toEqual(report);
+  });
+
+  it('forge output without JSON: the error carries the masked stderr and nothing is written', async () => {
+    const { input } = await setup({ noJson: true });
+    const err = (await runStandardCheck(input).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(StandardCheckError);
+    expect(err.message).toMatch(/forge produced no test results \(exit 1\): Error: could not instantiate forked environment with provider <rpc>/);
+    expect(existsSync(input.recordPath)).toBe(false);
+    expect(existsSync(input.rawPath)).toBe(false);
   });
 });
 
@@ -103,6 +279,9 @@ describe('standardCheckReportSchema', () => {
     harnessSha256: `0x${'ab'.repeat(32)}`,
     runs: 8,
     delta: '0',
+    seed: `0x${'0a'.repeat(32)}`,
+    sender: '0x00000000000000000000000000000000000abcde',
+    toolchain: { forgeVersion: 'forge Version: 1.5.1-Homebrew', forgeStd: { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit }, foundryTomlSha256: `0x${'0b'.repeat(32)}` },
     identity: {
       codeHash: `0x${'01'.repeat(32)}`,
       metadataHash: null,

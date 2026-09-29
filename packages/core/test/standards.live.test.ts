@@ -26,7 +26,7 @@ describe.skipIf(!LIVE)('standards on Monad mainnet (SPECFIRST_LIVE=1)', { timeou
   it('Euler EVK vault resolves through its EIP-1967 beacon', async () => {
     const id = await identifyImplementation(client, '0x4735E245271496aEDEFF224b7dcB06fA7715cfB7', await client.getBlockNumber());
     expect(id.proxy).toEqual({ kind: 'eip1967-beacon', implementation: '0xef17750D3a162E28a302E266c474ff8989d60ECD', beacon: '0xba4Dd672062dE8FeeDb665DD4410658864483f1E' });
-    expect(id.implementationKeyKind).toEqual({ of: 'implementation', hash: 'metadataHash' });
+    expect(id.implementationKeyKind).toEqual({ of: 'implementation', hash: 'metadataHash+maskedCodeHash' });
   });
 
   it('positive control: BrokenVault over USDC fails previewDeposit and nothing else', async () => {

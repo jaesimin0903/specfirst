@@ -16,6 +16,8 @@ interface IDecimals {
 ///   2. amounts are bounded to min(maxDeposit, 1e6 whole tokens),
 ///   3. no synthetic yield is injected (setUpYield is never called).
 /// Users are EOAs above the precompile range and never the vault or its asset.
+/// A reverting maxDeposit or decimals is not held against every property: setUpVault falls back to the
+/// cap and decimals to 18, so a reverting maxDeposit fails test_maxDeposit ("MUST NOT revert") only.
 contract SpecfirstERC4626Test is ERC4626Test {
     uint256 internal _cap;
 
@@ -25,7 +27,15 @@ contract SpecfirstERC4626Test is ERC4626Test {
         _delta_ = vm.envOr("SF_DELTA", uint256(0));
         _vaultMayBeEmpty = false;
         _unlimitedAmount = false;
-        _cap = 1_000_000 * 10 ** uint256(IDecimals(_underlying_).decimals());
+        _cap = 1_000_000 * 10 ** uint256(_decimalsOr18(_underlying_));
+    }
+
+    function _decimalsOr18(address token) internal view returns (uint8) {
+        try IDecimals(token).decimals() returns (uint8 d) {
+            return d;
+        } catch {
+            return 18;
+        }
     }
 
     function setUpVault(Init memory init) public override {
@@ -33,13 +43,32 @@ contract SpecfirstERC4626Test is ERC4626Test {
             address user = init.user[i];
             vm.assume(_isEOA(user) && uint160(user) > 0xffff);
             vm.assume(user != _vault_ && user != _underlying_);
-            uint256 maxDep = IERC4626(_vault_).maxDeposit(user);
-            uint256 shares = bound(init.share[i], 0, maxDep < _cap ? maxDep : _cap);
+            uint256 maxDep = _cap;
+            bool maxKnown = false;
+            try IERC4626(_vault_).maxDeposit(user) returns (uint256 m) {
+                maxKnown = true;
+                if (m < maxDep) maxDep = m;
+            } catch {}
+            uint256 shares = bound(init.share[i], 0, maxDep);
             deal(_underlying_, user, shares);
             _approve(_underlying_, user, _vault_, shares);
             vm.prank(user);
-            try IERC4626(_vault_).deposit(shares, user) {} catch { vm.assume(false); }
+            try IERC4626(_vault_).deposit(shares, user) {} catch {
+                // EIP-4626: a deposit up to maxDeposit must not revert. Upstream discards the input; so do we,
+                // but the discard is recorded so a vault cannot hide the violation behind rejected inputs.
+                if (maxKnown && shares > 0) _recordDepositRevert();
+                vm.assume(false);
+            }
             deal(_underlying_, user, bound(init.asset[i], 0, _cap));
         }
+    }
+
+    /// Appends the running test's selector (msg.sig, since setUpVault is called internally by the test) to
+    /// sf-events/<SF_RUN_ID>.deposit-below-max.log. Files survive the per-run state reset, so the runner can
+    /// count discards per property. No-op when SF_RUN_ID is unset.
+    function _recordDepositRevert() internal {
+        string memory runId = vm.envOr("SF_RUN_ID", string(""));
+        if (bytes(runId).length == 0) return;
+        vm.writeLine(string.concat("sf-events/", runId, ".deposit-below-max.log"), vm.toString(abi.encodePacked(msg.sig)));
     }
 }

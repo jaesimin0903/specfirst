@@ -26,3 +26,16 @@ local-*.json
   local-closed.json    ClosedVault: maxDeposit 0 and deposit reverts, every input rejected (too many rejects).
   local-computed.json  ComputedAssetVault: the asset keeps no balances in storage, so forge-std deal fails.
   local-notvault.json  SF_VAULT is the plain token: asset() reverts, setUp fails.
+
+review/ (reproductions from the code review of the first version)
+  M.sol, Exp.t.sol   MockToken and Vault(mode) created in setUp, no fork. Modes: 1 maxDeposit reverts
+                     "rate limit exceeded", 2 maxDeposit reverts "paused", 3 maxRedeem reverts "HTTP error 503",
+                     4 deposit reverts for any non-zero amount while maxDeposit is unlimited.
+                     SetupRevertsRateLimit reverts "rate limit exceeded" in setUp. Exp.t.sol inherits the harness,
+                     so it carries the harness license header.
+  modes-old-harness.json  forge test --json -vv of Exp.t.sol with the first harness (maxDeposit not wrapped).
+                     Used to show that vault reverts which merely read like RPC trouble stay fail.
+  modes-new-harness.json  The same with the current harness, --fuzz-runs 16 --fuzz-seed 0x1: a reverting
+                     maxDeposit fails test_maxDeposit only; mode 4 rejects every input.
+  setup-fork429.json setUp against a stub RPC answering HTTP 429 for the vault: forge prints an ANSI log line,
+                     then setUp() Failure "EVM error; database error: ... HTTP error 429". Must be inconclusive.

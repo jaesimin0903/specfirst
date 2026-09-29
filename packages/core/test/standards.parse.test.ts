@@ -2,7 +2,17 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ERC4626_PROPERTIES, parseStandardForgeJson, summarize, type StandardPropertyResult } from '../src/index.js';
+import { toFunctionSelector } from 'viem';
+import {
+  depositRevertCounts,
+  ERC4626_PROPERTIES,
+  parseStandardForgeJson,
+  STANDARD_CHECK_FAILED_EXIT_CODE,
+  STANDARD_CHECK_INCOMPLETE_EXIT_CODE,
+  standardCheckExitCode,
+  summarize,
+  type StandardPropertyResult,
+} from '../src/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fx = (name: string) => readFile(path.join(here, 'fixtures/standards', name), 'utf8');
@@ -137,5 +147,111 @@ describe('parseStandardForgeJson shapes', () => {
   it('output without forge JSON (compile or fork error) returns null', () => {
     expect(parseStandardForgeJson('Error: Compiler run failed', [one])).toBeNull();
     expect(parseStandardForgeJson('', [one])).toBeNull();
+  });
+});
+
+/** One suite of a multi-suite forge document, as its own document. */
+async function suites(name: string): Promise<Map<string, string>> {
+  const text = await fx(name);
+  const doc = JSON.parse(text.trim().split('\n').filter((l) => l.startsWith('{')).pop()!) as Record<string, unknown>;
+  return new Map(Object.entries(doc).map(([k, v]) => [k.split(':')[1]!, JSON.stringify({ [k]: v })]));
+}
+const statuses = (rs: StandardPropertyResult[]) => rs.filter((r) => r.status !== 'pass').map((r) => [r.id, r.status, r.reason]);
+
+describe('review reproductions (forge 1.5.1, review/ fixtures)', () => {
+  it('H1: a setUp that fails on the fork RPC (HTTP 429) is inconclusive for every property, not not_applicable', async () => {
+    const text = await fx('review/setup-fork429.json');
+    expect(text.startsWith('\u001b[2m')).toBe(true);
+    const results = parseStandardForgeJson(text, ERC4626_PROPERTIES)!;
+    expect(summarize(results)).toEqual({ pass: 0, fail: 0, inconclusive: 26, notApplicable: 0 });
+    expect(results[0]!.reason).toMatch(/^fork RPC error, rerun or pass another --rpc: setUp failed: EVM error; database error: failed to get account for 0x5F0+11: Max retries exceeded HTTP error 429/);
+  });
+
+  it('H2: vault reverts that look like RPC trouble ("rate limit exceeded", "HTTP error 503") are fail, not inconclusive', async () => {
+    const old = await suites('review/modes-old-harness.json');
+    const rate = parseStandardForgeJson(old.get('ModeRateLimit')!, ERC4626_PROPERTIES)!;
+    expect(summarize(rate)).toEqual({ pass: 0, fail: 26, inconclusive: 0, notApplicable: 0 });
+    expect(rate.every((r) => r.reason === 'rate limit exceeded')).toBe(true);
+    const http = parseStandardForgeJson(old.get('ModeMaxRedeemHttp')!, ERC4626_PROPERTIES)!;
+    expect(statuses(http)).toEqual([['maxRedeem', 'fail', 'HTTP error 503']]);
+    const setup = parseStandardForgeJson(old.get('SetupRevertsRateLimit')!, ERC4626_PROPERTIES)!;
+    expect(summarize(setup)).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 26 });
+    expect(setup[0]!.reason).toBe('setUp failed: rate limit exceeded');
+  });
+
+  it('M1: with the new harness a reverting maxDeposit fails test_maxDeposit only', async () => {
+    const now = await suites('review/modes-new-harness.json');
+    expect(statuses(parseStandardForgeJson(now.get('ModePaused')!, ERC4626_PROPERTIES)!)).toEqual([['maxDeposit', 'fail', 'paused']]);
+    expect(statuses(parseStandardForgeJson(now.get('ModeRateLimit')!, ERC4626_PROPERTIES)!)).toEqual([['maxDeposit', 'fail', 'rate limit exceeded']]);
+    expect(statuses(parseStandardForgeJson(now.get('ModeMaxRedeemHttp')!, ERC4626_PROPERTIES)!)).toEqual([['maxRedeem', 'fail', 'HTTP error 503']]);
+  });
+
+  it('L3: deposits reverting below maxDeposit are counted per property and noted in the reason, status unchanged', async () => {
+    const now = await suites('review/modes-new-harness.json');
+    const text = now.get('ModeDepositRevertsBelowMax')!;
+    const keys = Object.keys((Object.values(JSON.parse(text))[0] as { test_results: object }).test_results);
+    const sel = (test: string) => toFunctionSelector(keys.find((k) => k.startsWith(`${test}(`))!);
+    const events = [...Array(3).fill(sel('test_deposit')), sel('test_RT_mint_redeem'), '0xdeadbeef', ''].join('\n');
+    expect(depositRevertCounts(events, keys)).toEqual(new Map([['test_deposit', 3], ['test_RT_mint_redeem', 1]]));
+
+    const results = parseStandardForgeJson(text, ERC4626_PROPERTIES, { depositRevertEvents: events })!;
+    expect(summarize(results)).toEqual({ pass: 0, fail: 0, inconclusive: 26, notApplicable: 0 });
+    const r = byId(results);
+    expect(r.get('deposit')!.reason).toBe(
+      '`vm.assume` rejected too many inputs (65536 allowed); deposit reverted below maxDeposit 3 times (inputs discarded, EIP-4626 says it must not revert)',
+    );
+    expect(r.get('RT-mint-redeem')!.reason).toMatch(/below maxDeposit 1 times/);
+    expect(r.get('asset')!.reason).toBe('`vm.assume` rejected too many inputs (65536 allowed)');
+  });
+});
+
+describe('H2: forge messages are matched only as forge writes them', () => {
+  const one = { test: 'test_previewDeposit', id: 'previewDeposit', description: 'd' };
+  const status = (reason: string) =>
+    parseStandardForgeJson(
+      JSON.stringify({ 's:S': { test_results: { 'test_previewDeposit()': { status: 'Failure', reason, counterexample: null } } } }),
+      [one],
+    )![0]!;
+
+  it('contract revert strings that merely contain the words stay fail', () => {
+    for (const reason of [
+      'rate limit exceeded',
+      'HTTP error 503',
+      'Max retries exceeded',
+      'request limit reached',
+      'error sending request',
+      'could not instantiate forked environment',
+      'x `vm.assume` rejected too many inputs (65536 allowed)',
+      'No storage use detected for target.',
+      'Slot(s) not found.',
+      'failed: EVM error; database error: x',
+    ]) {
+      expect([reason, status(reason).status]).toEqual([reason, 'fail']);
+    }
+  });
+
+  it('the exact forge and forge-std prefixes are inconclusive', () => {
+    expect(status('`vm.assume` rejected too many inputs (65536 allowed)').status).toBe('inconclusive');
+    expect(status('stdStorage find(StdStorage): Slot(s) not found.').status).toBe('inconclusive');
+    expect(status('EVM error; database error: failed to get storage for 0x1').status).toBe('inconclusive');
+  });
+
+  it('policy: a contract that imitates a forge prefix only reaches "not verified" (exit 17), never pass', () => {
+    const r = status('EVM error; database error: imitated by the vault');
+    expect(r.status).toBe('inconclusive');
+    expect(standardCheckExitCode(summarize([{ status: 'pass' }, r]))).toBe(STANDARD_CHECK_INCOMPLETE_EXIT_CODE);
+  });
+});
+
+describe('M2: standardCheckExitCode', () => {
+  const s = (pass: number, fail: number, inconclusive: number, notApplicable: number) => ({ pass, fail, inconclusive, notApplicable });
+  it('fail wins, then incomplete, then 0', () => {
+    expect(standardCheckExitCode(s(25, 1, 0, 0))).toBe(STANDARD_CHECK_FAILED_EXIT_CODE);
+    expect(standardCheckExitCode(s(0, 1, 25, 0))).toBe(16);
+    expect(standardCheckExitCode(s(25, 0, 1, 0))).toBe(17);
+    expect(standardCheckExitCode(s(25, 0, 0, 1))).toBe(17);
+    expect(standardCheckExitCode(s(0, 0, 0, 26))).toBe(17);
+    expect(standardCheckExitCode(s(0, 0, 0, 0))).toBe(17);
+    expect(standardCheckExitCode(s(26, 0, 0, 0))).toBe(0);
   });
 });
