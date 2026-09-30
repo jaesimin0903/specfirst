@@ -1,0 +1,31 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`renderCheckBadgeSvg > stable output for each state > compliant 1`] = `
+"<svg xmlns="http://www.w3.org/2000/svg" width="281" height="20" role="img" aria-label="specfirst erc-4626: compliant, 30/30 pass">
+  <title>specfirst erc-4626: compliant, 30/30 pass</title>
+  <clipPath id="r"><rect width="281" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="131" height="20" fill="#13202a"/>
+    <rect x="131" width="150" height="20" fill="#1e5aa8"/>
+  </g>
+  <g text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="65.5" y="14" fill="#ffffff">specfirst erc-4626</text>
+    <text x="206" y="14" fill="#ffffff">compliant, 30/30 pass</text>
+  </g>
+</svg>"
+`;
+
+exports[`renderCheckBadgeSvg > stable output for each state > not-attested 1`] = `
+"<svg xmlns="http://www.w3.org/2000/svg" width="224" height="20" role="img" aria-label="specfirst erc-4626: not attested">
+  <title>specfirst erc-4626: not attested</title>
+  <clipPath id="r"><rect width="224" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="131" height="20" fill="#13202a"/>
+    <rect x="131" width="93" height="20" fill="#e6eae9"/>
+  </g>
+  <g text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="65.5" y="14" fill="#ffffff">specfirst erc-4626</text>
+    <text x="177.5" y="14" fill="#13202a">not attested</text>
+  </g>
+</svg>"
+`;
