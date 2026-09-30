@@ -121,10 +121,13 @@ describe('transaction-sending commands refuse monad-mainnet', () => {
     expect(revoke.err).toMatch(refused);
   });
 
-  it('attest-registry deploy exits 12; cert attest and cert revoke-attestation exit 14', async () => {
+  it('attest-registry deploy and set-issuer exit 12; cert attest and cert revoke-attestation exit 14', async () => {
     const dep = await cli(registerAttestRegistryCommand, 'attest-registry', 'deploy', '--network', 'monad-mainnet');
     expect(dep).toMatchObject({ code: 12 });
     expect(dep.err).toMatch(refused);
+    const set = await cli(registerAttestRegistryCommand, 'attest-registry', 'set-issuer', TARGET, '--network', 'monad-mainnet', '--registry-attest', TARGET);
+    expect(set).toMatchObject({ code: 12 });
+    expect(set.err).toMatch(refused);
     await copyFile(path.join(SAMPLE_DIR, '..', '..', 'packages/core/test/fixtures/attest/morpho-143-109061472.json'), path.join(dir, 'report.json'));
     const att = await cli(registerCertCommand, 'cert', 'attest', 'report.json', '--network', 'monad-mainnet', '--registry-attest', TARGET);
     expect(att).toMatchObject({ code: 14 });

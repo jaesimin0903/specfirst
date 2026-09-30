@@ -88,6 +88,14 @@ function isKey(v: string | undefined): v is Hex {
   return !!v && /^0x[0-9a-fA-F]{64}$/.test(v);
 }
 
+/** Private key from env when set (validated), else undefined. No anvil fallback. */
+export function optionalKey(envName: string, env: NodeJS.ProcessEnv = process.env): Hex | undefined {
+  const v = env[envName];
+  if (!v) return undefined;
+  if (!isKey(v)) throw new ConfigError(`${envName} is not a 0x-prefixed 32-byte hex private key`);
+  return v;
+}
+
 /** Private key from env. On anvil an unset key falls back to anvil account 0 with a notice. */
 export function resolveKey(net: ResolvedNetwork, envName: string, env: NodeJS.ProcessEnv = process.env): Hex {
   const v = env[envName];
