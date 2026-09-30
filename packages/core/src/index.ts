@@ -308,6 +308,7 @@ export {
   skipReasonOf,
   RESTRICTED_ASSET_PREFIX,
   RESTRICTED_ASSET_NOTE,
+  maxZeroNote,
   implementationIdentitySchema,
   STANDARD_CHECK_SCHEMA_VERSION,
   STANDARD_CHECK_FAILED_EXIT_CODE,

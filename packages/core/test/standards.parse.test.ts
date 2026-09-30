@@ -14,6 +14,7 @@ import {
   standardCheckExitCode,
   skipReasonOf,
   RESTRICTED_ASSET_NOTE,
+  maxZeroNote,
   summarize,
   type StandardPropertyResult,
 } from '../src/index.js';
@@ -401,5 +402,46 @@ describe('assets that test users cannot move (transfer probe in both setUps)', (
     const other = parseStandardForgeJson(doc('x specfirst: asset transfers are restricted for test users (selector 0x12345678)'), [ERC4626_PROPERTIES[0]!])!;
     expect(other[0]).toMatchObject({ status: 'not_applicable', reason: 'setUp failed: x specfirst: asset transfers are restricted for test users (selector 0x12345678)' });
     expect(skipReasonOf(other)).toBe('setup-reverted');
+  });
+});
+
+describe('sf- properties whose max is 0 for every test user (max-zero events)', () => {
+  /** max-zero event lines: `n` copies of the selector of each named sf- test, as the sf- suite writes them. */
+  const eventsFor = (text: string, tests: string[], n: number) => {
+    const keys = Object.values(JSON.parse(text) as Record<string, { test_results: object }>).flatMap((x) => Object.keys(x.test_results));
+    return tests.flatMap((t) => Array(n).fill(toFunctionSelector(keys.find((k) => k.startsWith(`${t}(`))!))).join('\n');
+  };
+  const sfTests = ['test_sf_maxDeposit_honored', 'test_sf_maxMint_honored', 'test_sf_maxWithdraw_honored', 'test_sf_maxRedeem_honored'];
+
+  it('ZeroMaxVault (Morpho Vault V2 shape): every discard was a max of 0, so the four sf- properties are not_applicable', async () => {
+    const text = await fx('local-zero-max.json');
+    const results = parseStandardForgeJson(text, ERC4626_CHECK_PROPERTIES, { maxZeroEvents: eventsFor(text, sfTests, 4096) })!;
+    expect(summarize(results)).toEqual({ pass: 26, fail: 0, inconclusive: 0, notApplicable: 4 });
+    expect(results.slice(26).map((r) => [r.id, r.reason])).toEqual([
+      ['sf-maxDeposit-honored', maxZeroNote('maxDeposit')],
+      ['sf-maxMint-honored', maxZeroNote('maxMint')],
+      ['sf-maxWithdraw-honored', maxZeroNote('maxWithdraw')],
+      ['sf-maxRedeem-honored', maxZeroNote('maxRedeem')],
+    ]);
+    expect(maxZeroNote('maxWithdraw')).toBe('maxWithdraw returned 0 for every test user; there is no max value to honor (EIP-4626 allows underestimating)');
+  });
+
+  it('HonestClosedExitVault: withdraw and redeem max 0, so only those two become not_applicable', async () => {
+    const text = await fx('local-sf-honest-closed.json');
+    const results = parseStandardForgeJson(text, ERC4626_CHECK_PROPERTIES, { maxZeroEvents: eventsFor(text, sfTests.slice(2), 4096) })!;
+    expect(summarize(results)).toEqual({ pass: 16, fail: 0, inconclusive: 12, notApplicable: 2 });
+    expect(results.filter((r) => r.status === 'not_applicable').map((r) => r.id)).toEqual(['sf-maxWithdraw-honored', 'sf-maxRedeem-honored']);
+  });
+
+  it('fewer max-zero discards than the reject limit (some inputs were discarded for other reasons) stays inconclusive', async () => {
+    const text = await fx('local-zero-max.json');
+    const results = parseStandardForgeJson(text, ERC4626_CHECK_PROPERTIES, { maxZeroEvents: eventsFor(text, sfTests, 4095) })!;
+    expect(results.slice(26).every((r) => r.status === 'inconclusive')).toBe(true);
+  });
+
+  it('max-zero events never touch upstream properties or passing sf- properties', async () => {
+    const text = await fx('local-sf-honouring.json');
+    const results = parseStandardForgeJson(text, ERC4626_CHECK_PROPERTIES, { maxZeroEvents: eventsFor(text, sfTests, 4096) })!;
+    expect(summarize(results)).toEqual({ pass: 30, fail: 0, inconclusive: 0, notApplicable: 0 });
   });
 });

@@ -248,8 +248,8 @@ function selectorsOf(keys: Iterable<string>): Map<string, string> {
 }
 
 /**
- * Counts, per test, the lines of sf-events/<run>.deposit-below-max.log: one selector per discarded input
- * whose deposit reverted at or below maxDeposit (see the harness). Unknown selectors are ignored.
+ * Counts, per test, the lines of an sf-events file (one selector per line): deposit-below-max.log from the
+ * harness, max-zero.log from the sf- suite. Unknown selectors are ignored.
  */
 export function depositRevertCounts(events: string, testKeys: Iterable<string>): Map<string, number> {
   const bySelector = selectorsOf(testKeys);
@@ -298,6 +298,25 @@ export function extractForgeDoc(text: string): Record<string, unknown> | null {
 export interface ParseStandardOptions {
   /** Content of the harness's deposit-below-max event file for this run. */
   depositRevertEvents?: string;
+  /** Content of the sf- suite's max-zero event file for this run: one selector per input discarded for a max of 0. */
+  maxZeroEvents?: string;
+}
+
+/** Reason of an sf- property whose every discarded input had a max of 0. */
+export function maxZeroNote(maxName: string): string {
+  return `${maxName} returned 0 for every test user; there is no max value to honor (EIP-4626 allows underestimating)`;
+}
+
+/**
+ * An sf- property that ran out of inputs only because its max was 0 every time is not applicable: the
+ * vault never advertised anything to honor. The sf- suite writes one event per such discard; when there
+ * are at least as many as forge's reject limit, every rejected input was one of them.
+ */
+function withMaxZero(r: StandardPropertyResult, maxZero: number | undefined): StandardPropertyResult {
+  const m = /^test_sf_(max(?:Deposit|Mint|Withdraw|Redeem))_honored$/.exec(r.test);
+  const limit = /^`vm\.assume` rejected too many inputs \((\d+) allowed\)$/.exec(r.reason ?? '');
+  if (!m || !limit || r.status !== 'inconclusive' || !maxZero || maxZero < Number(limit[1])) return r;
+  return { id: r.id, test: r.test, description: r.description, status: 'not_applicable', ...(r.runs !== undefined ? { runs: r.runs } : {}), reason: maxZeroNote(m[1]!) };
 }
 
 /**
@@ -328,6 +347,7 @@ export function parseStandardForgeJson(
   const known = new Set(properties.map((p) => p.test));
   const extra = [...byTest.keys()].filter((t) => !known.has(t)).map((t) => ({ test: t, id: t, description: 'not in the property table' }));
   const deposits = opts.depositRevertEvents ? depositRevertCounts(opts.depositRevertEvents, keys) : new Map<string, number>();
+  const maxZero = opts.maxZeroEvents ? depositRevertCounts(opts.maxZeroEvents, keys) : new Map<string, number>();
   return [...properties, ...extra].map((p): StandardPropertyResult => {
     const base = { id: p.id, test: p.test, description: p.description };
     const r = byTest.get(p.test);
@@ -342,7 +362,7 @@ export function parseStandardForgeJson(
       return { ...base, status: 'not_applicable', reason: `setUp failed: ${setupFailure}` };
     }
     if (!r) return { ...base, status: 'inconclusive', reason: 'no result in forge output' };
-    return withDepositNote(classify(p, r), deposits.get(p.test));
+    return withMaxZero(withDepositNote(classify(p, r), deposits.get(p.test)), maxZero.get(p.test));
   });
 }
 

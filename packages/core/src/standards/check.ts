@@ -217,6 +217,7 @@ async function runForgeSuite(i: {
   const persist = await mkdtemp(path.join(tmpdir(), 'specfirst-standard-'));
   const runId = `${Date.now()}-${process.pid}-${randomBytes(4).toString('hex')}`;
   const eventsFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.deposit-below-max.log`);
+  const maxZeroFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.max-zero.log`);
   const args = [
     'test',
     ...i.select,
@@ -259,7 +260,8 @@ async function runForgeSuite(i: {
     const stdout = mask(String(proc.stdout ?? ''));
     const doc = extractForgeDoc(stdout);
     const events = await readFile(eventsFile, 'utf8').catch(() => '');
-    const results = doc ? parseStandardForgeJson(JSON.stringify(doc), i.properties, { depositRevertEvents: events }) : null;
+    const maxZeroEvents = await readFile(maxZeroFile, 'utf8').catch(() => '');
+    const results = doc ? parseStandardForgeJson(JSON.stringify(doc), i.properties, { depositRevertEvents: events, maxZeroEvents }) : null;
     if (!doc || !results) {
       const out = mask([String(proc.stderr ?? '').trim(), stdout.trim()].filter(Boolean).join('\n'));
       throw new StandardCheckError(`forge produced no test results (exit ${proc.exitCode}): ${out.split('\n').slice(0, 12).join('\n') || 'no output'}`);
@@ -268,6 +270,7 @@ async function runForgeSuite(i: {
   } finally {
     await rm(persist, { recursive: true, force: true });
     await rm(eventsFile, { force: true });
+    await rm(maxZeroFile, { force: true });
   }
 }
 

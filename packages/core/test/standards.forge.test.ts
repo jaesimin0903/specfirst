@@ -20,6 +20,7 @@ import {
   SPECFIRST_ERC4626_PROPERTIES,
   standardCheckExitCode,
   RESTRICTED_ASSET_NOTE,
+  maxZeroNote,
   summarize,
   type StandardWorkspace,
 } from '../src/index.js';
@@ -247,11 +248,12 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     expect(report.summary).toEqual({ pass: 30, fail: 0, inconclusive: 0, notApplicable: 0 });
   });
 
-  it('max values of 0 for everyone (Morpho Vault V2 shape): the 26 upstream properties run and pass, sf- inconclusive, exit 17', async () => {
+  it('max values of 0 for everyone (Morpho Vault V2 shape): the 26 upstream properties pass, the sf- ones are not_applicable, exit 17', async () => {
     const report = await check('0x5F00000000000000000000000000000000000051');
-    expect(report.summary).toEqual({ pass: 26, fail: 0, inconclusive: 4, notApplicable: 0 });
+    expect(report.summary).toEqual({ pass: 26, fail: 0, inconclusive: 0, notApplicable: 4 });
     expect(report.results.slice(0, 26).every((r) => r.status === 'pass')).toBe(true);
-    expect(report.results.slice(26).every((r) => r.status === 'inconclusive' && !/deposit reverted below maxDeposit/.test(r.reason!))).toBe(true);
+    expect(report.results.slice(26).map((r) => r.reason)).toEqual(['maxDeposit', 'maxMint', 'maxWithdraw', 'maxRedeem'].map(maxZeroNote));
+    expect(report.skipReason).toBeNull();
     expect(standardCheckExitCode(report.summary)).toBe(17);
   });
 
@@ -315,12 +317,14 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
   });
 
   const sf = async (vault: string) => {
+    const runId = `sf-${vault.slice(-4)}`;
     const p = await execa(
       'forge',
       ['test', '--match-contract', '^SpecfirstMaxHonored$', '--fork-url', anvil.url, '--fork-block-number', '1', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '-j', '2', '--json', '-vv'],
-      { cwd: ws.dir, env: forgeEnv({ SF_VAULT: vault }), extendEnv: false, reject: false, maxBuffer: 256 * 1024 * 1024 },
+      { cwd: ws.dir, env: forgeEnv({ SF_VAULT: vault, SF_RUN_ID: runId }), extendEnv: false, reject: false, maxBuffer: 256 * 1024 * 1024 },
     );
-    const results = parseStandardForgeJson(String(p.stdout), SPECFIRST_ERC4626_PROPERTIES);
+    const maxZeroEvents = await readFile(path.join(ws.dir, EVENTS_DIR, `${runId}.max-zero.log`), 'utf8').catch(() => '');
+    const results = parseStandardForgeJson(String(p.stdout), SPECFIRST_ERC4626_PROPERTIES, { maxZeroEvents });
     if (!results) throw new Error(String(p.stderr));
     return new Map(results.map((x) => [x.id, x]));
   };
@@ -344,11 +348,12 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     expect(r.get('sf-maxDeposit-honored')!.status).toBe('pass');
   });
 
-  it('(c) exits disabled and max values of 0: the exit properties are inconclusive, nothing fails', async () => {
+  it('(c) exits disabled and max values of 0: the exit properties are not_applicable, nothing fails', async () => {
     const r = await sf('0x5f00000000000000000000000000000000000033');
     expect([...r.values()].filter((x) => x.status === 'fail')).toEqual([]);
-    expect(r.get('sf-maxWithdraw-honored')!.status).toBe('inconclusive');
-    expect(r.get('sf-maxRedeem-honored')!.status).toBe('inconclusive');
+    expect(r.get('sf-maxWithdraw-honored')).toMatchObject({ status: 'not_applicable', reason: maxZeroNote('maxWithdraw') });
+    expect(r.get('sf-maxRedeem-honored')).toMatchObject({ status: 'not_applicable', reason: maxZeroNote('maxRedeem') });
+    expect(r.get('sf-maxDeposit-honored')!.status).toBe('pass');
   });
 
 
