@@ -5,9 +5,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/sync-abi.mjs && next build",
-    "dev": "node scripts/sync-abi.mjs && next dev",
+    "build": "node scripts/sync-abi.mjs && node scripts/build-board.mjs --if-missing && next build",
+    "dev": "node scripts/sync-abi.mjs && node scripts/build-board.mjs --if-missing && next dev",
     "start": "next start",
+    "board:build": "node scripts/build-board.mjs",
+    "board:meta": "node scripts/build-vault-meta.mjs",
     "test": "node scripts/sync-abi.mjs && vitest run",
     "lint": "node scripts/sync-abi.mjs && tsc --noEmit"
   },
