@@ -79,3 +79,21 @@ contract PackedToken {
 contract NoDecimalsToken {
     function balanceOf(address) external pure returns (uint256) { return 0; }
 }
+
+/// Storage balances like MockToken, but transfer and transferFrom always revert Unauthorized().
+contract LockedToken {
+    error Unauthorized();
+    mapping(address => uint256) public balanceOf;
+    uint256 public totalSupply;
+    function decimals() external pure returns (uint8) { return 6; }
+    function transfer(address, uint256) external pure returns (bool) { revert Unauthorized(); }
+    function transferFrom(address, address, uint256) external pure returns (bool) { revert Unauthorized(); }
+}
+
+/// transfer answers false instead of reverting.
+contract FalseToken {
+    mapping(address => uint256) public balanceOf;
+    uint256 public totalSupply;
+    function decimals() external pure returns (uint8) { return 6; }
+    function transfer(address, uint256) external pure returns (bool) { return false; }
+}

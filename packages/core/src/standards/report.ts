@@ -4,10 +4,10 @@ import { callsOf, extractJson, formatForgeCall, type ForgeTestResult } from '../
 import type { StandardProperty } from './erc4626.js';
 
 /**
- * 2 adds `vaultKind`. Version 1 reports (without it) still validate, so reports written before the change,
- * and attestations built from them, stay readable.
+ * 2 adds `vaultKind`, 3 adds `skipReason`. Reports of earlier versions (without those fields) still
+ * validate, so reports written before a change, and attestations built from them, stay readable.
  */
-export const STANDARD_CHECK_SCHEMA_VERSION = 2;
+export const STANDARD_CHECK_SCHEMA_VERSION = 3;
 /** CLI exit code when any standard property fails on the checked contract. */
 export const STANDARD_CHECK_FAILED_EXIT_CODE = 16;
 /**
@@ -33,6 +33,19 @@ export const standardNameSchema = z.enum(STANDARDS);
  */
 export const vaultKindSchema = z.enum(['erc4626', 'erc7535', 'erc7575']);
 export type VaultKind = z.infer<typeof vaultKindSchema>;
+
+/**
+ * Why no property was exercised, when that is the case (every result not_applicable); null otherwise.
+ * native-asset and separate-share-token come from the pre-checks (forge did not run);
+ * asset-transfer-restricted from the harness's transfer probe; setup-reverted from any other setUp revert.
+ */
+export const skipReasonSchema = z.enum(['native-asset', 'separate-share-token', 'asset-transfer-restricted', 'setup-reverted']);
+export type SkipReason = z.infer<typeof skipReasonSchema>;
+
+/** The fixed prefix both suites' setUp revert with when test users cannot move the asset. */
+export const RESTRICTED_ASSET_PREFIX = 'specfirst: asset transfers are restricted for test users';
+/** Reason text of every property of a vault whose asset restricts transfers. */
+export const RESTRICTED_ASSET_NOTE = 'asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances';
 export type StandardName = z.infer<typeof standardNameSchema>;
 
 /**
@@ -108,7 +121,7 @@ export type StandardCheckSummary = z.infer<typeof standardCheckSummarySchema>;
  */
 export const standardCheckReportSchema = z
   .object({
-    schemaVersion: z.union([z.literal(1), z.literal(STANDARD_CHECK_SCHEMA_VERSION)]),
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(STANDARD_CHECK_SCHEMA_VERSION)]),
     chainId: z.number().int().positive(),
     address,
     /** Fork block, decimal without leading zeros. */
@@ -116,6 +129,8 @@ export const standardCheckReportSchema = z
     standard: standardNameSchema,
     /** Required from schemaVersion 2 on; absent in version 1 reports. */
     vaultKind: vaultKindSchema.optional(),
+    /** Required (possibly null) from schemaVersion 3 on; absent before. */
+    skipReason: skipReasonSchema.nullable().optional(),
     upstream: z.object({ repo: z.string().url(), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
     harnessSha256: hex32,
     /** sha256 of Specfirst's own properties (SpecfirstMaxHonored.t.sol). */
@@ -150,6 +165,12 @@ export const standardCheckReportSchema = z
     }
     if (r.schemaVersion === 1 && r.vaultKind !== undefined) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['vaultKind'], message: 'vaultKind does not exist in schemaVersion 1' });
+    }
+    if (r.schemaVersion >= 3 && r.skipReason === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['skipReason'], message: 'skipReason (null when properties ran) is required from schemaVersion 3 on' });
+    }
+    if (r.schemaVersion < 3 && r.skipReason !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['skipReason'], message: `skipReason does not exist in schemaVersion ${r.schemaVersion}` });
     }
     const expected = summarize(r.results);
     for (const k of Object.keys(expected) as Array<keyof StandardCheckSummary>) {
@@ -229,8 +250,8 @@ function selectorsOf(keys: Iterable<string>): Map<string, string> {
 }
 
 /**
- * Counts, per test, the lines of sf-events/<run>.deposit-below-max.log: one selector per discarded input
- * whose deposit reverted at or below maxDeposit (see the harness). Unknown selectors are ignored.
+ * Counts, per test, the lines of an sf-events file (one selector per line): deposit-below-max.log from the
+ * harness, max-zero.log from the sf- suite. Unknown selectors are ignored.
  */
 export function depositRevertCounts(events: string, testKeys: Iterable<string>): Map<string, number> {
   const bySelector = selectorsOf(testKeys);
@@ -279,6 +300,25 @@ export function extractForgeDoc(text: string): Record<string, unknown> | null {
 export interface ParseStandardOptions {
   /** Content of the harness's deposit-below-max event file for this run. */
   depositRevertEvents?: string;
+  /** Content of the sf- suite's max-zero event file for this run: one selector per input discarded for a max of 0. */
+  maxZeroEvents?: string;
+}
+
+/** Reason of an sf- property whose every discarded input had a max of 0. */
+export function maxZeroNote(maxName: string): string {
+  return `${maxName} returned 0 for every test user; there is no max value to honor (EIP-4626 allows underestimating)`;
+}
+
+/**
+ * An sf- property that ran out of inputs only because its max was 0 every time is not applicable: the
+ * vault never advertised anything to honor. The sf- suite writes one event per such discard; when there
+ * are at least as many as forge's reject limit, every rejected input was one of them.
+ */
+function withMaxZero(r: StandardPropertyResult, maxZero: number | undefined): StandardPropertyResult {
+  const m = /^test_sf_(max(?:Deposit|Mint|Withdraw|Redeem))_honored$/.exec(r.test);
+  const limit = /^`vm\.assume` rejected too many inputs \((\d+) allowed\)$/.exec(r.reason ?? '');
+  if (!m || !limit || r.status !== 'inconclusive' || !maxZero || maxZero < Number(limit[1])) return r;
+  return { id: r.id, test: r.test, description: r.description, status: 'not_applicable', ...(r.runs !== undefined ? { runs: r.runs } : {}), reason: maxZeroNote(m[1]!) };
 }
 
 /**
@@ -309,17 +349,27 @@ export function parseStandardForgeJson(
   const known = new Set(properties.map((p) => p.test));
   const extra = [...byTest.keys()].filter((t) => !known.has(t)).map((t) => ({ test: t, id: t, description: 'not in the property table' }));
   const deposits = opts.depositRevertEvents ? depositRevertCounts(opts.depositRevertEvents, keys) : new Map<string, number>();
+  const maxZero = opts.maxZeroEvents ? depositRevertCounts(opts.maxZeroEvents, keys) : new Map<string, number>();
   return [...properties, ...extra].map((p): StandardPropertyResult => {
     const base = { id: p.id, test: p.test, description: p.description };
     const r = byTest.get(p.test);
     // A suite whose setUp failed reports no tests; its properties take the setUp reason. Properties of a
     // suite that did run keep their own results.
     if (!r && setupFailure !== null) {
-      return FORK_ERROR.test(setupFailure)
-        ? { ...base, status: 'inconclusive', reason: `${FORK_ERROR_NOTE}: setUp failed: ${setupFailure}` }
-        : { ...base, status: 'not_applicable', reason: `setUp failed: ${setupFailure}` };
+      if (FORK_ERROR.test(setupFailure)) return { ...base, status: 'inconclusive', reason: `${FORK_ERROR_NOTE}: setUp failed: ${setupFailure}` };
+      // Our own fixed prefix, anchored like forge's messages. Imitating it only reaches "not applicable".
+      if (setupFailure.startsWith(`${RESTRICTED_ASSET_PREFIX} (`)) {
+        return { ...base, status: 'not_applicable', reason: `${RESTRICTED_ASSET_NOTE} ${setupFailure.slice(RESTRICTED_ASSET_PREFIX.length + 1)}` };
+      }
+      return { ...base, status: 'not_applicable', reason: `setUp failed: ${setupFailure}` };
     }
     if (!r) return { ...base, status: 'inconclusive', reason: 'no result in forge output' };
-    return withDepositNote(classify(p, r), deposits.get(p.test));
+    return withMaxZero(withDepositNote(classify(p, r), deposits.get(p.test)), maxZero.get(p.test));
   });
+}
+
+/** skipReason of a run whose properties forge reported (the pre-checks set their own). */
+export function skipReasonOf(results: readonly Pick<StandardPropertyResult, 'status' | 'reason'>[]): SkipReason | null {
+  if (results.length === 0 || !results.every((r) => r.status === 'not_applicable')) return null;
+  return results.every((r) => r.reason?.startsWith(RESTRICTED_ASSET_NOTE)) ? 'asset-transfer-restricted' : 'setup-reverted';
 }

@@ -84,7 +84,7 @@ describe('runStandardCheck without forge', () => {
     expect(report).toMatchObject({ seed: null, sender: null, toolchain: { forgeVersion: null, forgeStd: { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit } } });
     expect(events).toEqual(['check-start', 'check-identity', 'check-skip']);
     expect(report.blockNumber).toBe('5');
-    expect(report).toMatchObject({ schemaVersion: 2, vaultKind: 'erc7535' });
+    expect(report).toMatchObject({ schemaVersion: 3, vaultKind: 'erc7535', skipReason: 'native-asset' });
     expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
     expect(report.results.every((r) => r.status === 'not_applicable' && r.reason === NATIVE_ASSET_REASON)).toBe(true);
     expect(report.upstream).toEqual(ERC4626_UPSTREAM);
@@ -116,7 +116,7 @@ describe('runStandardCheck without forge', () => {
     );
     expect(events.map((e) => e.type)).toEqual(['check-start', 'check-identity', 'check-skip']);
     expect(events[2]).toMatchObject({ vaultKind: 'erc7575', reason });
-    expect(report).toMatchObject({ schemaVersion: 2, vaultKind: 'erc7575', seed: null, sender: null });
+    expect(report).toMatchObject({ schemaVersion: 3, vaultKind: 'erc7575', skipReason: 'separate-share-token', seed: null, sender: null });
     expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
     expect(report.results.every((r) => r.status === 'not_applicable' && r.reason === reason)).toBe(true);
     expect(standardCheckExitCode(report.summary)).toBe(17);
@@ -274,7 +274,7 @@ describe('runStandardCheck with a stand-in forge (M6, M7, L3, L6, L7)', () => {
       await rm(forge.record, { force: true });
       const report = await runStandardCheck({ ...input, client: client({ code: CODE, asset: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603', share }) });
       expect(existsSync(forge.record)).toBe(true);
-      expect(report).toMatchObject({ schemaVersion: 2, vaultKind: 'erc4626' });
+      expect(report).toMatchObject({ schemaVersion: 3, vaultKind: 'erc4626', skipReason: null });
       expect(report.results.find((r) => r.id === 'asset')!.status).toBe('pass');
     }
   });
@@ -381,6 +381,15 @@ describe('standardCheckReportSchema', () => {
     expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 2, vaultKind: 'erc20' })).toThrow();
   });
 
+  it('schema version 3 needs skipReason (null when properties ran); earlier versions must not carry it', () => {
+    const v3 = { ...valid(), schemaVersion: 3, vaultKind: 'erc4626' };
+    expect(() => standardCheckReportSchema.parse(v3)).toThrow(/skipReason \(null when properties ran\) is required from schemaVersion 3 on/);
+    expect(standardCheckReportSchema.parse({ ...v3, skipReason: null }).skipReason).toBeNull();
+    expect(standardCheckReportSchema.parse({ ...v3, skipReason: 'asset-transfer-restricted' }).skipReason).toBe('asset-transfer-restricted');
+    expect(() => standardCheckReportSchema.parse({ ...v3, skipReason: 'other' })).toThrow();
+    expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 2, vaultKind: 'erc4626', skipReason: null })).toThrow(/skipReason does not exist in schemaVersion 2/);
+  });
+
   it('accepts a complete report', () => {
     expect(standardCheckReportSchema.parse(valid())).toEqual(valid());
   });
@@ -395,7 +404,7 @@ describe('standardCheckReportSchema', () => {
     expect(() => standardCheckReportSchema.parse({ ...valid(), results: [{ ...valid().results[0], status: 'error' }] })).toThrow();
     expect(() => standardCheckReportSchema.parse({ ...valid(), extra: 1 })).toThrow();
     expect(() => standardCheckReportSchema.parse({ ...valid(), harnessSha256: '0x12' })).toThrow();
-    expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 3 })).toThrow();
+    expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 4 })).toThrow();
     expect(() => standardCheckReportSchema.parse({ ...valid(), blockNumber: 'latest' })).toThrow();
   });
 

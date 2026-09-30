@@ -38,12 +38,55 @@ contract SpecfirstERC4626Test is ERC4626Test {
         _unlimitedAmount = false;
         _cap = 1_000_000 * 10 ** uint256(_decimalsOr18(_underlying_));
         _poolSalt = vm.envOr("SF_POOL_SALT", uint256(keccak256("specfirst.erc4626.pool")));
+        _probeAssetTransfers();
+    }
+
+    /// The suites move the asset between test users. An asset that only lets allowlisted addresses transfer
+    /// (Valos vUSD on Monad) cannot give them usable balances, so every property would only reject inputs or
+    /// fail on the token's refusal. Pool members 0 and 1 try one whole token; the state is restored either
+    /// way. A refusal ends setUp with a fixed prefix the runner reports as not applicable. When no balance
+    /// can be given at all, the probe steps aside and the tests report the stdStorage error as before.
+    function _probeAssetTransfers() internal {
+        address from = _poolMember(0);
+        address to = _poolMember(1);
+        uint256 amount = _cap / 1_000_000;
+        uint256 snap = vm.snapshotState();
+        bool given = true;
+        try this.__giveDeal(_underlying_, from, amount) {} catch {
+            try this.__givePacked(_underlying_, from, amount) {} catch {
+                given = false;
+            }
+        }
+        bool ok;
+        bytes memory ret;
+        if (given) {
+            vm.prank(from);
+            (ok, ret) = _underlying_.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
+        }
+        vm.revertToStateAndDelete(snap);
+        if (given && !(ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)))))) {
+            revert(string.concat("specfirst: asset transfers are restricted for test users (", _refusal(ok, ret), ")"));
+        }
+    }
+
+    function _refusal(bool ok, bytes memory ret) internal pure returns (string memory) {
+        if (ok) return "transfer returned false";
+        if (ret.length < 4) return "no revert data";
+        bytes4 sel;
+        assembly {
+            sel := mload(add(ret, 32))
+        }
+        return string.concat("selector ", vm.toString(abi.encodePacked(sel)));
+    }
+
+    function _poolMember(uint256 index) internal view returns (address) {
+        return address(uint160(uint256(keccak256(abi.encode(_poolSalt, index)))));
     }
 
     /// Pool member for a fuzzed address. The test body reads init.user after setUpVault returns; the struct
     /// is passed by reference (internal call to a public function), so rewriting it here reaches the test.
     function _poolUser(address fuzzed) internal view returns (address) {
-        return address(uint160(uint256(keccak256(abi.encode(_poolSalt, uint256(uint160(fuzzed)) % USER_POOL)))));
+        return _poolMember(uint256(uint160(fuzzed)) % USER_POOL);
     }
 
     function _decimalsOr18(address token) internal view returns (uint8) {

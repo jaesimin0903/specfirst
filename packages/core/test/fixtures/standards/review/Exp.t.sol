@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity >=0.8.0 <0.9.0;
 import {SpecfirstERC4626Test} from "./SpecfirstERC4626.t.sol";
-import {MockToken, Vault, PackedToken, NoDecimalsToken} from "../src/M.sol";
+import {MockToken, Vault, PackedToken, NoDecimalsToken, LockedToken, FalseToken} from "../src/M.sol";
+import {SpecfirstMaxHonored} from "./SpecfirstMaxHonored.t.sol";
 
 abstract contract Base is SpecfirstERC4626Test {
     function _mode() internal pure virtual returns (uint256);
@@ -34,5 +35,54 @@ contract DecimalsFallback is SpecfirstERC4626Test {
     function test_decimalsFallback() public {
         assertEq(_decimalsOr18(address(new NoDecimalsToken())), 18);
         assertEq(_decimalsOr18(address(new MockToken())), 6);
+    }
+}
+contract ProbeState is SpecfirstERC4626Test {
+    MockToken internal token;
+    function setUp() public override {
+        token = new MockToken();
+        _underlying_ = address(token);
+        _vault_ = address(new Vault(token, 0));
+        _cap = 1_000_000 * 1e6;
+        _poolSalt = 7;
+    }
+    function probe() external { _probeAssetTransfers(); }
+    function test_probeLeavesNoState() public {
+        uint256 supply = token.totalSupply();
+        this.probe();
+        assertEq(token.balanceOf(_poolMember(0)), 0);
+        assertEq(token.balanceOf(_poolMember(1)), 0);
+        assertEq(token.totalSupply(), supply);
+    }
+    function test_probeRejectsLockedToken() public {
+        _underlying_ = address(new LockedToken());
+        vm.expectRevert(bytes("specfirst: asset transfers are restricted for test users (selector 0x82b42900)"));
+        this.probe();
+    }
+    function test_probeRejectsFalseTransfer() public {
+        _underlying_ = address(new FalseToken());
+        vm.expectRevert(bytes("specfirst: asset transfers are restricted for test users (transfer returned false)"));
+        this.probe();
+    }
+}
+contract SfProbeState is SpecfirstMaxHonored {
+    MockToken internal token;
+    function setUp() public override {
+        token = new MockToken();
+        asset = address(token);
+        vault = address(new Vault(token, 0));
+        cap = 1_000_000 * 1e6;
+        poolSalt = 7;
+    }
+    function probe() external { _probeAssetTransfers(); }
+    function test_sfProbeLeavesNoState() public {
+        this.probe();
+        assertEq(token.balanceOf(_poolMember(0)), 0);
+        assertEq(token.balanceOf(_poolMember(1)), 0);
+    }
+    function test_sfProbeRejectsLockedToken() public {
+        asset = address(new LockedToken());
+        vm.expectRevert(bytes("specfirst: asset transfers are restricted for test users (selector 0x82b42900)"));
+        this.probe();
     }
 }

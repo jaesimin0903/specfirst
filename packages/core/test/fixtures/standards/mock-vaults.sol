@@ -256,3 +256,76 @@ contract ZeroMaxVault is VaultBase {
     function maxWithdraw(address) public pure override returns (uint256) { return 0; }
     function maxRedeem(address) public pure override returns (uint256) { return 0; }
 }
+
+address constant ALLOWLIST_TOKEN = 0x5F00000000000000000000000000000000000004;
+
+error Unauthorized();
+
+/// Storage balances like any ERC-20, but only allowlisted senders may transfer (the shape of Valos vUSD on
+/// Monad). Placed with anvil_setCode, so the allowlist is empty: deal can set a balance, nobody can move it.
+contract AllowlistToken {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    mapping(address => bool) public allowed;
+    uint256 public totalSupply;
+
+    function decimals() external pure returns (uint8) { return 6; }
+    function approve(address s, uint256 a) external returns (bool) { allowance[msg.sender][s] = a; return true; }
+
+    function transfer(address to, uint256 a) external returns (bool) {
+        if (!allowed[msg.sender]) revert Unauthorized();
+        balanceOf[msg.sender] -= a; balanceOf[to] += a; return true;
+    }
+
+    function transferFrom(address f, address to, uint256 a) external returns (bool) {
+        if (!allowed[msg.sender] || !allowed[f]) revert Unauthorized();
+        if (allowance[f][msg.sender] != type(uint256).max) allowance[f][msg.sender] -= a;
+        balanceOf[f] -= a; balanceOf[to] += a; return true;
+    }
+}
+
+/// Correct 1:1 vault over AllowlistToken.
+contract RestrictedAssetVault is VaultBase {
+    function asset() public pure override returns (address) { return ALLOWLIST_TOKEN; }
+}
+
+address constant RECIPIENT_ALLOWLIST_TOKEN = 0x5F00000000000000000000000000000000000005;
+address constant PARTIAL_RESTRICTED_VAULT = 0x5F00000000000000000000000000000000000062;
+
+/// Only transfers to an allowlisted recipient go through; here the allowlist is PartialRestrictedVault. Users
+/// can deposit (the vault receives) but cannot withdraw (a user receives) or pay each other, the pattern seen
+/// on the Euler vault 0xD8ec5b4917FeF9058545e7D1dc2aC17F1D26305D over Valos vUSD.
+contract RecipientAllowlistToken {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+
+    function decimals() external pure returns (uint8) { return 6; }
+    function approve(address s, uint256 a) external returns (bool) { allowance[msg.sender][s] = a; return true; }
+
+    function transfer(address to, uint256 a) external returns (bool) {
+        if (to != PARTIAL_RESTRICTED_VAULT) revert Unauthorized();
+        balanceOf[msg.sender] -= a; balanceOf[to] += a; return true;
+    }
+
+    function transferFrom(address f, address to, uint256 a) external returns (bool) {
+        if (to != PARTIAL_RESTRICTED_VAULT) revert Unauthorized();
+        if (allowance[f][msg.sender] != type(uint256).max) allowance[f][msg.sender] -= a;
+        balanceOf[f] -= a; balanceOf[to] += a; return true;
+    }
+}
+
+/// Correct 1:1 vault over RecipientAllowlistToken: deposits work, withdrawals fail in the token.
+contract PartialRestrictedVault is VaultBase {
+    function asset() public pure override returns (address) { return RECIPIENT_ALLOWLIST_TOKEN; }
+}
+
+error NotAuthorized();
+
+/// A freely transferable asset (MockToken) behind a vault whose own hook refuses deposits and mints while
+/// maxDeposit and maxMint stay unlimited, like the Euler vault 0xf26dC2F1FE883b11Dd56700db594DfC32Eee95Bf.
+/// That is the vault's restriction, not the asset's, so the probe must not skip it.
+contract HookBlockedVault is VaultBase {
+    function deposit(uint256, address) public pure override returns (uint256) { revert NotAuthorized(); }
+    function mint(uint256, address) public pure override returns (uint256) { revert NotAuthorized(); }
+}

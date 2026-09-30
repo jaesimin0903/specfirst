@@ -203,6 +203,7 @@ export function registerCheckCommand(program: Command): void {
           address: report.address,
           blockNumber: report.blockNumber,
           vaultKind: report.vaultKind,
+          skipReason: report.skipReason,
           summary: report.summary,
           implementationKey: report.identity.implementationKey,
           seed: report.seed,

@@ -75,4 +75,15 @@ local-zero-max.json
   ZeroMaxVault (0x5F..51, mock-vaults.sol): maxDeposit, maxMint, maxWithdraw and maxRedeem return 0 for
   everyone, the actions work (the shape of Morpho Vault V2 on Monad). Full check with the harness that tries
   the cap when maxDeposit is 0 (--fuzz-runs 16, seed 1, local anvil): the 26 upstream properties pass, the
-  four sf- properties are inconclusive (a max of 0 discards their inputs).
+  four sf- properties end on too many rejects (a max of 0 discards their inputs). With the sf- suite's
+  max-zero events (4096 per property, synthesized in standards.parse.test.ts from the measured count)
+  they parse as not_applicable.
+
+local-restricted-asset.json, local-partial-restricted.json, local-hook-blocked.json
+  Full checks with the transfer probe in both setUps (--fuzz-runs 16, seed 1, local anvil, mock-vaults.sol):
+  RestrictedAssetVault (0x5F..61) over AllowlistToken (nobody may transfer, like Valos vUSD) and
+  PartialRestrictedVault (0x5F..62) over RecipientAllowlistToken (only the vault may receive: deposits work,
+  withdrawals fail in the token, like Euler 0xD8ec..305D) both stop in setUp: 30 not_applicable, reason
+  "asset token restricts transfers ... (selector 0x82b42900)". HookBlockedVault (0x5f..63) keeps a free
+  asset but refuses deposits in the vault (like Euler 0xf26d..95Bf): the probe passes, sf-maxDeposit-honored
+  and sf-maxMint-honored fail with NotAuthorized() 0xea8e4eb5, the rest are inconclusive.

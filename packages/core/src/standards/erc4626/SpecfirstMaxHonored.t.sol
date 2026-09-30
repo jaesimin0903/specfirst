@@ -33,8 +33,9 @@ interface ISfVault {
 /// inputs. These properties call the action directly and fail when it reverts within the advertised max.
 /// To avoid false alarms: amounts that preview to zero shares or assets are discarded (reverting on a
 /// zero-share deposit is common and not what these check), a max of 0 discards the input (0 is the honest
-/// answer for a disabled action), and a failed setup step (funding, approve, the deposit that gives the
-/// user shares) discards the input too. Users come from the same salted 16-address pool as the harness.
+/// answer for a disabled action; each such discard is recorded so the runner can report a property whose
+/// max was always 0 as not applicable), and a failed setup step (funding, approve, the deposit that gives
+/// the user shares) discards the input too. Users come from the same salted 16-address pool as the harness.
 contract SpecfirstMaxHonored is Test {
     using stdStorage for StdStorage;
 
@@ -49,14 +50,50 @@ contract SpecfirstMaxHonored is Test {
         asset = ISfVault(vault).asset();
         cap = 1_000_000 * 10 ** uint256(_decimalsOr18(asset));
         poolSalt = vm.envOr("SF_POOL_SALT", uint256(keccak256("specfirst.erc4626.pool")));
+        _probeAssetTransfers();
+    }
+
+    /// Same probe as the upstream harness: pool members 0 and 1 try to move one whole token of the asset,
+    /// the state is restored, and a refusal ends setUp with the fixed prefix the runner reports as not
+    /// applicable. When no balance can be given at all, the probe steps aside.
+    function _probeAssetTransfers() internal {
+        address from = _poolMember(0);
+        address to = _poolMember(1);
+        uint256 amount = cap / 1_000_000;
+        uint256 snap = vm.snapshotState();
+        bool given = true;
+        try this.__sfGiveDeal(from, amount) {} catch {
+            try this.__sfGivePacked(from, amount) {} catch {
+                given = false;
+            }
+        }
+        bool ok;
+        bytes memory ret;
+        if (given) {
+            vm.prank(from);
+            (ok, ret) = asset.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
+        }
+        vm.revertToStateAndDelete(snap);
+        if (given && !(ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)))))) {
+            revert(string.concat("specfirst: asset transfers are restricted for test users (", _refusal(ok, ret), ")"));
+        }
+    }
+
+    function _refusal(bool ok, bytes memory ret) internal pure returns (string memory) {
+        if (ok) return "transfer returned false";
+        return _selectorOf(ret);
+    }
+
+    function _poolMember(uint256 index) internal view returns (address) {
+        return address(uint160(uint256(keccak256(abi.encode(poolSalt, index)))));
     }
 
     /// deposit(a) for 0 < a <= min(maxDeposit, cap) with previewDeposit(a) > 0 must not revert.
     function test_sf_maxDeposit_honored(uint256 who, uint256 amount) public {
         address u = _user(who);
         uint256 max = _read(abi.encodeCall(ISfVault.maxDeposit, (u)));
+        _discardIfZero(max);
         uint256 hi = max < cap ? max : cap;
-        vm.assume(hi > 0);
         uint256 a = bound(amount, 1, hi);
         vm.assume(_read(abi.encodeCall(ISfVault.previewDeposit, (a))) > 0);
         _fund(u, a);
@@ -67,6 +104,7 @@ contract SpecfirstMaxHonored is Test {
     function test_sf_maxMint_honored(uint256 who, uint256 shares) public {
         address u = _user(who);
         uint256 max = _read(abi.encodeCall(ISfVault.maxMint, (u)));
+        _discardIfZero(max);
         uint256 capShares = _read(abi.encodeCall(ISfVault.convertToShares, (cap)));
         uint256 hi = max < capShares ? max : capShares;
         vm.assume(hi > 0);
@@ -83,7 +121,7 @@ contract SpecfirstMaxHonored is Test {
         address u = _user(who);
         _holdShares(u, deposited);
         uint256 max = _read(abi.encodeCall(ISfVault.maxWithdraw, (u)));
-        vm.assume(max > 0);
+        _discardIfZero(max);
         uint256 a = bound(amount, 1, max);
         _mustNotRevert(u, abi.encodeCall(ISfVault.withdraw, (a, u, u)), "withdraw", a, "maxWithdraw", max);
     }
@@ -93,7 +131,7 @@ contract SpecfirstMaxHonored is Test {
         address u = _user(who);
         _holdShares(u, deposited);
         uint256 max = _read(abi.encodeCall(ISfVault.maxRedeem, (u)));
-        vm.assume(max > 0);
+        _discardIfZero(max);
         uint256 s = bound(shares, 1, max);
         vm.assume(_read(abi.encodeCall(ISfVault.previewRedeem, (s))) > 0);
         _mustNotRevert(u, abi.encodeCall(ISfVault.redeem, (s, u, u)), "redeem", s, "maxRedeem", max);
@@ -121,11 +159,24 @@ contract SpecfirstMaxHonored is Test {
         return string.concat("selector ", vm.toString(abi.encodePacked(sel)));
     }
 
-    /// Deposits a bounded amount for `u` so it holds shares; any failure here discards the input.
+    /// A max of 0 is the honest answer for a disabled action (and an underestimate EIP-4626 allows), so the
+    /// input is discarded. The discard is recorded per property: when every discard of a property was a max
+    /// of 0, the runner reports it as not applicable rather than inconclusive.
+    function _discardIfZero(uint256 max) internal {
+        if (max != 0) return;
+        string memory runId = vm.envOr("SF_RUN_ID", string(""));
+        if (bytes(runId).length != 0) {
+            vm.writeLine(string.concat("sf-events/", runId, ".max-zero.log"), vm.toString(abi.encodePacked(msg.sig)));
+        }
+        vm.assume(false);
+    }
+
+    /// Deposits a bounded amount for `u` so it holds shares; any failure here discards the input. Setup only:
+    /// a maxDeposit of 0 does not stop it (the cap is tried, as in the upstream harness), so a vault that
+    /// reports 0 everywhere still gets its maxWithdraw and maxRedeem looked at.
     function _holdShares(address u, uint256 amount) internal {
         uint256 maxDep = _read(abi.encodeCall(ISfVault.maxDeposit, (u)));
-        uint256 hi = maxDep < cap ? maxDep : cap;
-        vm.assume(hi > 0);
+        uint256 hi = maxDep > 0 && maxDep < cap ? maxDep : cap;
         uint256 a = bound(amount, 1, hi);
         vm.assume(_read(abi.encodeCall(ISfVault.previewDeposit, (a))) > 0);
         _fund(u, a);
@@ -142,7 +193,7 @@ contract SpecfirstMaxHonored is Test {
     }
 
     function _user(uint256 who) internal view returns (address u) {
-        u = address(uint160(uint256(keccak256(abi.encode(poolSalt, who % USER_POOL)))));
+        u = _poolMember(who % USER_POOL);
         vm.assume(u.code.length == 0 && uint160(u) > 0xffff && u != vault && u != asset);
     }
 

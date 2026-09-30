@@ -21,10 +21,12 @@ import { identifyImplementation, type IdentityClient, type ImplementationIdentit
 import {
   extractForgeDoc,
   parseStandardForgeJson,
+  skipReasonOf,
   STANDARD_CHECK_SCHEMA_VERSION,
   standardCheckReportSchema,
   summarize,
   type StandardCheckReport,
+  type SkipReason,
   type StandardName,
   type VaultKind,
   type StandardPropertyResult,
@@ -215,6 +217,7 @@ async function runForgeSuite(i: {
   const persist = await mkdtemp(path.join(tmpdir(), 'specfirst-standard-'));
   const runId = `${Date.now()}-${process.pid}-${randomBytes(4).toString('hex')}`;
   const eventsFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.deposit-below-max.log`);
+  const maxZeroFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.max-zero.log`);
   const args = [
     'test',
     ...i.select,
@@ -257,7 +260,8 @@ async function runForgeSuite(i: {
     const stdout = mask(String(proc.stdout ?? ''));
     const doc = extractForgeDoc(stdout);
     const events = await readFile(eventsFile, 'utf8').catch(() => '');
-    const results = doc ? parseStandardForgeJson(JSON.stringify(doc), i.properties, { depositRevertEvents: events }) : null;
+    const maxZeroEvents = await readFile(maxZeroFile, 'utf8').catch(() => '');
+    const results = doc ? parseStandardForgeJson(JSON.stringify(doc), i.properties, { depositRevertEvents: events, maxZeroEvents }) : null;
     if (!doc || !results) {
       const out = mask([String(proc.stderr ?? '').trim(), stdout.trim()].filter(Boolean).join('\n'));
       throw new StandardCheckError(`forge produced no test results (exit ${proc.exitCode}): ${out.split('\n').slice(0, 12).join('\n') || 'no output'}`);
@@ -266,6 +270,7 @@ async function runForgeSuite(i: {
   } finally {
     await rm(persist, { recursive: true, force: true });
     await rm(eventsFile, { force: true });
+    await rm(maxZeroFile, { force: true });
   }
 }
 
@@ -324,12 +329,15 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
       : await client.readContract({ address, abi: shareAbi, functionName: 'share', blockNumber }).catch(() => null);
   let vaultKind: VaultKind = 'erc4626';
   let skipReason: string | null = null;
+  let skipCode: SkipReason | null = null;
   if (asset && asset.toLowerCase() === ERC7535_NATIVE_ASSET.toLowerCase()) {
     vaultKind = 'erc7535';
     skipReason = NATIVE_ASSET_REASON;
+    skipCode = 'native-asset';
   } else if (shareToken && !/^0x0{40}$/i.test(shareToken) && shareToken.toLowerCase() !== address.toLowerCase()) {
     vaultKind = 'erc7575';
     skipReason = erc7575Reason(getAddress(shareToken));
+    skipCode = 'separate-share-token';
   }
   if (skipReason !== null) {
     input.onEvent?.({ type: 'check-skip', vaultKind, reason: skipReason });
@@ -369,6 +377,7 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
     blockNumber: blockNumber.toString(),
     standard: input.standard,
     vaultKind,
+    skipReason: skipCode ?? skipReasonOf(results),
     upstream: { repo: upstream.repo, commit: upstream.commit },
     harnessSha256,
     sfPropertiesSha256,
