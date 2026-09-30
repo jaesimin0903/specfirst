@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {
+  acquireWorkerLock,
   AttestationRegistryClient,
   badChecksum,
   checkRequestDeskCreationCodeHash,
@@ -172,6 +173,7 @@ export function registerDeskCommand(program: Command): void {
         const code = await client.getCode({ address: registry });
         if (!code || code === '0x') throw new ConfigError(`no contract at the registry address ${registry} on ${net.name}`);
         const warnings: string[] = [];
+        if (fee === 0n) warn(name, warnings, 'the fee is 0: anyone can queue checks for free, and every one costs the worker gas');
         const reg = new AttestationRegistryClient(registry, client);
         if (!(await reg.isIssuer(worker))) {
           warn(name, warnings, `worker ${worker} is not an issuer of ${registry}; it cannot attest, so fulfill has nothing to point at until \`specfirst attest-registry set-issuer ${worker}\``);
@@ -402,6 +404,9 @@ function logWorkerEvent(ctx: CliContext, e: WorkerEvent): void {
     case 'worker-closed':
       printLine(ctx, cont(pc.dim(`#${e.id} closed onchain (${e.status})`)));
       return;
+    case 'worker-reused':
+      printLine(ctx, cont(pc.dim(`#${e.id} delivered by this worker's attestation ${e.attestationId}, made after the request; no second check`)));
+      return;
     case 'worker-gave-up':
       printLine(ctx, cont(pc.red(`#${e.id} gave up: ${e.error}`)));
       return;
@@ -465,8 +470,10 @@ export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps 
       const subjectClient = createPublicClient({ ...(chain ? { chain } : {}), transport: rpcTransport([subjectUrl]) }) as unknown as StandardCheckClient & SubjectClient;
 
       let store: WorkerStore;
+      let release: () => Promise<void>;
       try {
         store = await WorkerStore.load(ctx.projectDir, { address: deskAddress, chainId: net.clients.chain.id });
+        release = await acquireWorkerLock(ctx.projectDir);
       } catch (err) {
         if (err instanceof WorkerError) throw new ConfigError(err.message);
         throw err;
@@ -474,6 +481,7 @@ export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps 
       const effects = liveWorkerEffects({
         desk,
         registry,
+        workerAddress: me,
         subjectClient,
         subjectChainId,
         subjectRpcUrl: subjectUrl,
@@ -506,25 +514,29 @@ export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps 
       });
 
       const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-      for (;;) {
-        try {
-          await runWorkerPass({
-            effects,
-            store,
-            config,
-            onEvent: (e) => {
-              emitEvent(ctx, e);
-              logWorkerEvent(ctx, e);
-            },
-          });
-        } catch (err) {
-          const error = errorText(err);
-          emitEvent(ctx, { type: 'worker-pass-error', error });
-          console.error(pc.red(`specfirst worker: pass failed: ${error}`));
-          if (opts.once) throw new StageError(DESK_FAILED_EXIT_CODE, `pass failed: ${error}`);
+      try {
+        for (;;) {
+          try {
+            await runWorkerPass({
+              effects,
+              store,
+              config,
+              onEvent: (e) => {
+                emitEvent(ctx, e);
+                logWorkerEvent(ctx, e);
+              },
+            });
+          } catch (err) {
+            const error = errorText(err);
+            emitEvent(ctx, { type: 'worker-pass-error', error });
+            console.error(pc.red(`specfirst worker: pass failed: ${error}`));
+            if (opts.once) throw new StageError(DESK_FAILED_EXIT_CODE, `pass failed: ${error}`);
+          }
+          if (opts.once) break;
+          await sleep(Number(poll) * 1000);
         }
-        if (opts.once) break;
-        await sleep(Number(poll) * 1000);
+      } finally {
+        await release();
       }
     });
   });

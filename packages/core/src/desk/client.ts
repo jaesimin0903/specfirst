@@ -126,7 +126,7 @@ export class RequestDeskClient {
     return this.client.readContract({ address: this.address, abi: checkRequestDeskAbi, functionName, args } as never) as Promise<T>;
   }
 
-  private async write(functionName: WriteName, args: readonly unknown[], value?: bigint): Promise<DeskTx & { receipt: TransactionReceipt }> {
+  private async write(functionName: WriteName, args: readonly unknown[], value?: bigint, maxGas?: bigint): Promise<DeskTx & { receipt: TransactionReceipt }> {
     if (!this.wallet) throw new DeskError(`${functionName} needs a wallet client`);
     const call = {
       address: this.address,
@@ -138,7 +138,11 @@ export class RequestDeskClient {
     } as never;
     try {
       const sim = await this.client.simulateContract(call);
-      const gas = gasLimitFor(await this.client.estimateContractGas(call));
+      const estimate = await this.client.estimateContractGas(call);
+      if (maxGas !== undefined && estimate > maxGas) {
+        throw new DeskError(`${functionName} needs ${estimate} gas, above the cap of ${maxGas}; not sent`, 'GasCapExceeded');
+      }
+      const gas = gasLimitFor(estimate);
       const hash = await this.wallet.writeContract({ ...(sim as { request: object }).request, gas } as never);
       const receipt = await this.client.waitForTransactionReceipt({ hash });
       if (receipt.status !== 'success') throw new DeskError(`${functionName} tx ${hash} reverted`);
@@ -177,10 +181,14 @@ export class RequestDeskClient {
     return this.strip(await this.write('fulfill', [id, attestationId]));
   }
 
-  /** `reason` is a short ASCII code (REJECT_REASONS) or an already encoded bytes32. */
-  async reject(id: bigint, reason: string): Promise<DeskTx> {
+  /**
+   * `reason` is a short ASCII code (REJECT_REASONS) or an already encoded bytes32. With `maxGas`, a reject
+   * whose gas estimate is above it is not sent: DeskError with errorName GasCapExceeded (a requester whose
+   * receive function burns gas).
+   */
+  async reject(id: bigint, reason: string, opts: { maxGas?: bigint } = {}): Promise<DeskTx> {
     const code = /^0x[0-9a-fA-F]{64}$/.test(reason) ? (reason as Hex) : reasonCodeOf(reason);
-    return this.strip(await this.write('reject', [id, code]));
+    return this.strip(await this.write('reject', [id, code], undefined, opts.maxGas));
   }
 
   async refundExpired(id: bigint): Promise<DeskTx> {

@@ -7,8 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { encodeAbiParameters, encodeEventTopics, getAddress, type Address, type Hex } from 'viem';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  acquireWorkerLock,
   advanceCursor,
   AttestationError,
+  canDeliver,
+  countsAsFailure,
+  isContractAnswer,
   checkBlockOf,
   checkRequestDeskAbi,
   checkRequestDeskBytecode,
@@ -49,6 +53,7 @@ const VAULT = getAddress('0x802c91d807A8DaCA257c4708ab264B6520964e44');
 const TOKEN = getAddress('0x00000000000000000000000000000000000000aa');
 const REQUESTER = getAddress('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
 const hash = (n: number): Hex => `0x${n.toString(16).padStart(64, '0')}`;
+const NOW = new Date('2026-09-30T12:00:00Z');
 
 describe('browser-safe @specfirst/core/desk', () => {
   it('imports only viem, zod and the generated artifact', () => {
@@ -195,7 +200,8 @@ describe('worker decisions (pure)', () => {
 });
 
 describe('precheckErc4626 (mock client)', () => {
-  const reverted = () => Object.assign(new Error('execution reverted'), { name: 'ContractFunctionExecutionError', cause: { name: 'RpcRequestError', message: 'execution reverted' } });
+  const reverted = () => Object.assign(new Error('The contract function "asset" reverted.'), { name: 'ContractFunctionExecutionError', cause: { name: 'ContractFunctionRevertedError', message: 'reverted' } });
+  const zeroData = () => Object.assign(new Error('returned no data ("0x")'), { name: 'ContractFunctionExecutionError', cause: { name: 'ContractFunctionZeroDataError' } });
   const client = (o: { code?: Hex; asset?: Address | Error; total?: bigint | Error }) => ({
     getCode: vi.fn(async () => o.code),
     readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
@@ -218,6 +224,14 @@ describe('precheckErc4626 (mock client)', () => {
     expect(await precheckErc4626(client({ code: '0x60', asset: reverted() }) as never, VAULT, 7n)).toMatchObject({ ok: false, reason: /asset\(\) failed/ });
     expect(await precheckErc4626(client({ code: '0x60', asset: `0x${'00'.repeat(20)}` }) as never, VAULT, 7n)).toMatchObject({ ok: false, reason: /zero address/ });
     expect(await precheckErc4626(client({ code: '0x60', asset: TOKEN, total: reverted() }) as never, VAULT, 7n)).toMatchObject({ ok: false, reason: /totalAssets\(\) failed/ });
+  });
+
+  it('a call that returns no data is not a vault; a node error is thrown, not taken for "not a vault"', async () => {
+    expect(await precheckErc4626(client({ code: '0x60', asset: zeroData() }) as never, VAULT, 7n)).toMatchObject({ ok: false, reason: /asset\(\) failed/ });
+    const node = Object.assign(new Error('missing trie node'), { name: 'ContractFunctionExecutionError', cause: { name: 'RpcRequestError', message: 'missing trie node abc' } });
+    await expect(precheckErc4626(client({ code: '0x60', asset: node }) as never, VAULT, 7n)).rejects.toThrow(/missing trie node/);
+    expect(isContractAnswer(node)).toBe(false);
+    expect(isContractAnswer(reverted())).toBe(true);
   });
 
   it('throws transport failures and rate limits so the worker retries', async () => {
@@ -276,8 +290,12 @@ class StubDesk {
     r.attestationId = attestationId;
     return this.tx();
   };
-  reject = async (id: bigint, reason: string) => {
+  rejectGas = 50_000n;
+  reject = async (id: bigint, reason: string, opts: { maxGas?: bigint } = {}) => {
     this.calls.push(`reject ${id} ${reason}`);
+    if (opts.maxGas !== undefined && this.rejectGas > opts.maxGas) {
+      throw new DeskError(`reject needs ${this.rejectGas} gas, above the cap of ${opts.maxGas}; not sent`, 'GasCapExceeded');
+    }
     if (this.failReject > 0) {
       this.failReject--;
       throw new DeskError('reject failed (TransferFailed)', 'TransferFailed');
@@ -300,6 +318,9 @@ describe('runWorkerPass with stub effects', () => {
   let events: WorkerEvent[];
   let checks: Array<{ subject: Address; block: bigint }>;
   let attests: number;
+  let registry: Array<{ id: bigint; subject: Address; issuedAt: bigint }>;
+  let attestMinedThenLost: number;
+  let onCheck: (() => void) | undefined;
   let sleeps: number[];
   let vaults: Set<string>;
   let failCheck: number;
@@ -318,6 +339,7 @@ describe('runWorkerPass with stub effects', () => {
     precheck: async (subject) => (vaults.has(subject) ? { ok: true, asset: TOKEN } : { ok: false, reason: `asset() failed at block 990: execution reverted` }),
     runCheck: async (subject, block) => {
       checks.push({ subject, block });
+      onCheck?.();
       if (failCheck > 0) {
         failCheck--;
         throw new Error('forge exited with 1: fork RPC 429');
@@ -340,16 +362,26 @@ describe('runWorkerPass with stub effects', () => {
       if (identityMismatch) throw new AttestationError(`identity of ${report.address} differs from the report: implementationKey`);
       return { chainId: 143, blockNumber: BigInt(report.blockNumber), codeHash: report.identity.codeHash as Hex, identity: report.identity as never, unknownProxy };
     },
-    attest: async () => {
+    attest: async (params) => {
       if (failAttest > 0) {
         failAttest--;
-        throw new Error('attest failed (NotIssuer)');
+        throw Object.assign(new Error('attest failed (NotIssuer): reverted'), { errorName: 'NotIssuer' });
       }
       attests++;
-      return { id: BigInt(40 + attests), hash: hash(500 + attests), gasCostWei: 1000n };
+      const id = BigInt(40 + attests);
+      registry.push({ id, subject: params.subject, issuedAt: BigInt(Math.floor(NOW.getTime() / 1000)) });
+      if (attestMinedThenLost > 0) {
+        attestMinedThenLost--;
+        throw Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' });
+      }
+      return { id, hash: hash(500 + attests), gasCostWei: 1000n };
+    },
+    latestOwnAttestation: async (_chain, subject) => {
+      const own = registry.filter((a) => a.subject === subject).at(-1);
+      return own ? { id: own.id, issuedAt: own.issuedAt } : null;
     },
     sleep: async (ms) => void sleeps.push(ms),
-    now: () => new Date('2026-09-30T12:00:00Z'),
+    now: () => NOW,
   });
 
   const pass = async (over: Partial<WorkerConfig> = {}) => {
@@ -365,6 +397,9 @@ describe('runWorkerPass with stub effects', () => {
     events = [];
     checks = [];
     attests = 0;
+    registry = [];
+    attestMinedThenLost = 0;
+    onCheck = undefined;
     sleeps = [];
     vaults = new Set([VAULT]);
     failCheck = 0;
@@ -440,7 +475,7 @@ describe('runWorkerPass with stub effects', () => {
     expect(first.result).toEqual({ cursor: 0n, fulfilled: [], rejected: [], open: [0n] });
     const st = await stateFile();
     expect(st.requests['0']).toMatchObject({ failures: 1, block: '990', reportPath: expect.stringMatching(/^certs\/checks\/143\//), reportURI: expect.stringMatching(/^https:\/\/example\.org\/checks\/143\//) });
-    expect((await statusFile())['0']).toMatchObject({ stage: 'attesting', error: 'attest failed (1 of 3): attest failed (NotIssuer)' });
+    expect((await statusFile())['0']).toMatchObject({ stage: 'attesting', error: 'attest failed (1 of 3): attest failed (NotIssuer): reverted' });
 
     const second = await pass();
     expect(second.result).toEqual({ cursor: 1n, fulfilled: [0n], rejected: [], open: [] });
@@ -484,9 +519,10 @@ describe('runWorkerPass with stub effects', () => {
     expect(events.some((e) => e.type === 'worker-gave-up' && e.id === '0')).toBe(true);
     expect((await stateFile()).requests['0']).toMatchObject({ gaveUp: true, reject: 'not-erc4626' });
     expect(((await statusFile())['0'] as WorkerRequestStatus).error).toMatch(/gave up after 3 failed rejects .*refundExpired/);
+    // Later passes only read it (to notice a refund); no check, no transaction.
     desk.calls = [];
     await pass();
-    expect(desk.calls).toEqual([]);
+    expect(desk.calls).toEqual(['requestOf 0']);
   });
 
   it('an unknown proxy is rejected unless allowUnknownProxy', async () => {
@@ -505,6 +541,104 @@ describe('runWorkerPass with stub effects', () => {
     expect(identityChecks).toBe(1);
     expect(attests).toBe(0);
     expect((await statusFile())['0']).toMatchObject({ stage: 'rejected', error: expect.stringMatching(/^check-failed: identity: identity of 0x802c.* differs from the report/) });
+  });
+
+  it('two requests for one vault: one check and one attestation deliver both', async () => {
+    desk.add();
+    desk.add();
+    const { result } = await pass();
+    expect(result).toEqual({ cursor: 2n, fulfilled: [0n, 1n], rejected: [], open: [] });
+    expect(checks.length).toBe(1);
+    expect(attests).toBe(1);
+    expect(desk.calls.filter((c) => c.startsWith('fulfill'))).toEqual(['fulfill 0 41', 'fulfill 1 41']);
+    expect(events).toContainEqual({ type: 'worker-reused', id: '1', attestationId: '41' });
+    const s = await statusFile();
+    expect(s['1']).toMatchObject({ stage: 'fulfilled', attestationId: '41', txs: { fulfill: expect.any(String) } });
+    expect((s['1'] as WorkerRequestStatus).txs.attest).toBeUndefined();
+  });
+
+  it('an attestation older than the request is not reused', async () => {
+    registry.push({ id: 7n, subject: VAULT, issuedAt: 1_699_999_999n });
+    desk.add();
+    await pass();
+    expect(attests).toBe(1);
+    expect(desk.calls.at(-1)).toBe('fulfill 0 41');
+    expect(canDeliver({ issuedAt: 1_699_999_999n }, { requestedAt: 1_700_000_000n })).toBe(false);
+    expect(canDeliver({ issuedAt: 1_700_000_000n }, { requestedAt: 1_700_000_000n })).toBe(true);
+    expect(canDeliver(null, { requestedAt: 0n })).toBe(false);
+  });
+
+  it('an attest that was mined but whose receipt was lost is not sent again: the next pass reuses it', async () => {
+    desk.add();
+    attestMinedThenLost = 1;
+    const first = await pass();
+    expect(first.result.open).toEqual([0n]);
+    expect((await stateFile()).requests['0']).toMatchObject({ failures: 0 });
+    expect((await statusFile())['0']).toMatchObject({ stage: 'attesting', error: 'attest failed (not counted, RPC): fetch failed' });
+    const second = await pass();
+    expect(second.result.fulfilled).toEqual([0n]);
+    expect(attests).toBe(1);
+    expect(checks.length).toBe(1);
+    expect(desk.calls.at(-1)).toBe('fulfill 0 41');
+  });
+
+  it('RPC outages on fulfill never count toward a refund', async () => {
+    desk.add();
+    const orig = desk.fulfill;
+    let down = 5;
+    desk.fulfill = async (id, att) => {
+      if (down-- > 0) throw Object.assign(new Error('HTTP request failed. Status: 503'), { name: 'HttpRequestError', status: 503 });
+      return orig(id, att);
+    };
+    for (let i = 0; i < 5; i++) expect((await pass()).result.open).toEqual([0n]);
+    expect((await stateFile()).requests['0']).toMatchObject({ failures: 0, attestationId: '41' });
+    expect((await pass()).result.fulfilled).toEqual([0n]);
+    expect(desk.calls.some((c) => c.startsWith('reject'))).toBe(false);
+  });
+
+  it('countsAsFailure: reverts count, outages and rate limits do not', () => {
+    expect(countsAsFailure(new DeskError('fulfill failed (NotPending)', 'NotPending'))).toBe(true);
+    expect(countsAsFailure(new DeskError('fulfill tx 0x1 reverted'))).toBe(true);
+    expect(countsAsFailure(Object.assign(new Error('x'), { cause: { name: 'ContractFunctionRevertedError' } }))).toBe(true);
+    expect(countsAsFailure(Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' }))).toBe(false);
+    expect(countsAsFailure(Object.assign(new Error('Too Many Requests'), { status: 429 }))).toBe(false);
+    expect(countsAsFailure(new Error('Timed out while waiting for transaction'))).toBe(false);
+  });
+
+  it('a request refunded while it is being checked is not attested', async () => {
+    desk.add();
+    onCheck = () => {
+      desk.requests[0]!.status = 4;
+    };
+    const { result } = await pass();
+    expect(result).toEqual({ cursor: 1n, fulfilled: [], rejected: [], open: [] });
+    expect(attests).toBe(0);
+    expect(events).toContainEqual({ type: 'worker-closed', id: '0', status: 'Refunded' });
+  });
+
+  it('an error outside the transaction steps is rejected with check-failed after maxTxFailures passes', async () => {
+    desk.add();
+    saveFails = 99;
+    for (let i = 0; i < 3; i++) expect((await pass()).result.open).toEqual([0n]);
+    expect((await stateFile()).requests['0']).toMatchObject({ reject: 'check-failed', detail: 'worker error 3 passes in a row: EACCES: permission denied' });
+    expect((await pass()).result.rejected).toEqual([0n]);
+    expect(checks.length).toBe(3);
+    expect((await statusFile())['0']).toMatchObject({ stage: 'rejected', error: 'check-failed: worker error 3 passes in a row: EACCES: permission denied' });
+  });
+
+  it('a reject above the gas cap is not sent: the worker gives up at once, and notices the refund later', async () => {
+    desk.add({ subject: TOKEN });
+    desk.rejectGas = 1_000_000n;
+    const { result } = await pass({ maxRejectGas: 300_000n });
+    expect(result).toEqual({ cursor: 1n, fulfilled: [], rejected: [], open: [] });
+    expect(desk.txn).toBe(0);
+    expect((await stateFile()).requests['0']).toMatchObject({ gaveUp: true });
+    expect((await statusFile())['0']!).toMatchObject({ error: expect.stringMatching(/^gave up: reject needs 1000000 gas, above the cap of 300000; not sent; the requester can call refundExpired/) });
+    // The requester refunds itself; the next pass notices it although the request is below the cursor.
+    desk.requests[0]!.status = 4;
+    await pass();
+    expect((await stateFile()).requests).toEqual({});
+    expect((await statusFile())['0']).toMatchObject({ error: 'request is Refunded onchain; the worker did not close it' });
   });
 
   it('a request refunded before its turn is not checked and is recorded as closed', async () => {
@@ -570,6 +704,18 @@ describe('WorkerStore', () => {
     await expect(WorkerStore.load(dir, { address: DESK, chainId: 31337 })).rejects.toThrow(/belongs to desk 0x5fbdb.* on chain 10143.*move \.specfirst\/worker away/);
   });
 
+  it('the worker lock refuses a second live worker and takes over a stale lock', async () => {
+    const release = await acquireWorkerLock(dir, { pid: 111, isAlive: () => true });
+    expect((await readFile(path.join(dir, WORKER_DIR, 'worker.lock'), 'utf8')).trim()).toBe('111');
+    await expect(acquireWorkerLock(dir, { pid: 222, isAlive: (p) => p === 111 })).rejects.toThrow(/another worker \(pid 111\) is running/);
+    const next = await acquireWorkerLock(dir, { pid: 222, isAlive: () => false });
+    expect((await readFile(path.join(dir, WORKER_DIR, 'worker.lock'), 'utf8')).trim()).toBe('222');
+    await release(); // 111 no longer holds it: its release leaves 222's lock alone
+    expect(existsSync(path.join(dir, WORKER_DIR, 'worker.lock'))).toBe(true);
+    await next();
+    expect(existsSync(path.join(dir, WORKER_DIR, 'worker.lock'))).toBe(false);
+  });
+
   it('refuses a broken state.json or status.json', async () => {
     await mkdir(path.join(dir, WORKER_DIR), { recursive: true });
     await writeFile(path.join(dir, WORKER_DIR, 'state.json'), '{"version":1}');
@@ -627,6 +773,14 @@ describe('RequestDeskClient (mocks, no RPC)', () => {
       { account: { address: REQUESTER } } as never,
     );
     await expect(failing.fulfill(1n, 2n)).rejects.toMatchObject({ name: 'DeskError', errorName: 'NotPending', message: 'fulfill failed (NotPending): reverted' });
+  });
+
+  it('reject with maxGas refuses to send above the cap', async () => {
+    const { c, write } = make([]);
+    await expect(c.reject(1n, 'not-erc4626', { maxGas: 50_000n })).rejects.toMatchObject({ errorName: 'GasCapExceeded', message: 'reject needs 100000 gas, above the cap of 50000; not sent' });
+    expect(write).not.toHaveBeenCalled();
+    await c.reject(1n, 'not-erc4626', { maxGas: 100_000n });
+    expect(write).toHaveBeenCalledTimes(1);
   });
 
   it('requestOf maps UnknownRequest to a DeskError', async () => {

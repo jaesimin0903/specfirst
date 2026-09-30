@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Address, Hex, PublicClient } from 'viem';
 import { attestationParamsFromReport, attestationReportPath, AttestationError, checkReportHash, parseCheckReport, standardIdOf, type AttestParams } from '../attest/params.js';
-import type { AttestationRegistryClient } from '../attest/registry.js';
+import { ATTESTATION_STATUS, type AttestationRegistryClient } from '../attest/registry.js';
 import { verifySubjectCode, type SubjectClient, type SubjectCodeCheck } from '../attest/verify.js';
 import { isRateLimited, isTransportFailure } from '../chain/transport.js';
 import { runStandardCheck, standardCheckPath, type RunStandardCheckInput, type StandardCheckClient, type StandardCheckEvent } from '../standards/check.js';
@@ -24,6 +24,9 @@ const PENDING = REQUEST_STATUS.indexOf('Pending');
 /** The desk calls the worker makes; RequestDeskClient has them, tests can pass a stub. */
 export type WorkerDesk = Pick<RequestDeskClient, 'requestCount' | 'requestOf' | 'fulfill' | 'reject'>;
 
+/** DeskError name of a reject whose gas estimate is above WorkerConfig.maxRejectGas. */
+export const GAS_CAP_EXCEEDED = 'GasCapExceeded';
+
 export type Erc4626Precheck = { ok: true; asset: Address } | { ok: false; reason: string };
 
 /**
@@ -43,6 +46,13 @@ export interface WorkerEffects {
   /** verifySubjectCode with allowUnknownProxy, so the worker decides about unknown proxies itself. */
   verifySubject(report: StandardCheckReport): Promise<SubjectCodeCheck>;
   attest(params: AttestParams): Promise<{ id: bigint; hash: Hex; gasCostWei: bigint }>;
+  /**
+   * The latest registry attestation of (subjectChainId, subject, standardId) when it is Valid and this worker
+   * issued it, else null. Lets a request be fulfilled with an attestation the worker already made (after a
+   * crash between attest and saving state, or for another request of the same subject) instead of attesting
+   * again.
+   */
+  latestOwnAttestation(subjectChainId: bigint, subject: Address, standardId: Hex): Promise<{ id: bigint; issuedAt: bigint } | null>;
   sleep(ms: number): Promise<void>;
   now(): Date;
 }
@@ -58,6 +68,12 @@ export interface WorkerConfig {
   maxTxFailures: number;
   /** Attest subjects whose proxy implementation is unknown instead of rejecting them (unknown-proxy). */
   allowUnknownProxy: boolean;
+  /**
+   * Most gas a reject may need. A requester whose receive function burns gas would make every refund
+   * expensive for the worker; above the cap the worker gives up and the requester refunds itself with
+   * refundExpired.
+   */
+  maxRejectGas: bigint;
 }
 
 export const DEFAULT_WORKER_CONFIG: WorkerConfig = {
@@ -66,6 +82,7 @@ export const DEFAULT_WORKER_CONFIG: WorkerConfig = {
   retryDelaysMs: [5_000, 20_000],
   maxTxFailures: 3,
   allowUnknownProxy: false,
+  maxRejectGas: 300_000n,
 };
 
 export type WorkerStep = 'precheck' | 'check' | 'identity' | 'save' | 'attest' | 'fulfill' | 'reject';
@@ -78,6 +95,7 @@ export type WorkerEvent =
   | { type: 'worker-fulfilled'; id: string; attestationId: string; txHash: Hex; gasCostWei: string }
   | { type: 'worker-rejected'; id: string; reason: RejectReason; detail: string; txHash: Hex; gasCostWei: string }
   | { type: 'worker-closed'; id: string; status: RequestStatusName }
+  | { type: 'worker-reused'; id: string; attestationId: string }
   | { type: 'worker-gave-up'; id: string; error: string }
   | { type: 'worker-error'; id: string; error: string }
   | { type: 'worker-pass-done'; cursor: string; fulfilled: string[]; rejected: string[]; open: string[] };
@@ -116,6 +134,31 @@ export function advanceCursor(cursor: bigint, count: bigint, closed: ReadonlySet
   let c = cursor;
   while (c < count && closed.has(c)) c++;
   return c;
+}
+
+/**
+ * Whether a failed transaction step counts toward maxTxFailures: a revert (a decoded contract error, or a
+ * transaction that reverted) does; an RPC outage, a rate limit or a receipt that did not arrive in time
+ * does not, so a short outage never turns into a refund.
+ */
+export function countsAsFailure(err: unknown): boolean {
+  if (isTransportFailure(err) || isRateLimited(err)) return false;
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  while (cur && typeof cur === 'object' && !seen.has(cur)) {
+    seen.add(cur);
+    const e = cur as { errorName?: unknown; name?: unknown; message?: unknown };
+    if (typeof e.errorName === 'string' && e.errorName) return true;
+    if (e.name === 'ContractFunctionRevertedError') return true;
+    if (typeof e.message === 'string' && /\breverted\b/.test(e.message)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/** An attestation this worker issued can deliver a request when it was issued at or after the request. */
+export function canDeliver(a: { issuedAt: bigint } | null, r: Pick<DeskRequest, 'requestedAt'>): boolean {
+  return a !== null && a.issuedAt >= r.requestedAt;
 }
 
 /** One line of an error, for status.json and events. */
@@ -166,8 +209,11 @@ export interface RunWorkerPassInput {
  * one at a time in id order and advances the cursor past every closed request. Per Pending request: screen
  * (standard, chain), pre-check the subject at latest - lag (no ERC-4626: reject not-erc4626), run the suite
  * (retries, then reject check-failed), save the report copy, check the identity on the subject chain, attest,
- * fulfill. A request whose step throws unexpectedly is recorded with its error and left for the next pass;
- * the pass itself only throws when the desk cannot be read at all.
+ * fulfill. Before checking and again before attesting, a Valid attestation this worker issued after the
+ * request is reused instead (so a crash between attest and saving state never attests twice). A request
+ * whose step throws unexpectedly is recorded with its error and retried in the next pass, and rejected with
+ * check-failed after maxTxFailures such passes; RPC outages never count. The pass itself only throws when the
+ * desk cannot be read at all.
  */
 export async function runWorkerPass(input: RunWorkerPassInput): Promise<WorkerPassResult> {
   const { effects, store } = input;
@@ -179,6 +225,12 @@ export async function runWorkerPass(input: RunWorkerPassInput): Promise<WorkerPa
   const count = await desk.requestCount();
   const start = BigInt(state.cursor);
   if (start > count) throw new Error(`state cursor ${start} is past requestCount ${count}; state.json does not belong to this desk`);
+  // Given-up requests below the cursor stay Pending until the requester refunds; notice when that happens.
+  for (const key of Object.keys(state.requests)) {
+    if (!state.requests[key]!.gaveUp || BigInt(key) >= start) continue;
+    const r = await desk.requestOf(BigInt(key));
+    if (r.status !== PENDING) observeClosed(BigInt(key), r, store, effects, emit);
+  }
   const seen: Array<{ id: bigint; request: DeskRequest }> = [];
   for (let id = start; id < count; id++) seen.push({ id, request: await desk.requestOf(id) });
 
@@ -221,6 +273,17 @@ export async function runWorkerPass(input: RunWorkerPassInput): Promise<WorkerPa
       const error = errorText(err);
       withStage(store.status, key, { error }, effects.now());
       emit({ type: 'worker-error', id: key, error });
+      // An error outside the transaction steps (a report that cannot be written, a broken file) would rerun
+      // the whole check every pass. After maxTxFailures such passes the request is rejected and refunded.
+      const entry = state.requests[key];
+      if (entry && countsAsUnexpected(err) && !entry.attestationId && !entry.reject) {
+        entry.failures += 1;
+        if (entry.failures >= config.maxTxFailures) {
+          entry.reject = 'check-failed';
+          entry.detail = `worker error ${entry.failures} passes in a row: ${error}`;
+          entry.failures = 0;
+        }
+      }
     }
     await store.save();
   }
@@ -231,6 +294,11 @@ export async function runWorkerPass(input: RunWorkerPassInput): Promise<WorkerPa
   const open = seen.filter((s) => s.id >= cursor && !closed.has(s.id)).map((s) => s.id);
   emit({ type: 'worker-pass-done', cursor: cursor.toString(), fulfilled: fulfilled.map(String), rejected: rejected.map(String), open: open.map(String) });
   return { cursor, fulfilled, rejected, open };
+}
+
+/** Errors thrown out of a request that are not RPC outages or rate limits. */
+function countsAsUnexpected(err: unknown): boolean {
+  return !(isTransportFailure(err) || isRateLimited(err));
 }
 
 /** A request closed by someone else (refundExpired) or by a transaction whose result the worker did not record. */
@@ -253,7 +321,7 @@ interface Ctx {
   emit: (e: WorkerEvent) => void;
 }
 
-type Outcome = 'fulfilled' | 'rejected' | 'gave-up' | 'open';
+type Outcome = 'fulfilled' | 'rejected' | 'gave-up' | 'closed' | 'open';
 
 async function processRequest(id: bigint, r: DeskRequest, ctx: Ctx): Promise<Outcome> {
   const { effects, store, config, emit } = ctx;
@@ -266,6 +334,14 @@ async function processRequest(id: bigint, r: DeskRequest, ctx: Ctx): Promise<Out
 
   if (entry.reject) return doReject(id, entry, ctx);
   if (entry.attestationId) return doFulfill(id, entry, ctx);
+
+  const screen = screenRequest(r, effects.subjectChainId);
+  if (!screen.ok) {
+    stage('prechecking');
+    return decideReject(id, entry, screen.reason, screen.detail, ctx);
+  }
+  // An attestation this worker already made after the request delivers it: no second check or attest.
+  if (await reuseOwnAttestation(id, r, entry, ctx)) return doFulfill(id, entry, ctx);
 
   let report: StandardCheckReport | undefined;
   if (entry.reportPath && entry.reportURI) {
@@ -282,8 +358,6 @@ async function processRequest(id: bigint, r: DeskRequest, ctx: Ctx): Promise<Out
 
   if (!report) {
     stage('prechecking');
-    const screen = screenRequest(r, effects.subjectChainId);
-    if (!screen.ok) return decideReject(id, entry, screen.reason, screen.detail, ctx);
     const pre = await withRetries(ctx, key, 'precheck', async () => {
       const block = checkBlockOf(await effects.latestSubjectBlock(), config.blockLag);
       return { block, result: await effects.precheck(r.subject, block) };
@@ -318,6 +392,13 @@ async function processRequest(id: bigint, r: DeskRequest, ctx: Ctx): Promise<Out
     if (err instanceof AttestationError) return decideReject(id, entry, 'check-failed', `report: ${err.message}`, ctx);
     throw err;
   }
+  // The check took minutes: do not attest for a request that was refunded meanwhile, and do not attest twice.
+  const fresh = await effects.desk.requestOf(id);
+  if (fresh.status !== PENDING) {
+    observeClosed(id, fresh, store, effects, emit);
+    return 'closed';
+  }
+  if (await reuseOwnAttestation(id, r, entry, ctx)) return doFulfill(id, entry, ctx);
   let attested;
   try {
     attested = await effects.attest(params);
@@ -333,6 +414,20 @@ async function processRequest(id: bigint, r: DeskRequest, ctx: Ctx): Promise<Out
   return doFulfill(id, entry, ctx);
 }
 
+/** Records a Valid attestation of this worker, issued at or after the request, as the request's delivery. */
+async function reuseOwnAttestation(id: bigint, r: DeskRequest, entry: WorkerStateEntry, ctx: Ctx): Promise<boolean> {
+  const own = await ctx.effects.latestOwnAttestation(r.subjectChainId, r.subject, r.standardId);
+  if (!own || !canDeliver(own, r)) return false;
+  const key = String(id);
+  entry.attestationId = own.id.toString();
+  entry.failures = 0;
+  withStage(ctx.store.status, key, { stage: 'fulfilling', attestationId: entry.attestationId, error: undefined }, ctx.effects.now());
+  ctx.emit({ type: 'worker-reused', id: key, attestationId: entry.attestationId });
+  ctx.emit({ type: 'worker-stage', id: key, stage: 'fulfilling', attestationId: entry.attestationId });
+  await ctx.store.save();
+  return true;
+}
+
 function pickEventFields(extra: Partial<WorkerRequestStatus>): { block?: string; reportPath?: string } {
   return {
     ...(extra.block !== undefined ? { block: extra.block } : {}),
@@ -340,13 +435,18 @@ function pickEventFields(extra: Partial<WorkerRequestStatus>): { block?: string;
   };
 }
 
-/** Counts a failed transaction step; true once it has failed maxTxFailures passes in a row. */
+/**
+ * Records a failed transaction step; true once it has failed maxTxFailures passes in a row. Only reverts
+ * count (countsAsFailure): an RPC outage is retried in the next pass without moving toward a refund.
+ */
 function stepFailed(id: bigint, entry: WorkerStateEntry, step: WorkerStep, err: unknown, ctx: Ctx): boolean {
-  entry.failures += 1;
+  const counted = countsAsFailure(err);
+  if (counted) entry.failures += 1;
   const error = errorText(err);
-  withStage(ctx.store.status, String(id), { error: `${step} failed (${entry.failures} of ${ctx.config.maxTxFailures}): ${error}` }, ctx.effects.now());
+  const note = counted ? `${entry.failures} of ${ctx.config.maxTxFailures}` : 'not counted, RPC';
+  withStage(ctx.store.status, String(id), { error: `${step} failed (${note}): ${error}` }, ctx.effects.now());
   ctx.emit({ type: 'worker-step-failed', id: String(id), step, failures: entry.failures, error });
-  return entry.failures >= ctx.config.maxTxFailures;
+  return counted && entry.failures >= ctx.config.maxTxFailures;
 }
 
 async function doFulfill(id: bigint, entry: WorkerStateEntry, ctx: Ctx): Promise<Outcome> {
@@ -378,11 +478,14 @@ async function doReject(id: bigint, entry: WorkerStateEntry, ctx: Ctx): Promise<
   const detail = entry.detail ?? '';
   let tx: DeskTx;
   try {
-    tx = await ctx.effects.desk.reject(id, reason);
+    tx = await ctx.effects.desk.reject(id, reason, { maxGas: ctx.config.maxRejectGas });
   } catch (err) {
-    if (stepFailed(id, entry, 'reject', err, ctx)) {
+    const capped = (err as { errorName?: string }).errorName === GAS_CAP_EXCEEDED;
+    if (capped || stepFailed(id, entry, 'reject', err, ctx)) {
       entry.gaveUp = true;
-      const error = `gave up after ${entry.failures} failed rejects (${errorText(err)}); the requester can call refundExpired after the timeout`;
+      const error = capped
+        ? `gave up: ${errorText(err)}; the requester can call refundExpired after the timeout`
+        : `gave up after ${entry.failures} failed rejects (${errorText(err)}); the requester can call refundExpired after the timeout`;
       withStage(ctx.store.status, key, { error }, ctx.effects.now());
       ctx.emit({ type: 'worker-gave-up', id: key, error });
       return 'gave-up';
@@ -421,10 +524,32 @@ const erc4626ProbeAbi = [
   { type: 'function', name: 'totalAssets', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
 ] as const;
 
+const CONTRACT_ANSWER_ERRORS = new Set([
+  'ContractFunctionRevertedError',
+  'ContractFunctionZeroDataError',
+  'AbiDecodingZeroDataError',
+  'AbiDecodingDataSizeTooSmallError',
+  'InvalidAddressError',
+]);
+
+/** True when a read failed because of what the contract returned, not because of the RPC. */
+export function isContractAnswer(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  while (cur && typeof cur === 'object' && !seen.has(cur)) {
+    seen.add(cur);
+    const name = (cur as { name?: unknown }).name;
+    if (typeof name === 'string' && CONTRACT_ANSWER_ERRORS.has(name)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 /**
  * Pre-check before paying for a suite run: the subject has code at `blockNumber`, and asset() answers a
- * non-zero address and totalAssets() answers, both at that block. A call that reverts or returns nothing
- * means not a vault ({ ok: false }); a transport failure or rate limit is thrown so the caller retries.
+ * non-zero address and totalAssets() answers, both at that block. A call that reverts, returns nothing or
+ * returns data that does not decode means not a vault ({ ok: false }); any other error (transport, rate
+ * limit, a node error) is thrown so the caller retries.
  */
 export async function precheckErc4626(client: Pick<PublicClient, 'getCode' | 'readContract'>, address: Address, blockNumber: bigint): Promise<Erc4626Precheck> {
   const code = await client.getCode({ address, blockNumber });
@@ -433,8 +558,10 @@ export async function precheckErc4626(client: Pick<PublicClient, 'getCode' | 're
     try {
       return { value: (await client.readContract({ address, abi: erc4626ProbeAbi, functionName, blockNumber })) as T };
     } catch (err) {
-      if (isTransportFailure(err) || isRateLimited(err)) throw err;
-      return { error: errorText(err) };
+      // Only an answer from the contract (a revert, no data, data that does not decode) means "not a vault".
+      // Anything else, a node error such as "missing trie node" included, is thrown so the caller retries.
+      if (isContractAnswer(err)) return { error: errorText(err) };
+      throw err;
     }
   };
   const asset = await call<Address>('asset');
@@ -448,7 +575,9 @@ export async function precheckErc4626(client: Pick<PublicClient, 'getCode' | 're
 export interface LiveWorkerEffectsInput {
   desk: WorkerDesk;
   /** Registry client with the worker's wallet (the worker must be an issuer). */
-  registry: Pick<AttestationRegistryClient, 'attest'>;
+  registry: Pick<AttestationRegistryClient, 'attest' | 'latest'>;
+  /** The worker's address: only its own attestations are reused. */
+  workerAddress: Address;
   subjectClient: StandardCheckClient & SubjectClient;
   subjectChainId: number;
   /** RPC forge forks from; the same node subjectClient reads. */
@@ -507,6 +636,13 @@ export function liveWorkerEffects(i: LiveWorkerEffectsInput): WorkerEffects {
     attest: async (params) => {
       const out = await i.registry.attest(params);
       return { id: out.id, hash: out.hash, gasCostWei: out.gasUsed * out.effectiveGasPrice };
+    },
+    latestOwnAttestation: async (subjectChainId, subject, standardId) => {
+      const latest = await i.registry.latest(subjectChainId, subject, standardId);
+      if (!latest) return null;
+      const a = latest.attestation;
+      if (ATTESTATION_STATUS[a.status] !== 'Valid' || a.issuer.toLowerCase() !== i.workerAddress.toLowerCase()) return null;
+      return { id: latest.id, issuedAt: a.issuedAt };
     },
     sleep: i.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
     now: i.now ?? (() => new Date()),

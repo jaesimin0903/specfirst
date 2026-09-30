@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { REJECT_REASONS, workerStatusSchema, workerTotalsOf, type WorkerStatus } from './index.js';
@@ -9,6 +9,8 @@ import { REJECT_REASONS, workerStatusSchema, workerTotalsOf, type WorkerStatus }
 export const WORKER_DIR = '.specfirst/worker';
 export const WORKER_STATE_JSON = 'state.json';
 export const WORKER_STATUS_JSON = 'status.json';
+/** Holds the pid of the running worker, so two workers never serve one project directory at once. */
+export const WORKER_LOCK = 'worker.lock';
 
 export class WorkerError extends Error {
   constructor(message: string) {
@@ -132,4 +134,45 @@ export class WorkerStore {
     }
     return new WorkerStore(dir, state, status);
   }
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Takes `<projectDir>/.specfirst/worker/worker.lock` (created exclusively, holding the pid). A lock whose
+ * pid is still alive refuses the start: two workers on one state directory would attest twice and race on
+ * nonces. A lock left by a process that is gone is taken over. Returns the release function.
+ */
+export async function acquireWorkerLock(
+  projectDir: string,
+  opts: { pid?: number; isAlive?: (pid: number) => boolean } = {},
+): Promise<() => Promise<void>> {
+  const pid = opts.pid ?? process.pid;
+  const isAlive = opts.isAlive ?? pidAlive;
+  const file = path.join(projectDir, WORKER_DIR, WORKER_LOCK);
+  await mkdir(path.dirname(file), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await writeFile(file, `${pid}\n`, { flag: 'wx' });
+      return async () => {
+        const holder = await readFile(file, 'utf8').catch(() => '');
+        if (holder.trim() === String(pid)) await rm(file, { force: true });
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      const other = Number((await readFile(file, 'utf8').catch(() => '')).trim());
+      if (Number.isSafeInteger(other) && other > 0 && other !== pid && isAlive(other)) {
+        throw new WorkerError(`another worker (pid ${other}) is running on ${path.dirname(file)}; stop it first, or remove ${file} if that pid is not a worker`);
+      }
+      await rm(file, { force: true });
+    }
+  }
+  throw new WorkerError(`could not take ${file}`);
 }

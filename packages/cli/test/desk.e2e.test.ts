@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -165,8 +165,9 @@ describe.skipIf(SKIP_ANVIL)('specfirst desk and worker on anvil', { timeout: 300
     process.env.SPECFIRST_DESK_31337 = desk;
 
     const other = privateKeyToAccount(STRANGER_KEY).address;
-    const warned = await cli('desk', 'deploy', '--network', 'anvil', '--worker', other);
+    const warned = await cli('desk', 'deploy', '--network', 'anvil', '--worker', other, '--fee', '0');
     expect(warned.code).toBe(0);
+    expect(warned.err).toMatch(/warning: the fee is 0: anyone can queue checks for free/);
     expect(warned.err).toMatch(new RegExp(`warning: worker ${other} is not an issuer of ${registry}`));
     expect(warned.err).toMatch(/--worker .* is not the address of ISSUER_PRIVATE_KEY/);
   });
@@ -311,6 +312,15 @@ describe.skipIf(SKIP_ANVIL)('specfirst desk and worker on anvil', { timeout: 300
     expect(mismatch.err).toMatch(new RegExp(`state.json belongs to desk ${desk.toLowerCase()} on chain 31337, not ${otherDesk.toLowerCase()}`));
   });
 
+  it('a second worker on the same project directory is refused while the first is alive', async () => {
+    const lock = path.join(dir, '.specfirst/worker/worker.lock');
+    await writeFile(lock, `${process.ppid}\n`);
+    const r = await worker();
+    expect(r.code).toBe(18);
+    expect(r.err).toMatch(new RegExp(`another worker \\(pid ${process.ppid}\\) is running`));
+    await rm(lock);
+  });
+
   it('human output: a pending request is worked through to fulfilled', async () => {
     process.exitCode = undefined;
     const r = await capture(() =>
@@ -324,5 +334,6 @@ describe.skipIf(SKIP_ANVIL)('specfirst desk and worker on anvil', { timeout: 300
     expect(out).toMatch(/#4 fulfilled {2}attestation \d+/);
     expect(REQUEST_STATUS[(await deskClient().requestOf(4n)).status]).toBe('Fulfilled');
     expect((await status()).totals).toMatchObject({ fulfilled: 2, rejected: 2 });
+    expect(existsSync(path.join(dir, '.specfirst/worker/worker.lock'))).toBe(false);
   });
 });
