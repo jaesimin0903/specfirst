@@ -343,7 +343,9 @@ describe.skipIf(SKIP_ANVIL)('specfirst cert attest on anvil', { timeout: 300_000
     try {
       await clients.publicClient.request({ method: 'anvil_mine' as never, params: ['0x1'] as never });
       const now = await clients.publicClient.getBlockNumber({ cacheTime: 0 });
-      const { rel, report } = await reportFor('morpho-143-109061472.json', { block: now });
+      // A schemaVersion 2 report (with vaultKind) goes through like a version 1 report.
+      const { rel, report } = await reportFor('morpho-v2-143-109061472.json', { block: now });
+      expect(report).toMatchObject({ schemaVersion: 2, vaultKind: 'erc4626' });
       const before = await reg().attestationCount();
       const r = await cli('cert', 'attest', rel, '--network', 'anvil', '--rpc', proxy.url);
       expect(r.code).toBe(0);

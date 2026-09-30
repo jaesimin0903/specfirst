@@ -31,6 +31,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const text = (name: string) => readFileSync(path.join(here, 'fixtures/attest', name), 'utf8');
 const UPSHIFT = 'upshift-143-109061472.json';
 const MORPHO = 'morpho-143-109061472.json';
+/** The Morpho report as schemaVersion 2 (`vaultKind: "erc4626"` after `standard`), otherwise unchanged. */
+const MORPHO_V2 = 'morpho-v2-143-109061472.json';
 /** Morpho report with a non-ASCII revert string, a U+2028 and a control character in one fail reason. */
 const NON_ASCII = 'nonascii-revert-143-109061472.json';
 /** Computed with viem here, with abi.encode in CheckAttestationRegistry.t.sol and with `cast abi-encode`; all must agree. */
@@ -86,6 +88,36 @@ describe('attestation parameters from real check reports (Monad block 109061472)
       maxTestRejects: 4096n,
       delta: 0n,
     });
+  });
+
+  it('accepts schemaVersion 2 reports with vaultKind: same suite, own reportHash; version 2 without vaultKind is refused', () => {
+    const v1 = parseCheckReport(text(MORPHO));
+    const v2 = parseCheckReport(text(MORPHO_V2));
+    expect(v2).toMatchObject({ schemaVersion: 2, vaultKind: 'erc4626' });
+    const p1 = attestationParamsFromReport(v1, { reportURI: 'u' });
+    const p2 = attestationParamsFromReport(v2, { reportURI: 'u' });
+    // vaultKind is a report value, not a suite input: suiteHash stays, reportHash changes.
+    expect(p2.suiteHash).toBe(MORPHO_SUITE_HASH);
+    expect(p2.reportHash).toBe(keccak256(toHex(canonicalJson(JSON.parse(text(MORPHO_V2))))));
+    expect(p2.reportHash).not.toBe(p1.reportHash);
+    expect({ ...p2, reportHash: p1.reportHash }).toEqual(p1);
+    // An ERC-7575 vault: forge does not run, all 30 properties not_applicable, forgeVersion null.
+    const raw = JSON.parse(text(MORPHO_V2)) as StandardCheckReport;
+    const skipped = parseCheckReport(
+      JSON.stringify({
+        ...raw,
+        vaultKind: 'erc7575',
+        seed: null,
+        sender: null,
+        toolchain: { ...raw.toolchain, forgeVersion: null },
+        results: raw.results.map(({ id, test, description }) => ({ id, test, description, status: 'not_applicable', reason: 'share() is a separate token' })),
+        summary: { pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 },
+      }),
+    );
+    expect(attestationParamsFromReport(skipped, { reportURI: 'u' })).toMatchObject({ passCount: 0, notApplicableCount: 30, passedBitmap: 0n, failedBitmap: 0n });
+    expect(suiteOf(skipped).forgeVersion).toBe('');
+    expect(() => parseCheckReport(JSON.stringify({ ...raw, vaultKind: undefined }))).toThrow(/vaultKind: vaultKind is required from schemaVersion 2 on/);
+    expect(() => parseCheckReport(JSON.stringify({ ...raw, schemaVersion: 1 }))).toThrow(/vaultKind does not exist in schemaVersion 1/);
   });
 
   it('standardId is keccak256 of the standard name; propertiesHash is the canonical JSON of the property table', () => {
