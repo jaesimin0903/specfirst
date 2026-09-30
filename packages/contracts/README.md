@@ -1,7 +1,8 @@
 # @specfirst/contracts
 
 Foundry project for `CertificateRegistry.sol`, the onchain certificate registry described in
-`docs/plan.md` section 3.4. Tests follow section 6.1.
+`docs/plan.md` section 3.4 (tests follow section 6.1), and `CheckAttestationRegistry.sol`, which records
+`specfirst check` results for contracts on any chain (docs/adr/0004).
 
 ## Layout
 
@@ -11,6 +12,8 @@ Foundry project for `CertificateRegistry.sol`, the onchain certificate registry 
 | `test/CertificateRegistry.t.sol` | Unit tests for every 6.1 case |
 | `test/CertificateRegistry.invariant.t.sol` | Handler based invariant tests |
 | `script/Deploy.s.sol` | Deploys the registry and allows the deployer as issuer |
+| `src/CheckAttestationRegistry.sol` | Check attestations: attest, supersede per (subjectChainId, subject), revoke, isCompliant, suiteHashOf |
+| `test/CheckAttestationRegistry.t.sol` | Unit and fuzz tests: permissions, validation, bitmaps, supersede, revoke, isCompliant, suiteHash vector, no external calls |
 | `lib/forge-std` | forge-std v1.16.2, vendored as plain files (no submodule) |
 
 ## Commands
@@ -26,6 +29,11 @@ forge script script/Deploy.s.sol --rpc-url $RPC_URL --private-key $PK --broadcas
 `foundry.toml` pins solc 0.8.28 with the optimizer on, and sets `no_match_coverage` so coverage
 counts `src/` only. Invariant runs use `fail_on_revert = true`: the handler never reverts except
 through the expected `PartialCannotSupersede` path, which it catches and counts.
+
+CheckAttestationRegistry is deployed with `specfirst attest-registry deploy`, not with a forge script: the
+CLI sends from a guarded wallet that refuses mainnet and checks the RPC chain id before sending.
+`packages/core/src/attest/artifact.ts` bundles its ABI and creation code; regenerate it with
+`node packages/core/scripts/gen-attest-artifact.mjs` after `forge build` whenever the contract changes.
 
 ## Results (2026-09-29, forge 1.5.1)
 
@@ -59,3 +67,19 @@ across 4 targets and 3 projectIds):
   `isCertifiedWith` and `isLatest` return false in that case.
 - `setIssuer` rejects the zero address. The owner is the deployer and is immutable; the owner is
   not an issuer until `setIssuer` is called, which the deploy script does.
+
+## CheckAttestationRegistry results (2026-09-30, forge 1.5.1)
+
+| Check | Result |
+|---|---|
+| `forge test --match-contract CheckAttestationRegistryTest` | 21 passed, 0 failed (20 unit, 1 fuzz with 256 runs) |
+| `forge coverage --report summary` | `src/CheckAttestationRegistry.sol` lines 100% (90/90), statements 100% (120/120), branches 100% (20/20), functions 100% (17/17) |
+
+- An attestation id is the zero based index of a global list; `latest` resolves the newest id of a
+  (subjectChainId, subject) pair. A new attestation supersedes the previous one of the same pair when it is
+  Valid, and may not be for an earlier block than it.
+- The subject is not required to have code on the registry's chain; its code hash is reported by the issuer.
+- `isCompliant` is true only for a Valid latest attestation with pass > 0 and no fail, inconclusive or
+  not applicable result. A revoked latest attestation does not fall back to an older one.
+- The runtime code holds no CALL, CALLCODE, DELEGATECALL or STATICCALL (a test walks the bytecode), so the
+  registry needs no reentrancy guard.
