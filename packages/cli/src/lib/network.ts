@@ -6,6 +6,7 @@ import {
   isWriteForbidden,
   MONAD_MAINNET_CHAIN_ID,
   MONAD_MAINNET_DEFAULT_RPC,
+  MONAD_TESTNET_CHAIN_ID,
   MONAD_TESTNET_DEFAULT_RPC,
   type ChainClients,
 } from '@specfirst/core';
@@ -23,6 +24,11 @@ export const ANVIL_RPC_ENV = 'ANVIL_RPC';
 
 export function registryEnvVar(chainId: number): string {
   return `SPECFIRST_REGISTRY_${chainId}`;
+}
+
+/** CheckAttestationRegistry address for the chain the registry lives on. */
+export function attestRegistryEnvVar(chainId: number): string {
+  return `SPECFIRST_ATTEST_REGISTRY_${chainId}`;
 }
 
 export interface NetworkOptions {
@@ -51,7 +57,7 @@ function list(v: string | undefined): string[] {
 }
 
 export interface ResolveMode {
-  /** Only commands that never send a transaction (check) pass true; it unlocks monad-mainnet. */
+  /** Only commands that never send a transaction (check, cert attestation) pass true; it unlocks monad-mainnet. */
   readOnly?: boolean;
 }
 
@@ -64,7 +70,7 @@ export function resolveNetwork(opts: NetworkOptions, env: NodeJS.ProcessEnv = pr
   const name = opts.network ?? 'monad-testnet';
   const chain = chainFor(name);
   if (isWriteForbidden(chain.id) && !mode.readOnly) {
-    throw new ConfigError(`--network ${name} is read-only: this command sends transactions; only \`specfirst check\` may use ${name}`);
+    throw new ConfigError(`--network ${name} is read-only: this command sends transactions; only read-only commands (check, cert attestation) may use ${name}`);
   }
   let urls: string[];
   if (chain.id === ANVIL_CHAIN_ID) {
@@ -101,4 +107,25 @@ export function resolveRegistry(net: ResolvedNetwork, opts: NetworkOptions, env:
     throw new ConfigError(`no CertificateRegistry address: set ${envName} or pass --registry <address>`);
   }
   return v as Address;
+}
+
+export function resolveAttestRegistry(net: ResolvedNetwork, opts: { registryAttest?: string }, env: NodeJS.ProcessEnv = process.env): Address {
+  const envName = attestRegistryEnvVar(net.clients.chain.id);
+  const v = opts.registryAttest ?? env[envName];
+  if (!v || !/^0x[0-9a-fA-F]{40}$/.test(v)) {
+    throw new ConfigError(`no CheckAttestationRegistry address: set ${envName} or pass --registry-attest <address>`);
+  }
+  return v as Address;
+}
+
+/**
+ * Read-only RPC for the chain a check report is about: --subject-rpc, else the usual env variable and
+ * public default of that chain. The subject chain is never written to, so monad-mainnet is fine here.
+ */
+export function subjectRpcFor(chainId: number, subjectRpc: string | undefined, env: NodeJS.ProcessEnv = process.env): string {
+  if (subjectRpc) return subjectRpc;
+  if (chainId === MONAD_MAINNET_CHAIN_ID) return env[MONAD_MAINNET_RPC_ENV] ?? MONAD_MAINNET_DEFAULT_RPC;
+  if (chainId === MONAD_TESTNET_CHAIN_ID) return env[MONAD_RPC_ENV] ?? MONAD_TESTNET_DEFAULT_RPC;
+  if (chainId === ANVIL_CHAIN_ID) return env[ANVIL_RPC_ENV] ?? ANVIL_DEFAULT_RPC;
+  throw new ConfigError(`no default RPC for chain ${chainId}; pass --subject-rpc <url>`);
 }

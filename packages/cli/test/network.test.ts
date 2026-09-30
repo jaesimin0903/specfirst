@@ -2,11 +2,12 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { registerAttestRegistryCommand } from '../src/commands/attest.js';
 import { registerCertCommand } from '../src/commands/cert.js';
 import { registerDeployCommand } from '../src/commands/deploy.js';
 import { registerRunCommand } from '../src/commands/run.js';
 import { registerVerifyCommand } from '../src/commands/verify.js';
-import { ConfigError, MONAD_MAINNET_RPC_ENV, resolveNetwork } from '../src/lib/network.js';
+import { ConfigError, MONAD_MAINNET_RPC_ENV, resolveAttestRegistry, resolveNetwork, subjectRpcFor } from '../src/lib/network.js';
 import { capture } from './helpers/capture.js';
 import { buildProgram } from './helpers/program.js';
 import { SAMPLE_DIR } from './helpers/sampleRepo.js';
@@ -30,6 +31,23 @@ describe('resolveNetwork', () => {
     expect(resolveNetwork({ network: 'monad-mainnet', rpc: 'https://flag.example' }, { [MONAD_MAINNET_RPC_ENV]: 'https://m.example' }, { readOnly: true }).forkUrl).toBe('https://flag.example');
     // The testnet env var never leaks into mainnet.
     expect(resolveNetwork({ network: 'monad-mainnet' }, { MONAD_TESTNET_RPC: 'https://t.example' }, { readOnly: true }).forkUrl).toBe('https://rpc.monad.xyz');
+  });
+
+  it('subject chain RPC for attestations: --subject-rpc, then the chain env variable, then the public default', () => {
+    expect(subjectRpcFor(143, undefined, {})).toBe('https://rpc.monad.xyz');
+    expect(subjectRpcFor(143, undefined, { [MONAD_MAINNET_RPC_ENV]: 'https://m.example' })).toBe('https://m.example');
+    expect(subjectRpcFor(10143, undefined, {})).toBe('https://testnet-rpc.monad.xyz');
+    expect(subjectRpcFor(31337, undefined, { ANVIL_RPC: 'http://127.0.0.1:9' })).toBe('http://127.0.0.1:9');
+    expect(subjectRpcFor(1, 'https://eth.example', {})).toBe('https://eth.example');
+    expect(() => subjectRpcFor(1, undefined, {})).toThrow(/no default RPC for chain 1; pass --subject-rpc/);
+  });
+
+  it('attestation registry address: --registry-attest, then SPECFIRST_ATTEST_REGISTRY_<chainId>', () => {
+    const net = resolveNetwork({ network: 'anvil' }, {});
+    const a = '0x5FbDB2315678afecb367f032d93F642f64180aa3';
+    expect(resolveAttestRegistry(net, { registryAttest: a }, {})).toBe(a);
+    expect(resolveAttestRegistry(net, {}, { SPECFIRST_ATTEST_REGISTRY_31337: a })).toBe(a);
+    expect(() => resolveAttestRegistry(net, {}, { SPECFIRST_REGISTRY_31337: a })).toThrow(/set SPECFIRST_ATTEST_REGISTRY_31337 or pass --registry-attest/);
   });
 
   it('testnet and anvil are unchanged', () => {
@@ -101,6 +119,19 @@ describe('transaction-sending commands refuse monad-mainnet', () => {
     const revoke = await cli(registerCertCommand, 'cert', 'revoke', TARGET, '--evidence', 'evidence.json', '--network', 'monad-mainnet');
     expect(revoke).toMatchObject({ code: 14 });
     expect(revoke.err).toMatch(refused);
+  });
+
+  it('attest-registry deploy exits 12; cert attest and cert revoke-attestation exit 14', async () => {
+    const dep = await cli(registerAttestRegistryCommand, 'attest-registry', 'deploy', '--network', 'monad-mainnet');
+    expect(dep).toMatchObject({ code: 12 });
+    expect(dep.err).toMatch(refused);
+    await copyFile(path.join(SAMPLE_DIR, '..', '..', 'packages/core/test/fixtures/attest/morpho-143-109061472.json'), path.join(dir, 'report.json'));
+    const att = await cli(registerCertCommand, 'cert', 'attest', 'report.json', '--network', 'monad-mainnet', '--registry-attest', TARGET);
+    expect(att).toMatchObject({ code: 14 });
+    expect(att.err).toMatch(refused);
+    const rev = await cli(registerCertCommand, 'cert', 'revoke-attestation', '0', '--evidence', 'evidence.json', '--network', 'monad-mainnet', '--registry-attest', TARGET);
+    expect(rev).toMatchObject({ code: 14 });
+    expect(rev.err).toMatch(refused);
   });
 
   it('run with its deploy pipeline exits 12 before the loop starts', async () => {

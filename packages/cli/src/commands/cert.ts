@@ -10,6 +10,7 @@ import { ConfigError, ISSUER_KEY_ENV, resolveKey, resolveNetwork, resolveRegistr
 import { issueStage, loadRun, StageError } from '../lib/pipeline.js';
 import { cont, stage } from '../lib/runLog.js';
 import { runStage } from '../lib/stageRunner.js';
+import { registerAttestCommands } from './attest.js';
 
 interface IssueOptions extends NetworkOptions {
   run: string;
@@ -44,7 +45,8 @@ export function checkEvidence(v: Partial<VerifyRecord>, chainId: number, target:
 
 /** `specfirst cert issue --run <id>` and `specfirst cert revoke <address> --evidence <verify.json>`. Exit 0 or 14. */
 export function registerCertCommand(program: Command): void {
-  const cert = program.command('cert').description('Issue or revoke on-chain certificates.');
+  const cert = program.command('cert').description('Issue or revoke on-chain certificates, and attest check reports.');
+  registerAttestCommands(cert);
 
   networkOptions(
     cert

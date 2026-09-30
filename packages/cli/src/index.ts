@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { registerAttestRegistryCommand } from './commands/attest.js';
 import { registerCertCommand } from './commands/cert.js';
 import { registerCheckCommand } from './commands/check.js';
 import { registerDeployCommand } from './commands/deploy.js';
@@ -26,5 +27,6 @@ registerVerifyCommand(program);
 registerCertCommand(program);
 registerStatusCommand(program);
 registerCheckCommand(program);
+registerAttestRegistryCommand(program);
 
 await program.parseAsync(process.argv);
