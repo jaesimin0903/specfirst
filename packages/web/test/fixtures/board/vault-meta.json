@@ -1,0 +1,11 @@
+{
+  "143": {
+    "0x024c304307cd4aa63c28c082512c87c0452c9614": { "protocol": "Morpho Vault V2", "assetSymbol": "AUSD", "name": "Hyperithm AUSD Degen" },
+    "0x082c62088669facc1fa9f056c5efc8cbccda39b2": { "protocol": "Centrifuge V3", "assetSymbol": "USDC", "name": "ACRDX USDC Vault" },
+    "0x0f9ba9d0f2f9289efbc2b8505932b458c3cdcf64": { "protocol": "Euler EVK (eVault)", "assetSymbol": "USDC", "name": null },
+    "0x802c91d807a8daca257c4708ab264b6520964e44": { "protocol": "Morpho MetaMorpho V1.1", "assetSymbol": "USDC", "name": "Steakhouse High Yield USDC" },
+    "0xd793c04b87386a6bb84ee61d98e0065fde7fda5e": { "protocol": "Upshift", "assetSymbol": "AUSD", "name": "earnAUSD" },
+    "0xd8ec5b4917fef9058545e7d1dc2ac17f1d26305d": { "protocol": "Euler EVK (eVault)", "assetSymbol": "vUSD", "name": "EVK Vault evUSD-2" },
+    "0x9999999999999999999999999999999999999999": { "protocol": "Somewhere", "assetSymbol": "X", "name": "Known but never checked" }
+  }
+}

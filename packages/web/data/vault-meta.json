@@ -1,0 +1,1429 @@
+{
+  "143": {
+    "0x024c304307cd4aa63c28c082512c87c0452c9614": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Hyperithm AUSD Degen"
+    },
+    "0x02f1aa23674fc1a63f5fc139cb940df7509c7a20": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Test Vault"
+    },
+    "0x048e7f7857c5297cd7623244bbb4fae65936996a": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-9"
+    },
+    "0x06047833d9aac144f7f4e9b8234d2c7dda1a8baf": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-17"
+    },
+    "0x0606700da427f04dd698b61d1307fc54493d90ad": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-13"
+    },
+    "0x062187c4b08b66affa11188f6d044000381e1ef7": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-1"
+    },
+    "0x0629079413a08ef7fc9ec01937b35ebe82089372": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Re Ecosystem Vault"
+    },
+    "0x0709be7bb77b25e398ccfd518770c0bae31a38df": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-8"
+    },
+    "0x07fa52372d775f0d017b6ceceeee834b44e35f9d": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Autovault (A)"
+    },
+    "0x08139339dd9a480ceb84d9c7cce48be436db20b3": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "sMON",
+      "name": "Wrapped Neverland sMON"
+    },
+    "0x082c62088669facc1fa9f056c5efc8cbccda39b2": {
+      "protocol": "Centrifuge V3",
+      "assetSymbol": "USDC",
+      "name": "ACRDX USDC Vault (Anemoy Tokenized Apollo Diversified Credit Fund)"
+    },
+    "0x08bbe222b6ea4f443ba011d2d2e0cede2b8b2778": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "K3 USDC"
+    },
+    "0x091298d908a216cfca30729db2b194fe5f1d16be": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "XAUt0",
+      "name": "EVK Vault eXAUt0-4"
+    },
+    "0x0c4a4cceb011d45c321004833449d6509b7c81ee": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": null,
+      "name": "EVK Vault eUNDEFINED-3"
+    },
+    "0x0cc3f1d9c5a8f9941dd78b872be62402344a0d2f": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "TEST",
+      "name": "Test Vault"
+    },
+    "0x0d2dd4b4e3527bcc65cab3dbd05b24c5f61be59f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "syzUSD",
+      "name": "EVK Vault esyzUSD-1"
+    },
+    "0x0e7950b089b1c4600617e641c407ef3cd15bab64": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "AUSD",
+      "name": "Grove x Steakhouse Prime AUSD"
+    },
+    "0x0ed3615ff949c8a34d15441970900e849a3409fc": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Unified Labs USDC RWA"
+    },
+    "0x0f6f5a8272a4da23e458aabcbce6382c5cdc6b77": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "cbBTC",
+      "name": "Steakhouse High Yield cbBTC"
+    },
+    "0x0f73ca48453d58d5fbb135ad9707a33c1a97a486": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "'\"><img/src=x>X",
+      "name": "testXX"
+    },
+    "0x0f9ba9d0f2f9289efbc2b8505932b458c3cdcf64": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-20"
+    },
+    "0x0fced51b526bfa5619f83d97b54a57e3327eb183": {
+      "protocol": "Curvance",
+      "assetSymbol": "WMON",
+      "name": "Curvance Wrapped MON"
+    },
+    "0x139e4c4d0fbec5576c3c96ed59eaf0661cf40f65": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "eUSD",
+      "name": "EVK Vault eeUSD-1"
+    },
+    "0x14275293cd581cd2e3fd881d14526feb2323dcc9": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "SharpByte AUSD High Yield"
+    },
+    "0x144290085da25e3078425c6f4a477fd8cab0c43e": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "FXRP",
+      "name": "EVK Vault eFXRP-1"
+    },
+    "0x1475d3da9ca6a3aa14f76b7f5e9da0d0bcf1b2f9": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-12"
+    },
+    "0x1667c811e392f33bc6c48b88d15cfa28a05e5563": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-3"
+    },
+    "0x175831af06c30f2ea5ea1e3f5eba207735eb9f92": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wnLOAZND-AZND-wnAUSD",
+      "name": "EVK Vault ewnLOAZND-AZND-wnAUSD-1"
+    },
+    "0x1874f82ac9ef2bd5603cc946cb6f3bcb9dd2d66f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "LBTC",
+      "name": "EVK Vault eLBTC-2"
+    },
+    "0x1905eddf5943ef6c92ccf1469bd40fc2cb4a77b0": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-12"
+    },
+    "0x19ce855d819b2a753d4cecffff9dcaac721f1fbb": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "cbBTC",
+      "name": "EVK Vault ecbBTC-4"
+    },
+    "0x1b68626dca36c7fe922fd2d55e4f631d962de19c": {
+      "protocol": "FastLane",
+      "assetSymbol": "MON",
+      "name": "shMONAD"
+    },
+    "0x1e240e30e51491546dec3af16b0b4eac8dd110d4": {
+      "protocol": "Curvance",
+      "assetSymbol": "WMON",
+      "name": "Curvance Wrapped MON"
+    },
+    "0x1e4d67c666c2ccf27a0af980fe6c8e0f05ac8949": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-5"
+    },
+    "0x1ed6703bd9dd1a82979100d21910f17b074c8293": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wstETH",
+      "name": "EVK Vault ewstETH-3"
+    },
+    "0x1f80a3ccc8c8b8ff7bf8d3a376e063fd868dfbad": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "WMON",
+      "name": "TestWMON"
+    },
+    "0x2067936155c7db57b1cdcf776b04b9678c245626": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wnLOAZND-AZND-wnAUSD",
+      "name": "EVK Vault ewnLOAZND-AZND-wnAUSD-2"
+    },
+    "0x20f1a13bfbf85a22aa59d189861790981372220b": {
+      "protocol": "Curvance",
+      "assetSymbol": "ezETH",
+      "name": "Curvance Renzo Restaked ETH"
+    },
+    "0x21649703fe63265058e9f22582552561af4afa3f": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USDC",
+      "name": "August USDC"
+    },
+    "0x2178894927657fd5a464ce082e0b514ceb12720c": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-4"
+    },
+    "0x21adbb60a5fb909e7f1fb48aacc4569615cd97b5": {
+      "protocol": "Curvance",
+      "assetSymbol": "USDC",
+      "name": "Curvance USDC"
+    },
+    "0x21bf777668bae755f00e49fb1d58112094ad4855": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "yzPrime",
+      "name": "EVK Vault eyzPrime-1"
+    },
+    "0x22139a346b6312eb0a9812c67cfce4a694676d59": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "XAUt0",
+      "name": "Wrapped Neverland XAUt0"
+    },
+    "0x221ad977de7ecc16929e814399ad4d5c0162456a": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "cbBTC",
+      "name": "EVK Vault ecbBTC-6"
+    },
+    "0x225e145c65031d39c3d9c58bddaef47f8d9faec5": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-7"
+    },
+    "0x234d354b39a4ca1274cb04972d3a9e03f1d8c4ff": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "XAUt0",
+      "name": "EVK Vault eXAUt0-2"
+    },
+    "0x240fcaffff24aaa39e420b6f70ed5519847648b4": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-3"
+    },
+    "0x248c74aa002a571c340a3d894aaf294884a49be1": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-18"
+    },
+    "0x251b67ae7e90fdc6a7b080ee601913a8b2746a28": {
+      "protocol": "Curvance",
+      "assetSymbol": "wsrUSD",
+      "name": "Curvance Wrapped Savings rUSD"
+    },
+    "0x2552232cabd544b67eea900a951346d3272c7c2f": {
+      "protocol": "Curvance",
+      "assetSymbol": "savUSD",
+      "name": "Curvance Staked avUSD"
+    },
+    "0x26dc6ed6ce1244374c782c8599d7088826c378a9": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "cbBTC",
+      "name": "Unified Labs cbBTC"
+    },
+    "0x2840772e14ffbe337ab966727b7d1dd09bdc76e4": {
+      "protocol": "Curvance",
+      "assetSymbol": "eBTC",
+      "name": "Curvance eBTC"
+    },
+    "0x28900b0b2dda5d2d61cdf17be8b7091206a04bf9": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USDC",
+      "name": "Proof of Reason Demo USDC"
+    },
+    "0x289f801765b99b5e6263853859fe302dbecab6d6": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-10"
+    },
+    "0x28bd4f19c812cbf9e33a206f87125f14e65dc8aa": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-5"
+    },
+    "0x29d2075e5151b1a6863bdc40ea86bd5e8afd1705": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "gMON",
+      "name": "Wrapped Neverland gMON"
+    },
+    "0x2b4e0232f46e6db4af35474c140b968eefcb09ec": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0x2b534a7b7398c669802d89bf1ea959cd4dfad129": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "cbBTC",
+      "name": "EVK Vault ecbBTC-1"
+    },
+    "0x2f13d29b4eff12fc5e6b2560ed5183354c38a82f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-9"
+    },
+    "0x32841a8511d5c2c5b253f45668780b99139e476d": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "AUSD",
+      "name": "Grove x Steakhouse High Yield AUSD"
+    },
+    "0x339c97759bfdcb131090640c2da6cd7fed30556c": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Agora Monad AUSD"
+    },
+    "0x35e4f3111b37135b1a8ebd72d8cbc9624aee863a": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Unified Labs USDC RWA"
+    },
+    "0x36d0f0a4cb615c200310ae2c5b5d345189d01197": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-8"
+    },
+    "0x39f3380c2b139015f78542c5df9b2c6eb8a262b1": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "SharpByte AUSD mROX"
+    },
+    "0x3afb9a1cc0d2b0d62502b84b070601ff0dc84363": {
+      "protocol": "Curvance",
+      "assetSymbol": "savUSD",
+      "name": "Curvance Staked avUSD"
+    },
+    "0x3bcc41c9510a4b601bfbfa6da8d933d50fd175e8": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "shMON",
+      "name": "EVK Vault eshMON-3"
+    },
+    "0x3d2ff9f862d89ba526a0fc166bd56abe04ef28d5": {
+      "protocol": "Curvance",
+      "assetSymbol": "WBTC",
+      "name": "Curvance Wrapped BTC"
+    },
+    "0x3d4bb6cd6a2207d3e1747ce757364eeaad684c79": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wstETH",
+      "name": "EVK Vault ewstETH-5"
+    },
+    "0x3e624cd1c2c8ec9c3e34dd075a27f5bdb4463a9b": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-13"
+    },
+    "0x3f3a7ab580f6cfdbf31118b5334e4c7fe4fda330": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Oversee Pay Monad AUSD"
+    },
+    "0x3fe40329061a40f95416da42bb69e15d8eb83740": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-7"
+    },
+    "0x40f56fe5e115d11f445afdba6f92925128c7a35e": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "weETH",
+      "name": "EVK Vault eweETH-1"
+    },
+    "0x42369afe4ba4225b800b8024acc5f14f42a3836c": {
+      "protocol": "Curvance",
+      "assetSymbol": "vUSD",
+      "name": "Curvance RWA Backed Lending by Valos"
+    },
+    "0x438cedce647491b1d93a73d491ec19a50194c222": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-11"
+    },
+    "0x44b3c96db2caf61167a9eab82901139a404cdb6f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-1"
+    },
+    "0x4735e245271496aedeff224b7dcb06fa7715cfb7": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-1"
+    },
+    "0x4806902ec0320e5334c2b2679ffb58c830348f1c": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0x48ddc4edc5b10c6c0d11da15d8cb4098f7c3d3e7": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wstETH",
+      "name": "EVK Vault ewstETH-4"
+    },
+    "0x494876051b0e85dce5ecd5822b1ad39b9660c928": {
+      "protocol": "Curvance",
+      "assetSymbol": "sMON",
+      "name": "Curvance Kintsu Staked Monad"
+    },
+    "0x4957e288bd8bf79855924b89b13dbbc1907b4802": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WETH",
+      "name": "EVK Vault eWETH-1"
+    },
+    "0x4a798ef3a5846af8e04de317dd7f3612a47ffa99": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-17"
+    },
+    "0x4c09558a0d000240726679fc3805c3918922d6c6": {
+      "protocol": "Aarna",
+      "assetSymbol": "USDC",
+      "name": "aarna atvYieldMax"
+    },
+    "0x4e8aaecce10ad9394e96fe5f2bd4e587a7b04298": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "USDT0",
+      "name": "Wrapped Neverland USDT0"
+    },
+    "0x4f28cc08305e8585f8dd2a329ba41e77a9a54f97": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "WETH",
+      "name": "Steakhouse High Yield ETH"
+    },
+    "0x502e4a0b61deba3015eb9e51116b832003b22c2c": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WETH",
+      "name": "EVK Vault eWETH-3"
+    },
+    "0x50fe3eac875afbf5a121f2f792ffb7f9fb27629f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-8"
+    },
+    "0x52a59afaf5cb7cb09f94056fd631688d659a33b6": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WBTC",
+      "name": "EVK Vault eWBTC-3"
+    },
+    "0x56e07c30ca75a6aa9b8437975ff3130e3dc7a699": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-13"
+    },
+    "0x578c60e6df60336be41b316fde74aa3e2a4e0ea5": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "sMON-wnWMON",
+      "name": "EVK Vault esMON-wnWMON-1"
+    },
+    "0x5792753b66eb5213e416755546abbcc1aef1008a": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-7"
+    },
+    "0x5795130bfb9232c7500c6e57a96fdd18bfa60436": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wnAUSD-wnUSDC-wnUSDT0",
+      "name": "EVK Vault ewnAUSD-wnUSDC-wnUSDT0-1"
+    },
+    "0x57c5dff5ddb1289c21cc752a05330a12e3542578": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-6"
+    },
+    "0x5c4c2d9470c764317fe24bfd93e988458dc1137a": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "testWETH",
+      "name": null
+    },
+    "0x5ca6966543c0786f547446234492d2f11c82f11f": {
+      "protocol": "Curvance",
+      "assetSymbol": "gMON",
+      "name": "Curvance gMON"
+    },
+    "0x5e073494678fb7fa4a05bb17d45941dd9dc469c1": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "shMON",
+      "name": "Wrapped Neverland shMON"
+    },
+    "0x5e1534af364de6f789b67dab52abdc154ab48757": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-4"
+    },
+    "0x5e3469fa7bb943f8d9d5ca5bc96356b0c503910f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WETH",
+      "name": "EVK Vault eWETH-5"
+    },
+    "0x5e43e6cb7daf0cfc810d0f80a1e05b3d49fa9192": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-14"
+    },
+    "0x61788859b923989dfeb995b8de5cbbcd719475e9": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wstETH",
+      "name": "EVK Vault ewstETH-2"
+    },
+    "0x619122ddeadeff7b706d17c74ba008a1c688c501": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Node Ag USDC"
+    },
+    "0x62c0316797db8a1df41f22fd677d3b5f5bbbab68": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-10"
+    },
+    "0x6660195421557bc6803e875466f99a764ae49ed7": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "shMON-wnWMON",
+      "name": "EVK Vault eshMON-wnWMON-1"
+    },
+    "0x6661a2b4008b70f22ff84c2134ac6f51534e162d": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "shMON",
+      "name": "EVK Vault eshMON-1"
+    },
+    "0x6718d74ceeb3a34f2177e65e07ba8ee2f4bac4b6": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "BTC.b",
+      "name": "EVK Vault eBTC.b-1"
+    },
+    "0x68b0eb33fd2a3e283d932932d9c0ffe505ef9b8f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": null,
+      "name": "EVK Vault eUNDEFINED-1"
+    },
+    "0x6949bcab16c0b389095c5b744f6fbf9741a1b3b6": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "testWETH",
+      "name": "Test Vault V1"
+    },
+    "0x69b4a7829f6bae4e0c3c281aa7026d897fec199f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-10"
+    },
+    "0x6b4f321c39da5b7e28e127572eedb94eeb5e2d07": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-2"
+    },
+    "0x6d0090db99919d1594b9b824d295e923266c9052": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": null,
+      "name": null
+    },
+    "0x6e06ce28a6c28bffa274ead5cb715992033e351a": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-6"
+    },
+    "0x6e182eb501800c555bd5e662e6d350d627f504d8": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0x6fd376b65d34539558b696200df7d84b801b4270": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-2"
+    },
+    "0x70023ef5e6fb65fa133288e9826cbea3b173dd67": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "PT-AUSD-8OCT2026",
+      "name": "EVK Vault ePT-AUSD-8OCT2026-2"
+    },
+    "0x736c7f984f91794316068d523815134cf93c8db1": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "cbBTC",
+      "name": "EVK Vault ecbBTC-2"
+    },
+    "0x73f98e9868bd403f1d894fdd367d7da530fe6889": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "0xe99"
+    },
+    "0x75753e494e5e374c52e1d84fc04eb14b10f2c079": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Saturn USDC"
+    },
+    "0x75b6c392f778b8bcf9bdb676f8f128b4dd49ac19": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-12"
+    },
+    "0x78999cc96d2ba0341588c60ccb0e91c6c33cf371": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Hyperithm USDC Apex"
+    },
+    "0x790e4f829fe865d432c4ea83b8b15f8871415b6c": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "SharpByte AUSD Tori Ecosystem"
+    },
+    "0x796ba8a2f2d80340ddb6ca8e43e7883812f13cd5": {
+      "protocol": "Centrifuge V3",
+      "assetSymbol": "USDC",
+      "name": "JTRSY USDC Vault (Janus Henderson Treasury Fund)"
+    },
+    "0x7a5ab5bd7f2db9960813763e86eb789192f56768": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WETH",
+      "name": "EVK Vault eWETH-6"
+    },
+    "0x7a81a1613d50fff334027aad76f2416368f6050f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wnSHMON-wnWMON",
+      "name": "EVK Vault ewnSHMON-wnWMON-1"
+    },
+    "0x7ad9f09b431a4c5f4cba809d449fde842192f9ec": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wnSMON-wnWMON",
+      "name": "EVK Vault ewnSMON-wnWMON-1"
+    },
+    "0x7b4bcaeac5eb67ae947903f24bba660ee06a5231": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-6"
+    },
+    "0x7c3bfb0fd70e6591d1747d12eafcf329c904f35f": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "mUSD",
+      "name": "Steakhouse mUSD Reserved"
+    },
+    "0x7c9d4f1695c6282da5e5509aa51fc9fb417c6f1d": {
+      "protocol": "Curvance",
+      "assetSymbol": "USDC",
+      "name": "Curvance USDC"
+    },
+    "0x7cc566d100e81a9708fd23b18f6b92d3249430c9": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-19"
+    },
+    "0x7d05f99d19bc46215a0a2e2a421174b8f44772b5": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "mHyperBTC",
+      "name": "EVK Vault emHyperBTC-3"
+    },
+    "0x7eda3cb060ff7b650eb227971dbfebd3513b11d5": {
+      "protocol": "Curvance",
+      "assetSymbol": "syzUSD",
+      "name": "Curvance Staked Yuzu USD"
+    },
+    "0x7f8dc4d700964ce0a288a10ce1d904a1300354be": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Steakhouse USDC Reserved"
+    },
+    "0x7fc53e4b2308c49486f2c9663ec8c7608bd7b03f": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "cbBTC",
+      "name": "August cbBTC"
+    },
+    "0x80017bf0f793ebbe9679cd61ff0e395b62cabb59": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "August USDC V2"
+    },
+    "0x802c91d807a8daca257c4708ab264b6520964e44": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USDC",
+      "name": "Steakhouse High Yield USDC"
+    },
+    "0x80ad83c9067b49547ab5db6caf4f1e3ae34892b1": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "eUSD",
+      "name": "EVK Vault eeUSD-3"
+    },
+    "0x80bdee8e6a274ae08f89a4a59ba68046612a76eb": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "WMON",
+      "name": "Steakhouse High Yield MON"
+    },
+    "0x81929fec5b97ad115b0ef5f04685070569cead06": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Clearstar Yield AUSD"
+    },
+    "0x819edd11b51096773c3d6a04427d094135ec9f41": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USDC",
+      "name": "Kedao USDC vault"
+    },
+    "0x82c370ba90e38ef6acd8b1b078d34fd86fc6bac9": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "AUSD",
+      "name": "Wrapped Neverland AUSD"
+    },
+    "0x84c5af20b58818631164bb7d798e457fcfacd9ac": {
+      "protocol": "Curvance",
+      "assetSymbol": "sAUSD",
+      "name": "Curvance sAUSD"
+    },
+    "0x850dafb683743076f65d62d95e36ec9d04fb4b23": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-9"
+    },
+    "0x852e9d248b1a294566737633c2f829ea8257553b": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-14"
+    },
+    "0x852ff1ec21d63b405ec431e04ae3ac760e29263d": {
+      "protocol": "Curvance",
+      "assetSymbol": "earnAUSD",
+      "name": "Curvance earnAUSD"
+    },
+    "0x8626b8f4f64caeee9549af8ebbfa591a7425e5ba": {
+      "protocol": "Curvance",
+      "assetSymbol": "YZM",
+      "name": "Curvance Yuzu Money Vault"
+    },
+    "0x8699bfe5c6d74df561555bc708dacf165d8e0d73": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USD1",
+      "name": "Steakhouse High Yield USD1"
+    },
+    "0x870e172c3c7ea274ce60fb8d19d86012edc3c043": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-4"
+    },
+    "0x87760787d770bc9f039843fec7636f3b8dd12206": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-10"
+    },
+    "0x88927d35e37286805f343dc449b750f431e70a20": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WBTC",
+      "name": "EVK Vault eWBTC-4"
+    },
+    "0x88e0994e8130ef72bf614cbbcf722839b167c8d1": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0x892f71d1a690fad183c839d60ee0e4ffc679f862": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Test Vault 2"
+    },
+    "0x8959f4e6ed1f4567a464959793d5f8f6f33c1c8b": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "WBTC",
+      "name": "Wrapped Neverland WBTC"
+    },
+    "0x8967a529d2e712b5a0db96a6bd9d743473665cb0": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "emo",
+      "name": null
+    },
+    "0x8af00fbbb2601a8f7636eabbf6243b30bea47d50": {
+      "protocol": "Curvance",
+      "assetSymbol": "WETH",
+      "name": "Curvance Wrapped Ether"
+    },
+    "0x8c75a7177d64167e6ebc65a1d25d03cbf726fc46": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WETH",
+      "name": "EVK Vault eWETH-2"
+    },
+    "0x8d5c2df3eef09088fcccf3376d8ecd0dd505f642": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "USDC",
+      "name": "Wrapped Neverland USDC"
+    },
+    "0x8e94704607e857eb3e10bd21d90bf8c1ecba0452": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0x8ee9fc28b8da872c38a496e9ddb9700bb7261774": {
+      "protocol": "Curvance",
+      "assetSymbol": "USDC",
+      "name": "Curvance USDC"
+    },
+    "0x8f47d9d9d5a8202a5a37c4e41fbdd3146d88a579": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WBTC",
+      "name": "EVK Vault eWBTC-2"
+    },
+    "0x8f79f6ee218826d5144b917f901b147d4354bd74": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-2"
+    },
+    "0x90030a6e48291361f5528f57ef26113291d59e93": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "mHyperBTC",
+      "name": "EVK Vault emHyperBTC-1"
+    },
+    "0x9020dbca5a8ccfab6116123e308204a44a5b93d4": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "gMON",
+      "name": "EVK Vault egMON-3"
+    },
+    "0x9029815dfde94e6ef95adb7cb72fdef157939dfa": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "mHyperBTC",
+      "name": "EVK Vault emHyperBTC-2"
+    },
+    "0x9109529c3a2eb36de0ac3837baea74044863c60a": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-8"
+    },
+    "0x91643f54c4f5f7559bd43a082eff97594d16708c": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Re Ecosystem Vault"
+    },
+    "0x9190269f87bd30f0eb94dc3d6369b42a1a27eefa": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-5"
+    },
+    "0x926030b9912bd42b092151cfb2396499b967df3a": {
+      "protocol": "Centrifuge V3",
+      "assetSymbol": "USDC",
+      "name": "JAAA USDC Vault (Janus Henderson AAA CLO Fund)"
+    },
+    "0x926c101cf0a3de8725eb24a93e980f9fe34d6230": {
+      "protocol": "Curvance",
+      "assetSymbol": "shMON",
+      "name": "Curvance ShMonad"
+    },
+    "0x92ee4b4d33dc61bd93a88601f29131b08acedbf1": {
+      "protocol": "Curvance",
+      "assetSymbol": "muBOND",
+      "name": "Curvance mu Bond"
+    },
+    "0x947a148a99f1ac6847f103c3b05338d6e1f172e9": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "WETH",
+      "name": "wow"
+    },
+    "0x94a169ad76f75e32b5e4e716a0cacfa28a619b66": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-3"
+    },
+    "0x94d7162c82f2007d65f12fbd78854f2ccf7b29f6": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "AUSD",
+      "name": "Hyperithm AUSD Degen"
+    },
+    "0x961a59fe249b9795fae7fa35f9e89629689d5278": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USDT0",
+      "name": "Steakhouse High Yield USDT0"
+    },
+    "0x970ebdba568e469119261f989945f08e4021a867": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "TEST",
+      "name": "Test Vault"
+    },
+    "0x9891178a1178e4c740fa61fd6e30a9d92d897590": {
+      "protocol": "Curvance",
+      "assetSymbol": "USDC",
+      "name": "Curvance USDC"
+    },
+    "0x98a297e6424787e57af119949d7e00b721f832bb": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "cbBTC",
+      "name": "Wrapped Neverland cbBTC"
+    },
+    "0x994d141557dc6abb13afd374ddc0224c0e7ef478": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "sMON",
+      "name": "EVK Vault esMON-3"
+    },
+    "0x997d5064a7b48305c15c9d55ac2d94d7069fc008": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Gizu Prime AUSD"
+    },
+    "0x99dbf01c0a211ca47350c9b0edc4d0ffe9eab1ad": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Premier USDC"
+    },
+    "0x9d05fffd273f47232520dde355322a291c9ff946": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": null
+    },
+    "0x9d42b0d57e88771b365e30c0a589fcdbeca8828c": {
+      "protocol": "Euler Earn",
+      "assetSymbol": "WMON",
+      "name": "K3 Capital Earn WMON"
+    },
+    "0x9e3500649e16ebe295277ec030e42fabacfa870e": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-16"
+    },
+    "0x9e7574dfbd688ef7adf0fb5b61cffd7b889cd11a": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "WETH",
+      "name": null
+    },
+    "0x9e83c570b5629d0139b1d8c71d6632ac60c12f0f": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Hyperithm USDC Degen(abandoned)"
+    },
+    "0x9ea1b948186f9a8cfe375278d96363103f4fa42b": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-7"
+    },
+    "0x9f209b43559b13b783eaa0a6686921c7b174f269": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Murmurr USDC aHYPER"
+    },
+    "0xa0752257825a6444c48d71796bf657b2afb1a212": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "cbBTC",
+      "name": "EVK Vault ecbBTC-5"
+    },
+    "0xa084579a1c63d24bea8ad916bf56d6678590ebfa": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "LBTC",
+      "name": "EVK Vault eLBTC-1"
+    },
+    "0xa1bd0047236489f2bd9630cf602f1e42961600e6": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "XAUt0",
+      "name": "EVK Vault eXAUt0-1"
+    },
+    "0xa206d51c02c0202a2eed8e6a757b49ab13930227": {
+      "protocol": "Curvance",
+      "assetSymbol": "WETH",
+      "name": "Curvance Wrapped Ether"
+    },
+    "0xa2d6be1c9d4908f4a5fbaaffd020b4ff21d41fca": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "AUSD",
+      "name": "Pocky's High Yield AUSD - Personal Vault"
+    },
+    "0xa2fa4ced4e2d448d084f5a15011b3564922119d6": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Y10k AUSD Vault"
+    },
+    "0xa35189d1a1d1d42bb7ba56e6d979d6bb34ffeed7": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USDC",
+      "name": "Unified Labs RWA USDC"
+    },
+    "0xa3b64e2674463c98cbd21807055d8c1e008b6e79": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-15"
+    },
+    "0xa54d9eb00db6b61699e73ffc1a31ec8aa76d5a15": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USDT0",
+      "name": "Kedao USDT0 Vault"
+    },
+    "0xa5b409b5a930afc49d016da10bbfccc183396ca2": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WETH",
+      "name": "EVK Vault eWETH-7"
+    },
+    "0xa7b8e775c9cfb5d9ad2dfb04cb620ac307450b5d": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-15"
+    },
+    "0xa8120b07af194e724803e23f75aafb2e0cd7caaa": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-16"
+    },
+    "0xa8665084d8cd6276c00ca97cbc0bf4bc9ae94c79": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USDC",
+      "name": "Hyperithm USDC Apex"
+    },
+    "0xa8f093cfb04a536dbc6aa9bb94a2d617305a48f3": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "sMON",
+      "name": "EVK Vault esMON-1"
+    },
+    "0xaac212446ef7ea7bbfa85681ae4848bcb96a90e2": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "eUSD",
+      "name": "EVK Vault eeUSD-2"
+    },
+    "0xac3f22212856234f0f2fa572f5b88e63997e67ea": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "TEST",
+      "name": null
+    },
+    "0xad4aa2a713fb86fbb6b60de2af9e32a11db6abf2": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0xae7c54ec862942f07718b793e6c4098dead26717": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Brilliant USDC Yield"
+    },
+    "0xaf1c25b6c7a09891f91c142581dcb9b02d1708d2": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Ditobanx AUSD Monad"
+    },
+    "0xb0d3d8f0f66cfbd8ee0a8931b3aa163a4893b48c": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Blend USDC Reserve"
+    },
+    "0xb181030ff0767c24d83c65527bd42146486f415e": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "gMON",
+      "name": "EVK Vault egMON-2"
+    },
+    "0xb22eb4737df49c38032e30d20e67fb7579bdab4f": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": null
+    },
+    "0xb3b850ac62b89fe9f4efb652b516108a8aeb8848": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "WETH",
+      "name": "Wrapped Neverland WETH"
+    },
+    "0xb4f2bcd6dd41ce350d3c80d99f5a965867fbdff1": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "weETH",
+      "name": "EVK Vault eweETH-2"
+    },
+    "0xb63c15af206465cadf90eaeddef680e3b6dfaec1": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "cbBTC",
+      "name": "August cbBTC V2"
+    },
+    "0xb6a4db1fef7831f65827d9af2cb1e69f764ec123": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "shMON",
+      "name": "EVK Vault eshMON-2"
+    },
+    "0xb72e0659417bbb1ea55869ab2f81cb41e751938f": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wstETH",
+      "name": "EVK Vault ewstETH-1"
+    },
+    "0xb9bb31debce3f6a7a7d916aef2e49810c9685cee": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "PT-USDat-14JAN2027",
+      "name": "EVK Vault ePT-USDat-14JAN2027-1"
+    },
+    "0xba8424ebbed6c51bea6d6d903b8815838e6a0322": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "WETH",
+      "name": "Steakhouse Prime ETH"
+    },
+    "0xbadb9de8c6979b2fb809472f30d27954ddbb752e": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-12"
+    },
+    "0xbc03e505ee65f9faa68a2d7e5a74452858c16d29": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "AUSD",
+      "name": "Steakhouse High Yield AUSD"
+    },
+    "0xbc5fd2ca51b0bca8882246833b2ea8627a79bc59": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "LBTC",
+      "name": "EVK Vault eLBTC-3"
+    },
+    "0xbe3e6d3f857812b4731677c88288d4f3aff8e9a1": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Clearstar Accountable AUSD"
+    },
+    "0xbeef02fe7644e8e88ee83368d91560f26462e9be": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "mUSD",
+      "name": "Steakhouse mUSD"
+    },
+    "0xbeef04b01e0275d4ac2e2986256bb14e3ff6ef42": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "WETH",
+      "name": "Steakhouse Prime ETH"
+    },
+    "0xbeef07d5d7dcf379aa9b1821f1a6d92b492e2dc5": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Steakhouse USDC"
+    },
+    "0xbeef084bf3c3c0552e5a956e17f6b8123dcfbc8e": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Steakhouse USDC"
+    },
+    "0xbeef08f5ac1d79e6d6a637a1235a4ced9a5446a4": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Steakhouse USDC"
+    },
+    "0xbeef0ec7e5a196b8b76b4cdac92b7c3eeeb6b01e": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "mUSD",
+      "name": "Steakhouse mUSD"
+    },
+    "0xbeeff300e9a9caec7beea740ab8758d33b777509": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDT0",
+      "name": "Steakhouse High Yield USDT0"
+    },
+    "0xbeeff421948cde29644a63fba4ef5e5a621075d0": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "cbBTC",
+      "name": "Steakhouse High Yield cbBTC"
+    },
+    "0xbeeff443c3cba3e369da795002243beac311ab83": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Steakhouse High Yield USDC"
+    },
+    "0xbeeff597d0e0d062028f00ee55387a645cdfcc32": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "WMON",
+      "name": "Steakhouse High Yield MON"
+    },
+    "0xbeeff96d65cb80a0029dc9d3c4d7306c3c3a6253": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "WETH",
+      "name": "Steakhouse High Yield ETH"
+    },
+    "0xbeeffb65df79baac701307c9605b7ab207355fdb": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USD1",
+      "name": "Steakhouse High Yield USD1"
+    },
+    "0xbeeffea75cfc4128ebe10c8d7ae22016d215060d": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Steakhouse High Yield AUSD"
+    },
+    "0xc1d4e984e3330359fa8c27aadd30e641d24d598b": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": null,
+      "name": "EVK Vault eUNDEFINED-2"
+    },
+    "0xc402b0cacc0c684427daa40d964c8ae6fdbb96f7": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "cbBTC",
+      "name": "Hyperithm cbBTC Apex"
+    },
+    "0xc4fabe0b5a280163ab47e3162689a278c81df3f9": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "PT-earnAUSD-8OCT2026",
+      "name": "EVK Vault ePT-earnAUSD-8OCT2026-1"
+    },
+    "0xc4fdfd881f931898b186d063c69753f1c250c268": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "helloo",
+      "name": null
+    },
+    "0xc5251bc7f19d9579cafe6ad619ec568e947dc0c5": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-11"
+    },
+    "0xcdc9d2c4ead8f2a9fd3d6f5a00ba4e6001ab7898": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0xce67457a858da99bf19ff22d595cd60808f2e77d": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WMON",
+      "name": "EVK Vault eWMON-11"
+    },
+    "0xcf450973dee1ee41cb708496bf73f34324180035": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-13"
+    },
+    "0xd1bfea1728ffe98f515f26082facfcc3341691d4": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0xd2f35c39a7187bbf55c0b05c52808d7a18ed62ca": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "gMON",
+      "name": "EVK Vault egMON-1"
+    },
+    "0xd45d54ad7ae6d5dedb0de7b283fe0b4e2ba40217": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "earnAUSD",
+      "name": "Wrapped Neverland earnAUSD"
+    },
+    "0xd4a6b137251e77d3d4ee1826016da4b1ffa00ea3": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-2"
+    },
+    "0xd505cce10571c1d07dd40d2d9001bef22cdf0d71": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "XAUt0",
+      "name": "EVK Vault eXAUt0-3"
+    },
+    "0xd5ff5152edbd0d921bbff5eef84dda95c6c5a108": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "AUSD",
+      "name": "EVK Vault eAUSD-5"
+    },
+    "0xd6b6fe9ddb918d5ffd8f224992dc9302bc437fdf": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Valos"
+    },
+    "0xd786f7569c39a9f64e6a54eb77db21364e90f279": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "loAZND",
+      "name": "Wrapped Neverland loAZND"
+    },
+    "0xd793c04b87386a6bb84ee61d98e0065fde7fda5e": {
+      "protocol": "Upshift",
+      "assetSymbol": "AUSD",
+      "name": "earnAUSD (share symbol sAUSD)"
+    },
+    "0xd8ec5b4917fef9058545e7d1dc2ac17f1d26305d": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "vUSD",
+      "name": "EVK Vault evUSD-2"
+    },
+    "0xd9e2025b907e95ecc963a5018f56b87575b4ab26": {
+      "protocol": "Curvance",
+      "assetSymbol": "aprMON",
+      "name": "Curvance aPriori Monad LST"
+    },
+    "0xdadbb2d8f9802dc458f5d7f133d053087ba8983d": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0xdb39a9d4a1f1b4e93a5684d602207628ad60613c": {
+      "protocol": "Neverland (ERC-4626 static wrapper)",
+      "assetSymbol": "WMON",
+      "name": "Wrapped Neverland WMON"
+    },
+    "0xdb3e888c3b50771821226d30ab6ec14eb5ba85ba": {
+      "protocol": "Curvance",
+      "assetSymbol": "WBTC",
+      "name": "Curvance Wrapped BTC"
+    },
+    "0xdb53e5c7578cfb52e72728c89ba895692e49aa45": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "LBTC",
+      "name": "EVK Vault eLBTC-4"
+    },
+    "0xddffd6801a86b598077addda04f70af08b6f8807": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "sMON",
+      "name": "EVK Vault esMON-2"
+    },
+    "0xe0091b17d249f71455ed128b79391a98fb6f1dcf": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "Pods USDC Yield"
+    },
+    "0xe01d426b589c7834a5f6b20d7e992a705d3c22ed": {
+      "protocol": "Curvance",
+      "assetSymbol": "WMON",
+      "name": "Curvance Wrapped MON"
+    },
+    "0xe025cc384b017854f3716a3d1fb077cbe302699d": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-1"
+    },
+    "0xe04dc24524df8b25f341b9b451b89c91253baa7a": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "gAUSD",
+      "name": "EVK Vault egAUSD-1"
+    },
+    "0xe09a93786275546690247d70f1767cf0b69e8ea0": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "cbBTC",
+      "name": "Hyperithm cbBTC Apex"
+    },
+    "0xe0d1d7fe2130b45859e76e9e851f190c21f9cb6c": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "AUSD",
+      "name": "Grove x Steakhouse Prime AUSD"
+    },
+    "0xe34ff2552d572378e3edc5d3c47bfc7eb092dbc0": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WBTC",
+      "name": "EVK Vault eWBTC-1"
+    },
+    "0xe418fecb353f606e5db72a35bf5147dfaae6a0fe": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "cbBTC",
+      "name": "EVK Vault ecbBTC-3"
+    },
+    "0xe478854474e2811053cc417e21ff22488210fd6b": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Agora Test Vault"
+    },
+    "0xea4be2705517b0ee0bbabd5e73cea3dc509d3c36": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "vUSD",
+      "name": "EVK Vault evUSD-1"
+    },
+    "0xebe45a6cea7760a71d8e0fa5a0ae80a75320d708": {
+      "protocol": "Curvance",
+      "assetSymbol": "WMON",
+      "name": "Curvance Wrapped MON"
+    },
+    "0xec0fc12c4e137ba8f2e908fb8cebb2bca66c3127": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": null
+    },
+    "0xecef08a3cd83054e8ff6d8cb9ce41a36b81e8d7e": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "cbBTC",
+      "name": "UltraYield cbBTC"
+    },
+    "0xee3eaec5b3860ad40a767594f0990a74a32329e8": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDT0",
+      "name": "EVK Vault eUSDT0-3"
+    },
+    "0xef7da454d1ebccbfe2e69b29c9c08c00bedd3163": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": null
+    },
+    "0xf048977215c8efd805f2d48b1d45304742d6ab58": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "WETH",
+      "name": "EVK Vault eWETH-4"
+    },
+    "0xf18f3bc9440ad7940e6e2a86fd0c724add2dd0aa": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "wmooBalancerMonadwnUSDT0-wnAUSD-wnUSDC",
+      "name": "EVK Vault ewmooBalancerMonadwnUSDT0-wnAUSD-wnUSDC-1"
+    },
+    "0xf19e8ddc541dee2f4d6796a79b1c1e10a415a0da": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-4"
+    },
+    "0xf26dc2f1fe883b11dd56700db594dfc32eee95bf": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "eUSD",
+      "name": "EVK Vault eeUSD-4"
+    },
+    "0xf2acb868eaf64ef36bc0d3b4ba93af00fc3167cf": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-6"
+    },
+    "0xf32b334042dc1eb9732454cc9bc1a06205d184f2": {
+      "protocol": "Curvance",
+      "assetSymbol": "WMON",
+      "name": "Curvance Wrapped MON"
+    },
+    "0xf3bdd05ede125bdc2bedf59591e761f1582ba984": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "AUSD",
+      "name": "Locke Financial"
+    },
+    "0xf3e55a17c4c59cb70ea44973795fa8f3c3baad72": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "PT-AUSD-8OCT2026",
+      "name": "EVK Vault ePT-AUSD-8OCT2026-1"
+    },
+    "0xf473568b26b8c5aadca9fbc0ea17e1728d5ec925": {
+      "protocol": "Curvance",
+      "assetSymbol": "WMON",
+      "name": "Curvance Wrapped MON"
+    },
+    "0xf57e9898575fab80b0f2acde5443276bec8c542d": {
+      "protocol": "Morpho Vault V2",
+      "assetSymbol": "USDC",
+      "name": "SharpByte USDC High Yield"
+    },
+    "0xf5bc68c6e5825feae99b8018f62a595cf745e297": {
+      "protocol": "Morpho MetaMorpho V1.1",
+      "assetSymbol": "USDC",
+      "name": "Node Ag USDC"
+    },
+    "0xf62c7cd4f71434f7c4d12a1142133d4ed4abaec4": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-9"
+    },
+    "0xf7a6ab4af86966c141d3c5633df658e5cdb0a735": {
+      "protocol": "Curvance",
+      "assetSymbol": "loAZND",
+      "name": "Curvance Locked AZND"
+    },
+    "0xfd493ce1a0ae986e09d17004b7e748817a47d73c": {
+      "protocol": "Curvance",
+      "assetSymbol": "AUSD",
+      "name": "Curvance AUSD"
+    },
+    "0xfe336604eec931a73b308aca9b4f09a376110b34": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "USDC",
+      "name": "EVK Vault eUSDC-11"
+    },
+    "0xfee7fd5d582d54b8feb724ec69f596db88424ce5": {
+      "protocol": "Euler EVK (eVault)",
+      "assetSymbol": "aHyperBTC",
+      "name": "EVK Vault eaHyperBTC-1"
+    }
+  }
+}
