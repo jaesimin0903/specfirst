@@ -59,13 +59,16 @@ describe('local CheckRequestDesk ABI', () => {
     ]);
   });
 
-  it('has the four events', () => {
-    expect(events).toEqual([
-      'CheckRequested(uint256,address,uint64,address,bytes32,uint96)',
-      'CheckFulfilled(uint256,uint256)',
-      'CheckRejected(uint256,bytes32)',
-      'CheckRefunded(uint256)',
-    ]);
+  it('has the four request events the web reads, with these exact signatures', () => {
+    // The ABI is core's full contract ABI, so it also carries the owner events (FeeSet, WorkerSet, FeesWithdrawn).
+    expect(events).toEqual(
+      expect.arrayContaining([
+        'CheckRequested(uint256,address,uint64,address,bytes32,uint96)',
+        'CheckFulfilled(uint256,uint256)',
+        'CheckRejected(uint256,bytes32)',
+        'CheckRefunded(uint256)',
+      ]),
+    );
   });
 
   it('RequestStatus follows the Solidity enum and ids start at 0', () => {

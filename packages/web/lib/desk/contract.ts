@@ -1,39 +1,16 @@
-import { parseAbi } from 'viem';
 import { z } from 'zod';
 
 /*
  * The one place the web app describes CheckRequestDesk and the worker's status.json.
  *
- * Until @specfirst/core ships the browser-safe subpath "@specfirst/core/desk", these are local copies written from
- * the agreed interface. When it lands, replace this file's body with
- *
- *   export { checkRequestDeskAbi, REQUEST_STATUS, REJECT_REASONS, workerStatusSchema, workerRequestStatusSchema,
- *            workerStageSchema, type WorkerStatus, type WorkerRequestStatus, type WorkerStage } from '@specfirst/core/desk';
- *
- * and keep the few web-only helpers at the bottom (rejectReasonText, FIRST_REQUEST_ID). Every other module imports
- * from here, never from the subpath directly, so the swap is one file. test/desk-contract.test.ts pins the shapes.
+ * The ABI is re-exported from @specfirst/core/desk. The status.json schemas below are deliberately more lenient
+ * readers than core's writers (numbers or strings, ISO or unix time), so an older or newer worker never blanks a
+ * page. Every other module imports from here, never from the subpath directly. test/desk-contract.test.ts pins the
+ * shapes against core.
  */
 
-export const checkRequestDeskAbi = parseAbi([
-  'struct Request { address requester; uint64 subjectChainId; address subject; bytes32 standardId; uint96 fee; uint64 requestedAt; uint8 status; uint256 attestationId; bytes32 rejectReason; }',
-  'function requestCheck(uint64 subjectChainId, address subject, bytes32 standardId) payable returns (uint256 id)',
-  'function refundExpired(uint256 id)',
-  'function requestOf(uint256 id) view returns (Request)',
-  'function requestCount() view returns (uint256)',
-  'function fee() view returns (uint96)',
-  'function timeout() view returns (uint64)',
-  'function earned() view returns (uint256)',
-  'function withdrawn() view returns (uint256)',
-  'function escrowed() view returns (uint256)',
-  'function owner() view returns (address)',
-  'function worker() view returns (address)',
-  'function registry() view returns (address)',
-  'event CheckRequested(uint256 indexed id, address indexed requester, uint64 subjectChainId, address indexed subject, bytes32 standardId, uint96 fee)',
-  'event CheckFulfilled(uint256 indexed id, uint256 attestationId)',
-  'event CheckRejected(uint256 indexed id, bytes32 reasonCode)',
-  'event CheckRefunded(uint256 indexed id)',
-  'error UnknownRequest(uint256 id)',
-]);
+// The ABI comes from the contract build in @specfirst/core, so the web cannot drift from the deployed desk.
+export { checkRequestDeskAbi } from '@specfirst/core/desk';
 
 /** Solidity enum RequestStatus, by index. */
 export const REQUEST_STATUS = ['None', 'Pending', 'Fulfilled', 'Rejected', 'Refunded'] as const;
@@ -50,6 +27,8 @@ export const REJECT_REASONS: Readonly<Record<string, string>> = {
   'unsupported-standard': 'The desk does not check this standard.',
   'check-failed': 'The check could not run to the end, so there is no report to attest.',
   'attest-failed': 'The report was produced but the attestation transaction did not go through.',
+  'unknown-proxy': 'The address looks like a proxy but its implementation could not be resolved, so the check cannot say what code it ran.',
+  'fulfill-failed': 'The check was attested but the fulfill transaction did not go through; the fee stays in escrow until it is fulfilled or refunded.',
 };
 
 /** Worker stages, in the order a request moves through them. */
