@@ -21,10 +21,12 @@ import { identifyImplementation, type IdentityClient, type ImplementationIdentit
 import {
   extractForgeDoc,
   parseStandardForgeJson,
+  skipReasonOf,
   STANDARD_CHECK_SCHEMA_VERSION,
   standardCheckReportSchema,
   summarize,
   type StandardCheckReport,
+  type SkipReason,
   type StandardName,
   type VaultKind,
   type StandardPropertyResult,
@@ -324,12 +326,15 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
       : await client.readContract({ address, abi: shareAbi, functionName: 'share', blockNumber }).catch(() => null);
   let vaultKind: VaultKind = 'erc4626';
   let skipReason: string | null = null;
+  let skipCode: SkipReason | null = null;
   if (asset && asset.toLowerCase() === ERC7535_NATIVE_ASSET.toLowerCase()) {
     vaultKind = 'erc7535';
     skipReason = NATIVE_ASSET_REASON;
+    skipCode = 'native-asset';
   } else if (shareToken && !/^0x0{40}$/i.test(shareToken) && shareToken.toLowerCase() !== address.toLowerCase()) {
     vaultKind = 'erc7575';
     skipReason = erc7575Reason(getAddress(shareToken));
+    skipCode = 'separate-share-token';
   }
   if (skipReason !== null) {
     input.onEvent?.({ type: 'check-skip', vaultKind, reason: skipReason });
@@ -369,6 +374,7 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
     blockNumber: blockNumber.toString(),
     standard: input.standard,
     vaultKind,
+    skipReason: skipCode ?? skipReasonOf(results),
     upstream: { repo: upstream.repo, commit: upstream.commit },
     harnessSha256,
     sfPropertiesSha256,

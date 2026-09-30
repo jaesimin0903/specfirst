@@ -19,6 +19,7 @@ import {
   runStandardCheck,
   SPECFIRST_ERC4626_PROPERTIES,
   standardCheckExitCode,
+  RESTRICTED_ASSET_NOTE,
   summarize,
   type StandardWorkspace,
 } from '../src/index.js';
@@ -85,7 +86,7 @@ describe.skipIf(SKIP)('ERC-4626 harness with forge, offline (pinned cache presen
     }
   });
 
-  it('mock vaults: maxDeposit revert fails maxDeposit only, packed balances are funded, decimals falls back, deposit reverts are recorded', async () => {
+  it('mock vaults: maxDeposit revert fails maxDeposit only, packed balances are funded, decimals falls back, the transfer probe restores state, deposit reverts are recorded', async () => {
     await copyFile(path.join(here, 'fixtures/standards/review/M.sol'), path.join(ws.dir, 'src/M.sol'));
     await copyFile(path.join(here, 'fixtures/standards/review/Exp.t.sol'), path.join(ws.dir, 'test/Exp.t.sol'));
     const paused = await forge(['test', '--offline', '--match-contract', '^ModePaused$', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '--json', '-vv']);
@@ -97,6 +98,19 @@ describe.skipIf(SKIP)('ERC-4626 harness with forge, offline (pinned cache presen
 
     const decimals = await forge(['test', '--offline', '--match-contract', '^DecimalsFallback$', '--match-test', 'test_decimalsFallback', '--json']);
     expect(decimals.exitCode, String(decimals.stdout)).toBe(0);
+
+    // The transfer probe of both setUps: leaves no state behind, refuses a token nobody may move.
+    const probes = await forge(['test', '--offline', '--match-contract', '^(ProbeState|SfProbeState)$', '--match-test', '[pP]robe', '--json']);
+    const probeResults = Object.values(JSON.parse(String(probes.stdout)) as Record<string, { test_results: Record<string, { status: string }> }>).flatMap((x) =>
+      Object.entries(x.test_results).map(([k, v]) => [k.split('(')[0], v.status]),
+    );
+    expect(probeResults.sort()).toEqual([
+      ['test_probeLeavesNoState', 'Success'],
+      ['test_probeRejectsFalseTransfer', 'Success'],
+      ['test_probeRejectsLockedToken', 'Success'],
+      ['test_sfProbeLeavesNoState', 'Success'],
+      ['test_sfProbeRejectsLockedToken', 'Success'],
+    ]);
 
     const closed = await forge(['test', '--offline', '--match-contract', '^ModeDepositRevertsBelowMax$', '--match-test', 'test_deposit\\(', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '--json', '-vv']);
     const events = await readFile(path.join(ws.dir, EVENTS_DIR, 'offline-test.deposit-below-max.log'), 'utf8');
@@ -142,6 +156,10 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
       'SplitShareVault',
       'SelfShareVault',
       'ZeroMaxVault',
+      'AllowlistToken',
+      'RecipientAllowlistToken',
+      'RestrictedAssetVault',
+      'PartialRestrictedVault',
     ]) {
       const art = JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${name}.json`), 'utf8')) as { deployedBytecode: { object: string } };
       code[name] = art.deployedBytecode.object;
@@ -159,6 +177,10 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000042', code.SplitShareVault]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000043', code.SelfShareVault]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000051', code.ZeroMaxVault]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000004', code.AllowlistToken]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000005', code.RecipientAllowlistToken]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000061', code.RestrictedAssetVault]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000062', code.PartialRestrictedVault]);
     await rpc('anvil_mine', ['0x1']);
   });
   afterAll(async () => {
@@ -233,6 +255,20 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     expect(standardCheckExitCode(report.summary)).toBe(17);
   });
 
+  it('an asset nobody may transfer (Valos vUSD shape): both setUps stop, 30 not_applicable, exit 17', async () => {
+    const report = await check('0x5F00000000000000000000000000000000000061');
+    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
+    expect(report.skipReason).toBe('asset-transfer-restricted');
+    expect(report.results[0]!.reason).toBe(`${RESTRICTED_ASSET_NOTE} (selector 0x82b42900)`);
+    expect(standardCheckExitCode(report.summary)).toBe(17);
+  });
+
+  it('an asset only the vault may receive (deposits work, withdrawals fail in the token): 30 not_applicable, exit 17', async () => {
+    const report = await check('0x5F00000000000000000000000000000000000062');
+    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
+    expect(report.skipReason).toBe('asset-transfer-restricted');
+  });
+
   it('a vault without share() is a plain ERC-4626 vault: forge runs', async () => {
     const report = await check('0x5F00000000000000000000000000000000000031');
     expect(report.vaultKind).toBe('erc4626');
@@ -265,6 +301,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000031', await code('HonouringVault')]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000032', await code('AsyncExitVault')]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000033', await code('HonestClosedExitVault')]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000063', await code('HookBlockedVault')]);
     await rpc('anvil_mine', ['0x1']);
     ws = await prepareErc4626Workspace({
       cacheDir: path.join(root, 'cache'),
@@ -314,4 +351,11 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     expect(r.get('sf-maxRedeem-honored')!.status).toBe('inconclusive');
   });
 
+
+  it('a freely transferable asset behind a vault hook that refuses deposits: the probe passes, sf-maxDeposit fails', async () => {
+    const r = await sf('0x5f00000000000000000000000000000000000063');
+    expect(r.get('sf-maxDeposit-honored')!.status).toBe('fail');
+    expect(r.get('sf-maxDeposit-honored')!.reason).toMatch(/reverted with selector 0xea8e4eb5 while maxDeposit is \d+$/);
+    expect([...r.values()].some((x) => x.status === 'not_applicable')).toBe(false);
+  });
 });

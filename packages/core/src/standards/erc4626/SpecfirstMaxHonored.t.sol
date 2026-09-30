@@ -49,6 +49,42 @@ contract SpecfirstMaxHonored is Test {
         asset = ISfVault(vault).asset();
         cap = 1_000_000 * 10 ** uint256(_decimalsOr18(asset));
         poolSalt = vm.envOr("SF_POOL_SALT", uint256(keccak256("specfirst.erc4626.pool")));
+        _probeAssetTransfers();
+    }
+
+    /// Same probe as the upstream harness: pool members 0 and 1 try to move one whole token of the asset,
+    /// the state is restored, and a refusal ends setUp with the fixed prefix the runner reports as not
+    /// applicable. When no balance can be given at all, the probe steps aside.
+    function _probeAssetTransfers() internal {
+        address from = _poolMember(0);
+        address to = _poolMember(1);
+        uint256 amount = cap / 1_000_000;
+        uint256 snap = vm.snapshotState();
+        bool given = true;
+        try this.__sfGiveDeal(from, amount) {} catch {
+            try this.__sfGivePacked(from, amount) {} catch {
+                given = false;
+            }
+        }
+        bool ok;
+        bytes memory ret;
+        if (given) {
+            vm.prank(from);
+            (ok, ret) = asset.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
+        }
+        vm.revertToStateAndDelete(snap);
+        if (given && !(ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)))))) {
+            revert(string.concat("specfirst: asset transfers are restricted for test users (", _refusal(ok, ret), ")"));
+        }
+    }
+
+    function _refusal(bool ok, bytes memory ret) internal pure returns (string memory) {
+        if (ok) return "transfer returned false";
+        return _selectorOf(ret);
+    }
+
+    function _poolMember(uint256 index) internal view returns (address) {
+        return address(uint160(uint256(keccak256(abi.encode(poolSalt, index)))));
     }
 
     /// deposit(a) for 0 < a <= min(maxDeposit, cap) with previewDeposit(a) > 0 must not revert.
@@ -142,7 +178,7 @@ contract SpecfirstMaxHonored is Test {
     }
 
     function _user(uint256 who) internal view returns (address u) {
-        u = address(uint160(uint256(keccak256(abi.encode(poolSalt, who % USER_POOL)))));
+        u = _poolMember(who % USER_POOL);
         vm.assume(u.code.length == 0 && uint160(u) > 0xffff && u != vault && u != asset);
     }
 

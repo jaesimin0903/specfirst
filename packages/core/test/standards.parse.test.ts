@@ -12,6 +12,8 @@ import {
   STANDARD_CHECK_FAILED_EXIT_CODE,
   STANDARD_CHECK_INCOMPLETE_EXIT_CODE,
   standardCheckExitCode,
+  skipReasonOf,
+  RESTRICTED_ASSET_NOTE,
   summarize,
   type StandardPropertyResult,
 } from '../src/index.js';
@@ -361,5 +363,43 @@ describe('ZeroMaxVault: every max is 0, the actions work (Morpho Vault V2 shape)
       'sf-maxRedeem-honored',
     ]);
     expect(results.filter((r) => r.status === 'inconclusive').every((r) => /^`vm\.assume` rejected too many inputs/.test(r.reason!))).toBe(true);
+  });
+});
+
+describe('assets that test users cannot move (transfer probe in both setUps)', () => {
+  const check = async (name: string) => parseStandardForgeJson(await fx(name), ERC4626_CHECK_PROPERTIES)!;
+
+  it('an asset nobody may transfer: both setUps stop, all 30 not_applicable with the note and the selector', async () => {
+    const results = await check('local-restricted-asset.json');
+    expect(summarize(results)).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
+    expect(new Set(results.map((r) => r.reason))).toEqual(new Set([`${RESTRICTED_ASSET_NOTE} (selector 0x82b42900)`]));
+    expect(skipReasonOf(results)).toBe('asset-transfer-restricted');
+    expect(standardCheckExitCode(summarize(results))).toBe(17);
+  });
+
+  it('an asset only the vault may receive (deposits work, withdrawals fail in the token): also not_applicable', async () => {
+    const results = await check('local-partial-restricted.json');
+    expect(summarize(results)).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
+    expect(skipReasonOf(results)).toBe('asset-transfer-restricted');
+  });
+
+  it('a free asset behind a vault hook that refuses deposits is not skipped: sf-maxDeposit and sf-maxMint fail', async () => {
+    const results = await check('local-hook-blocked.json');
+    const r = byId(results);
+    expect(r.get('sf-maxDeposit-honored')!.status).toBe('fail');
+    expect(r.get('sf-maxDeposit-honored')!.reason).toMatch(/^deposit\(\d+\) reverted with selector 0xea8e4eb5 while maxDeposit is \d+$/);
+    expect(r.get('sf-maxMint-honored')!.reason).toMatch(/^mint\(\d+\) reverted with selector 0xea8e4eb5 while maxMint is \d+$/);
+    expect(summarize(results)).toEqual({ pass: 0, fail: 2, inconclusive: 28, notApplicable: 0 });
+    expect(skipReasonOf(results)).toBeNull();
+  });
+
+  it('the prefix is matched only at the start; any other setUp revert is setup-reverted', () => {
+    const doc = (reason: string) =>
+      JSON.stringify({ 't:S': { test_results: { 'setUp()': { status: 'Failure', reason, counterexample: null } } } });
+    const own = parseStandardForgeJson(doc('specfirst: asset transfers are restricted for test users (no revert data)'), [ERC4626_PROPERTIES[0]!])!;
+    expect(own[0]).toMatchObject({ status: 'not_applicable', reason: `${RESTRICTED_ASSET_NOTE} (no revert data)` });
+    const other = parseStandardForgeJson(doc('x specfirst: asset transfers are restricted for test users (selector 0x12345678)'), [ERC4626_PROPERTIES[0]!])!;
+    expect(other[0]).toMatchObject({ status: 'not_applicable', reason: 'setUp failed: x specfirst: asset transfers are restricted for test users (selector 0x12345678)' });
+    expect(skipReasonOf(other)).toBe('setup-reverted');
   });
 });
