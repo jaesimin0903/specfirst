@@ -1,8 +1,10 @@
 # @specfirst/contracts
 
 Foundry project for `CertificateRegistry.sol`, the onchain certificate registry described in
-`docs/plan.md` section 3.4 (tests follow section 6.1), and `CheckAttestationRegistry.sol`, which records
-`specfirst check` results for contracts on any chain (docs/adr/0004).
+`docs/plan.md` section 3.4 (tests follow section 6.1), `CheckAttestationRegistry.sol`, which records
+`specfirst check` results for contracts on any chain (docs/adr/0004), and `CheckRequestDesk.sol`, where
+anyone pays a fee for such a check and the worker is paid when it fulfills the request with a matching
+attestation (docs/adr/0005).
 
 ## Layout
 
@@ -14,6 +16,9 @@ Foundry project for `CertificateRegistry.sol`, the onchain certificate registry 
 | `script/Deploy.s.sol` | Deploys the registry and allows the deployer as issuer |
 | `src/CheckAttestationRegistry.sol` | Check attestations: attest, supersede per (subjectChainId, subject, standardId), revoke, isCompliant, isCompliantWith, suiteHashOf |
 | `test/CheckAttestationRegistry.t.sol` | Unit and fuzz tests: permissions, validation, bitmaps, supersede, standards kept apart, block order after revoke, revoke, isCompliant, isCompliantWith, suiteHash vector, no external calls |
+| `src/CheckRequestDesk.sol` | Paid check requests: requestCheck (exact fee, escrowed), fulfill against the registry, reject and expiry refunds, withdraw of earned fees only |
+| `test/CheckRequestDesk.t.sol` | Unit and fuzz tests: fee, ids from 0 and UnknownRequest, permissions, fulfill checks against the registry, reject and expiry refunds with the timeout boundary, withdraw never reaching escrow, refused transfers, reentrancy |
+| `test/CheckRequestDesk.invariant.t.sol` | Handler based invariants: balance == escrowed + earned - withdrawn, escrowed and earned equal the Pending and Fulfilled fees |
 | `lib/forge-std` | forge-std v1.16.2, vendored as plain files (no submodule) |
 
 ## Commands
@@ -92,3 +97,26 @@ across 4 targets and 3 projectIds):
   any attestation (ADR 0004, Roles).
 - The runtime code holds no CALL, CALLCODE, DELEGATECALL or STATICCALL (a test walks the bytecode), so the
   registry needs no reentrancy guard.
+
+## CheckRequestDesk results (2026-09-30, forge 1.5.1)
+
+| Check | Result |
+|---|---|
+| `forge test --match-contract CheckRequestDesk` | 34 passed, 0 failed (30 unit, 2 fuzz with 256 runs, 2 invariant with 256 runs x 64 depth) |
+| `forge coverage --report summary` | `src/CheckRequestDesk.sol` lines 100% (95/95), statements 100% (114/114), branches 100% (23/23), functions 100% (19/19) |
+
+- Request ids are the zero based index of a global list; `requestOf(id)` reverts with `UnknownRequest(id)` for
+  `id >= requestCount()`. `requestCheck` takes exactly `fee` (`WrongFee` otherwise) and refuses a zero subject,
+  chain id or standardId. The request keeps the fee it paid; `setFee` only changes new requests.
+- `fulfill(id, attestationId)` (worker only, Pending only) reads `registry.attestationOf(attestationId)` and
+  requires the same subjectChainId, subject and standardId, `issuedAt >= requestedAt` and a status other than
+  Revoked. A Superseded attestation is accepted, and one attestation can close several requests made before it.
+- `reject(id, reasonCode)` (worker only) refunds the whole fee in the same transaction; `refundExpired(id)` is
+  open to anyone once `block.timestamp >= requestedAt + timeout` and pays the requester, not the caller.
+- `withdraw(to)` (owner only) pays `earned - withdrawn`; escrowed fees of Pending requests are never reachable.
+  Coins leave through `call` after every state change under a reentrancy lock; a refused transfer reverts
+  (`TransferFailed`), so a requester contract that refuses coins keeps its fee escrowed until fulfilled.
+- Owner, registry and timeout are immutable; the owner sets the fee and the worker. The desk is deployed with
+  `specfirst desk deploy`, from the bytecode bundled in `packages/core/src/desk/artifact.ts`
+  (`node packages/core/scripts/gen-desk-artifact.mjs` after `forge build`; `packages/core/test/desk.test.ts`
+  compares it with a fresh build).
