@@ -4,6 +4,7 @@ import { registerAttestRegistryCommand } from './commands/attest.js';
 import { registerCertCommand } from './commands/cert.js';
 import { registerCheckCommand } from './commands/check.js';
 import { registerDeployCommand } from './commands/deploy.js';
+import { registerDeskCommand, registerWorkerCommand } from './commands/desk.js';
 import { registerInitCommand } from './commands/init.js';
 import { registerLockCommand } from './commands/lock.js';
 import { registerRunCommand } from './commands/run.js';
@@ -28,5 +29,7 @@ registerCertCommand(program);
 registerStatusCommand(program);
 registerCheckCommand(program);
 registerAttestRegistryCommand(program);
+registerDeskCommand(program);
+registerWorkerCommand(program);
 
 await program.parseAsync(process.argv);

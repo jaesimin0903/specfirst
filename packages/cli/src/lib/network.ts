@@ -17,6 +17,8 @@ export const ANVIL_DEFAULT_KEY: Hex = '0xac0974bec39a17e36ba4a6b4d238ff944bacb47
 
 export const DEPLOYER_KEY_ENV = 'DEPLOYER_PRIVATE_KEY';
 export const ISSUER_KEY_ENV = 'ISSUER_PRIVATE_KEY';
+/** Pays the fee of `specfirst desk request`. Never falls back to an anvil key. */
+export const REQUESTER_KEY_ENV = 'REQUESTER_PRIVATE_KEY';
 export const MONAD_RPC_ENV = 'MONAD_TESTNET_RPC';
 export const MONAD_RPC_FALLBACKS_ENV = 'MONAD_TESTNET_RPC_FALLBACKS';
 export const MONAD_MAINNET_RPC_ENV = 'MONAD_MAINNET_RPC';
@@ -29,6 +31,11 @@ export function registryEnvVar(chainId: number): string {
 /** CheckAttestationRegistry address for the chain the registry lives on. */
 export function attestRegistryEnvVar(chainId: number): string {
   return `SPECFIRST_ATTEST_REGISTRY_${chainId}`;
+}
+
+/** CheckRequestDesk address for the chain the desk lives on. */
+export function deskEnvVar(chainId: number): string {
+  return `SPECFIRST_DESK_${chainId}`;
 }
 
 export interface NetworkOptions {
@@ -122,6 +129,15 @@ export function resolveAttestRegistry(net: ResolvedNetwork, opts: { registryAtte
   const v = opts.registryAttest ?? env[envName];
   if (!v || !/^0x[0-9a-fA-F]{40}$/.test(v)) {
     throw new ConfigError(`no CheckAttestationRegistry address: set ${envName} or pass --registry-attest <address>`);
+  }
+  return v as Address;
+}
+
+export function resolveDesk(net: ResolvedNetwork, opts: { desk?: string }, env: NodeJS.ProcessEnv = process.env): Address {
+  const envName = deskEnvVar(net.clients.chain.id);
+  const v = opts.desk ?? env[envName];
+  if (!v || !/^0x[0-9a-fA-F]{40}$/.test(v)) {
+    throw new ConfigError(`no CheckRequestDesk address: set ${envName} or pass --desk <address>`);
   }
   return v as Address;
 }
