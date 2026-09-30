@@ -334,3 +334,25 @@ export {
   type StandardCheckEvent,
   type StandardCheckClient,
 } from './standards/check.js';
+export {
+  suiteOf,
+  suiteHash,
+  checkReportHash,
+  parseCheckReport,
+  statusBitmap,
+  attestationParamsFromReport,
+  AttestationError,
+  MAX_ATTESTED_RESULTS,
+  type AttestationSuite,
+  type AttestParams,
+} from './attest/params.js';
+export { verifySubjectCode, type SubjectClient, type SubjectCodeCheck } from './attest/verify.js';
+export {
+  AttestationRegistryClient,
+  deployAttestationRegistry,
+  checkAttestationRegistryAbi,
+  checkAttestationRegistryBytecode,
+  ATTESTATION_STATUS,
+  type Attestation,
+  type AttestationStatusName,
+} from './attest/registry.js';
