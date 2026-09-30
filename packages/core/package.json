@@ -14,6 +14,10 @@
     "./hash": {
       "types": "./dist/spec/hash.d.ts",
       "import": "./dist/spec/hash.js"
+    },
+    "./desk": {
+      "types": "./dist/desk/index.d.ts",
+      "import": "./dist/desk/index.js"
     }
   },
   "files": [

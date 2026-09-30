@@ -112,7 +112,7 @@ export class AttestationRegistryClient {
    * emitted. The simulation's return value is not used, since another attestation can land between the
    * simulation and the transaction.
    */
-  async attest(p: AttestParams): Promise<TxOutcome & { id: bigint }> {
+  async attest(p: AttestParams): Promise<TxOutcome & { id: bigint; effectiveGasPrice: bigint }> {
     const out = await this.write('attest', [p]);
     const self = this.address.toLowerCase();
     const events = parseEventLogs({ abi: checkAttestationRegistryAbi, eventName: 'Attested', logs: out.receipt.logs }).filter(
@@ -121,7 +121,7 @@ export class AttestationRegistryClient {
     if (events.length !== 1) {
       throw new RegistryError(`attest tx ${out.hash}: expected one Attested event from ${this.address} in the receipt, found ${events.length}`);
     }
-    return { hash: out.hash, blockNumber: out.blockNumber, gasUsed: out.gasUsed, id: events[0]!.args.id };
+    return { hash: out.hash, blockNumber: out.blockNumber, gasUsed: out.gasUsed, id: events[0]!.args.id, effectiveGasPrice: out.receipt.effectiveGasPrice ?? 0n };
   }
 
   async revoke(id: bigint, reasonHash: Hex): Promise<TxOutcome> {
