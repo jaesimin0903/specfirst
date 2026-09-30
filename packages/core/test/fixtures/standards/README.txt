@@ -70,3 +70,9 @@ local-erc7575-no-precheck.json
   withdraw, withdraw-zero-allowance, previewRedeem, redeem, redeem-zero-allowance and the 8 round trips.
   The same 16 failed on Centrifuge V3 0x082c62088669facc1fa9f056c5efc8cbccda39b2 on Monad. Today the
   pre-check skips forge for such a vault; the fixture pins how the parser reads that output.
+
+local-zero-max.json
+  ZeroMaxVault (0x5F..51, mock-vaults.sol): maxDeposit, maxMint, maxWithdraw and maxRedeem return 0 for
+  everyone, the actions work (the shape of Morpho Vault V2 on Monad). Full check with the harness that tries
+  the cap when maxDeposit is 0 (--fuzz-runs 16, seed 1, local anvil): the 26 upstream properties pass, the
+  four sf- properties are inconclusive (a max of 0 discards their inputs).

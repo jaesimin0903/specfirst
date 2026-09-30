@@ -349,3 +349,17 @@ describe('ERC-7575 vault run without the pre-check (local anvil, SplitShareVault
     expect(summarize(results)).toEqual({ pass: 14, fail: 16, inconclusive: 0, notApplicable: 0 });
   });
 });
+
+describe('ZeroMaxVault: every max is 0, the actions work (Morpho Vault V2 shape)', () => {
+  it('the upstream suite runs and passes; the sf- properties discard every input and end inconclusive', async () => {
+    const results = parseStandardForgeJson(await fx('local-zero-max.json'), ERC4626_CHECK_PROPERTIES)!;
+    expect(summarize(results)).toEqual({ pass: 26, fail: 0, inconclusive: 4, notApplicable: 0 });
+    expect(results.filter((r) => r.status === 'inconclusive').map((r) => r.id)).toEqual([
+      'sf-maxDeposit-honored',
+      'sf-maxMint-honored',
+      'sf-maxWithdraw-honored',
+      'sf-maxRedeem-honored',
+    ]);
+    expect(results.filter((r) => r.status === 'inconclusive').every((r) => /^`vm\.assume` rejected too many inputs/.test(r.reason!))).toBe(true);
+  });
+});

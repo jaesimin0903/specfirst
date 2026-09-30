@@ -247,3 +247,12 @@ contract SplitShareVault {
 contract SelfShareVault is VaultBase {
     function share() external view returns (address) { return address(this); }
 }
+
+/// Reports 0 from all four max functions for everyone (a conservative underestimate EIP-4626 allows, as
+/// Morpho Vault V2 does), while deposit, mint, withdraw and redeem work normally.
+contract ZeroMaxVault is VaultBase {
+    function maxDeposit(address) public pure override returns (uint256) { return 0; }
+    function maxMint(address) public pure override returns (uint256) { return 0; }
+    function maxWithdraw(address) public pure override returns (uint256) { return 0; }
+    function maxRedeem(address) public pure override returns (uint256) { return 0; }
+}

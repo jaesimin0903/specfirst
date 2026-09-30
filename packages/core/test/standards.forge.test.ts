@@ -141,6 +141,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
       'SplitShareToken',
       'SplitShareVault',
       'SelfShareVault',
+      'ZeroMaxVault',
     ]) {
       const art = JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${name}.json`), 'utf8')) as { deployedBytecode: { object: string } };
       code[name] = art.deployedBytecode.object;
@@ -157,6 +158,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000041', code.SplitShareToken]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000042', code.SplitShareVault]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000043', code.SelfShareVault]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000051', code.ZeroMaxVault]);
     await rpc('anvil_mine', ['0x1']);
   });
   afterAll(async () => {
@@ -221,6 +223,14 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     const report = await check('0x5f00000000000000000000000000000000000043');
     expect(report.vaultKind).toBe('erc4626');
     expect(report.summary).toEqual({ pass: 30, fail: 0, inconclusive: 0, notApplicable: 0 });
+  });
+
+  it('max values of 0 for everyone (Morpho Vault V2 shape): the 26 upstream properties run and pass, sf- inconclusive, exit 17', async () => {
+    const report = await check('0x5F00000000000000000000000000000000000051');
+    expect(report.summary).toEqual({ pass: 26, fail: 0, inconclusive: 4, notApplicable: 0 });
+    expect(report.results.slice(0, 26).every((r) => r.status === 'pass')).toBe(true);
+    expect(report.results.slice(26).every((r) => r.status === 'inconclusive' && !/deposit reverted below maxDeposit/.test(r.reason!))).toBe(true);
+    expect(standardCheckExitCode(report.summary)).toBe(17);
   });
 
   it('a vault without share() is a plain ERC-4626 vault: forge runs', async () => {
