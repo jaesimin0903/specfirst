@@ -341,17 +341,29 @@ export {
   parseCheckReport,
   statusBitmap,
   attestationParamsFromReport,
+  attestationReportPath,
+  standardIdOf,
+  propertiesHash,
+  STANDARD_PROPERTIES,
   AttestationError,
   MAX_ATTESTED_RESULTS,
+  MAX_REPORT_URI_BYTES,
   type AttestationSuite,
   type AttestParams,
 } from './attest/params.js';
-export { verifySubjectCode, type SubjectClient, type SubjectCodeCheck } from './attest/verify.js';
+export {
+  verifySubjectCode,
+  ATTESTED_IDENTITY_FIELDS,
+  type SubjectClient,
+  type SubjectCodeCheck,
+  type VerifySubjectOptions,
+} from './attest/verify.js';
 export {
   AttestationRegistryClient,
   deployAttestationRegistry,
   checkAttestationRegistryAbi,
   checkAttestationRegistryBytecode,
+  checkAttestationRegistryCreationCodeHash,
   ATTESTATION_STATUS,
   type Attestation,
   type AttestationStatusName,

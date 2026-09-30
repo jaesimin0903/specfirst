@@ -16,6 +16,8 @@ export const STANDARDS = ['erc4626'] as const;
 const hex32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/, 'expected a 32-byte 0x hex string');
 const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/, 'expected a 0x address');
 const decimal = z.string().regex(/^\d+$/, 'expected a non-negative decimal integer string');
+/** No leading zeros: one block has one spelling, so its reportHash and report file name are unique. */
+const canonicalDecimal = z.string().regex(/^(0|[1-9]\d*)$/, 'expected a decimal integer string without leading zeros');
 const count = z.number().int().nonnegative();
 
 export const standardNameSchema = z.enum(STANDARDS);
@@ -97,8 +99,8 @@ export const standardCheckReportSchema = z
     schemaVersion: z.literal(STANDARD_CHECK_SCHEMA_VERSION),
     chainId: z.number().int().positive(),
     address,
-    /** Fork block, decimal. */
-    blockNumber: decimal,
+    /** Fork block, decimal without leading zeros. */
+    blockNumber: canonicalDecimal,
     standard: standardNameSchema,
     upstream: z.object({ repo: z.string().url(), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
     harnessSha256: hex32,
