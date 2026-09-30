@@ -16,19 +16,16 @@ contract CheckAttestationRegistryTest is Test {
     address internal constant VAULT = 0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E;
     address internal constant OTHER = 0x802c91d807A8DaCA257c4708ab264B6520964e44;
     bytes32 internal constant EMPTY_CODE_HASH = keccak256("");
+    /// standardId = keccak256(bytes(standard)); the value packages/core computes for "erc4626".
+    bytes32 internal constant ERC4626 = 0x45f39c8c7e3105201fd8b1288ac068347728af9cfd16f3f08e97171ef955c9ab;
+    bytes32 internal constant ERC20 = keccak256("erc20");
 
     event Attested(
         uint256 indexed id,
         uint64 indexed subjectChainId,
         address indexed subject,
-        uint64 blockNumber,
-        bytes32 implementationKey,
-        bytes32 suiteHash,
-        bytes32 reportHash,
-        uint16 passCount,
-        uint16 failCount,
-        uint16 inconclusiveCount,
-        uint16 notApplicableCount
+        address issuer,
+        CheckAttestationRegistry.AttestParams params
     );
     event Superseded(uint256 indexed id, uint256 indexed byId);
     event Revoked(uint256 indexed id, bytes32 reasonHash);
@@ -40,16 +37,21 @@ contract CheckAttestationRegistryTest is Test {
     }
 
     /// Params with `pass` passes first, then `fail` fails, `inc` inconclusive and `na` not applicable.
-    function _params(uint64 chainId, address subject, uint64 blockNumber, uint16 pass, uint16 fail, uint16 inc, uint16 na)
-        internal
-        pure
-        returns (CheckAttestationRegistry.AttestParams memory p)
-    {
+    function _params(
+        uint64 chainId,
+        address subject,
+        uint64 blockNumber,
+        uint16 pass,
+        uint16 fail,
+        uint16 inc,
+        uint16 na
+    ) internal pure returns (CheckAttestationRegistry.AttestParams memory p) {
         uint256 passed = pass == 256 ? type(uint256).max : (uint256(1) << pass) - 1;
         uint256 failed = fail == 0 ? 0 : ((uint256(1) << fail) - 1) << pass;
         p = CheckAttestationRegistry.AttestParams({
             subjectChainId: chainId,
             subject: subject,
+            standardId: ERC4626,
             blockNumber: blockNumber,
             implementationKey: keccak256("impl"),
             subjectCodeHash: keccak256("code"),
@@ -122,8 +124,9 @@ contract CheckAttestationRegistryTest is Test {
     function test_attest_storesEveryField() public {
         vm.warp(1_790_000_000);
         CheckAttestationRegistry.AttestParams memory p = _params(MAINNET, VAULT, 109061472, 16, 2, 12, 0);
+        // The event carries every submitted field and the issuer, so an indexer needs no storage read.
         vm.expectEmit(true, true, true, true);
-        emit Attested(0, MAINNET, VAULT, 109061472, p.implementationKey, p.suiteHash, p.reportHash, 16, 2, 12, 0);
+        emit Attested(0, MAINNET, VAULT, issuer, p);
         uint256 id = _attest(p);
         assertEq(id, 0);
         assertEq(reg.attestationCount(), 1);
@@ -131,6 +134,7 @@ contract CheckAttestationRegistryTest is Test {
         CheckAttestationRegistry.Attestation memory a = reg.attestationOf(id);
         assertEq(a.subjectChainId, MAINNET);
         assertEq(a.subject, VAULT);
+        assertEq(a.standardId, ERC4626);
         assertEq(a.blockNumber, 109061472);
         assertEq(a.implementationKey, keccak256("impl"));
         assertEq(a.subjectCodeHash, keccak256("code"));
@@ -165,6 +169,21 @@ contract CheckAttestationRegistryTest is Test {
         reg.attest(p);
 
         p = _params(MAINNET, VAULT, 1, 30, 0, 0, 0);
+        p.standardId = bytes32(0);
+        vm.expectRevert(CheckAttestationRegistry.EmptyStandardId.selector);
+        reg.attest(p);
+
+        p = _params(MAINNET, VAULT, 1, 30, 0, 0, 0);
+        p.implementationKey = bytes32(0);
+        vm.expectRevert(CheckAttestationRegistry.EmptyImplementationKey.selector);
+        reg.attest(p);
+
+        p = _params(MAINNET, VAULT, 1, 30, 0, 0, 0);
+        p.suiteHash = bytes32(0);
+        vm.expectRevert(CheckAttestationRegistry.EmptySuiteHash.selector);
+        reg.attest(p);
+
+        p = _params(MAINNET, VAULT, 1, 30, 0, 0, 0);
         p.subjectCodeHash = bytes32(0);
         vm.expectRevert(CheckAttestationRegistry.EmptyCodeHash.selector);
         reg.attest(p);
@@ -179,6 +198,18 @@ contract CheckAttestationRegistryTest is Test {
         vm.stopPrank();
     }
 
+    function test_attest_reportURIAtMost512Bytes() public {
+        assertEq(reg.MAX_REPORT_URI_LENGTH(), 512);
+        CheckAttestationRegistry.AttestParams memory p = _params(MAINNET, VAULT, 1, 30, 0, 0, 0);
+        p.reportURI = string(new bytes(513));
+        vm.prank(issuer);
+        vm.expectRevert(abi.encodeWithSelector(CheckAttestationRegistry.ReportURITooLong.selector, uint256(513)));
+        reg.attest(p);
+        p.reportURI = string(new bytes(512));
+        uint256 id = _attest(p);
+        assertEq(bytes(reg.attestationOf(id).reportURI).length, 512);
+    }
+
     function test_attest_countsMustBeOneTo256() public {
         vm.startPrank(issuer);
         vm.expectRevert(abi.encodeWithSelector(CheckAttestationRegistry.InvalidCounts.selector, uint256(0)));
@@ -191,7 +222,7 @@ contract CheckAttestationRegistryTest is Test {
         // Exactly 256 results, every bit set, is the upper bound and accepted.
         uint256 id = _attest(_params(MAINNET, VAULT, 1, 256, 0, 0, 0));
         assertEq(reg.attestationOf(id).passedBitmap, type(uint256).max);
-        assertTrue(reg.isCompliant(MAINNET, VAULT));
+        assertTrue(reg.isCompliant(MAINNET, VAULT, ERC4626));
     }
 
     function test_attest_bitmapsMustMatchCounts() public {
@@ -218,6 +249,26 @@ contract CheckAttestationRegistryTest is Test {
         vm.stopPrank();
     }
 
+    function test_attest_rejectsFailedBitsOnlyOutsideTheResults() public {
+        vm.startPrank(issuer);
+        // 2 pass, 1 fail: 3 results. The one fail bit sits at index 3, past the last result, so the
+        // popcount matches failCount and only the range check can catch it.
+        CheckAttestationRegistry.AttestParams memory p = _params(MAINNET, VAULT, 1, 2, 1, 0, 0);
+        p.failedBitmap = uint256(1) << 3;
+        vm.expectRevert(CheckAttestationRegistry.InvalidBitmaps.selector);
+        reg.attest(p);
+        // 255 results, the fail bit on bit 255.
+        p = _params(MAINNET, VAULT, 1, 254, 1, 0, 0);
+        p.failedBitmap = uint256(1) << 255;
+        vm.expectRevert(CheckAttestationRegistry.InvalidBitmaps.selector);
+        reg.attest(p);
+        vm.stopPrank();
+        // The same counts with the fail bit inside the results are accepted.
+        p = _params(MAINNET, VAULT, 1, 254, 1, 0, 0);
+        assertEq(p.failedBitmap, uint256(1) << 254);
+        _attest(p);
+    }
+
     // ---------------------------------------------------------------- supersede
 
     function test_attest_supersedesPreviousOfSameSubject() public {
@@ -230,7 +281,7 @@ contract CheckAttestationRegistryTest is Test {
         CheckAttestationRegistry.Attestation memory a = reg.attestationOf(first);
         assertEq(uint8(a.status), uint8(CheckAttestationRegistry.Status.Superseded));
         assertEq(a.supersededBy, second);
-        (uint256 id, CheckAttestationRegistry.Attestation memory l) = reg.latest(MAINNET, VAULT);
+        (uint256 id, CheckAttestationRegistry.Attestation memory l) = reg.latest(MAINNET, VAULT, ERC4626);
         assertEq(id, second);
         assertEq(l.failCount, 2);
     }
@@ -240,18 +291,61 @@ contract CheckAttestationRegistryTest is Test {
         _attest(_params(TESTNET, VAULT, 5, 30, 0, 0, 0)); // same address, other chain
         _attest(_params(MAINNET, OTHER, 5, 30, 0, 0, 0)); // other address
         assertEq(uint8(reg.attestationOf(0).status), uint8(CheckAttestationRegistry.Status.Valid));
-        (uint256 idT,) = reg.latest(TESTNET, VAULT);
-        (uint256 idO,) = reg.latest(MAINNET, OTHER);
+        (uint256 idT,) = reg.latest(TESTNET, VAULT, ERC4626);
+        (uint256 idO,) = reg.latest(MAINNET, OTHER, ERC4626);
         assertEq(idT, 1);
         assertEq(idO, 2);
+    }
+
+    function test_attest_standardsAreKeptApart() public {
+        uint256 first = _allPass(100);
+        // Another standard on the same subject, at an earlier block: its own key, no supersede, no block order.
+        CheckAttestationRegistry.AttestParams memory p = _params(MAINNET, VAULT, 50, 1, 1, 0, 0);
+        p.standardId = ERC20;
+        uint256 second = _attest(p);
+        assertEq(uint8(reg.attestationOf(first).status), uint8(CheckAttestationRegistry.Status.Valid));
+        assertTrue(reg.isCompliant(MAINNET, VAULT, ERC4626));
+        assertFalse(reg.isCompliant(MAINNET, VAULT, ERC20));
+        (uint256 id4626,) = reg.latest(MAINNET, VAULT, ERC4626);
+        (uint256 id20, CheckAttestationRegistry.Attestation memory a20) = reg.latest(MAINNET, VAULT, ERC20);
+        assertEq(id4626, first);
+        assertEq(id20, second);
+        assertEq(a20.standardId, ERC20);
+        vm.expectRevert(
+            abi.encodeWithSelector(CheckAttestationRegistry.NoAttestation.selector, MAINNET, VAULT, keccak256("erc721"))
+        );
+        reg.latest(MAINNET, VAULT, keccak256("erc721"));
     }
 
     function test_attest_rejectsEarlierBlockThanLatest() public {
         _allPass(100);
         vm.prank(issuer);
-        vm.expectRevert(abi.encodeWithSelector(CheckAttestationRegistry.OlderThanLatest.selector, uint64(99), uint64(100)));
+        vm.expectRevert(
+            abi.encodeWithSelector(CheckAttestationRegistry.OlderThanLatest.selector, uint64(99), uint64(100))
+        );
         reg.attest(_params(MAINNET, VAULT, 99, 30, 0, 0, 0));
         _allPass(100); // same block is a rerun, accepted
+    }
+
+    function test_attest_acceptsEarlierBlockAfterRevokedLatest() public {
+        // An attestation recorded with a wrong, too high block number is revoked and replaced.
+        uint256 wrong = _allPass(1_000_000);
+        vm.prank(issuer);
+        reg.revoke(wrong, keccak256("block number was wrong"));
+        uint256 fixedId = _allPass(100);
+        (uint256 id, CheckAttestationRegistry.Attestation memory l) = reg.latest(MAINNET, VAULT, ERC4626);
+        assertEq(id, fixedId);
+        assertEq(l.blockNumber, 100);
+        assertTrue(reg.isCompliant(MAINNET, VAULT, ERC4626));
+        CheckAttestationRegistry.Attestation memory w = reg.attestationOf(wrong);
+        assertEq(uint8(w.status), uint8(CheckAttestationRegistry.Status.Revoked));
+        assertEq(w.supersededBy, 0);
+        // The replacement is Valid, so the block order applies again.
+        vm.prank(issuer);
+        vm.expectRevert(
+            abi.encodeWithSelector(CheckAttestationRegistry.OlderThanLatest.selector, uint64(99), uint64(100))
+        );
+        reg.attest(_params(MAINNET, VAULT, 99, 30, 0, 0, 0));
     }
 
     function test_attest_leavesRevokedPreviousRevoked() public {
@@ -277,7 +371,7 @@ contract CheckAttestationRegistryTest is Test {
         vm.stopPrank();
         assertEq(uint8(reg.attestationOf(first).status), uint8(CheckAttestationRegistry.Status.Revoked));
         assertEq(reg.attestationOf(second).revokeReasonHash, keccak256("b"));
-        assertFalse(reg.isCompliant(MAINNET, VAULT));
+        assertFalse(reg.isCompliant(MAINNET, VAULT, ERC4626));
     }
 
     function test_revoke_rejects() public {
@@ -289,7 +383,9 @@ contract CheckAttestationRegistryTest is Test {
         reg.revoke(7, keccak256("x"));
         reg.revoke(id, keccak256("x"));
         vm.expectRevert(
-            abi.encodeWithSelector(CheckAttestationRegistry.NotRevocable.selector, id, CheckAttestationRegistry.Status.Revoked)
+            abi.encodeWithSelector(
+                CheckAttestationRegistry.NotRevocable.selector, id, CheckAttestationRegistry.Status.Revoked
+            )
         );
         reg.revoke(id, keccak256("again"));
         vm.stopPrank();
@@ -298,23 +394,23 @@ contract CheckAttestationRegistryTest is Test {
     // ---------------------------------------------------------------- isCompliant, latest
 
     function test_isCompliant_boundaries() public {
-        assertFalse(reg.isCompliant(MAINNET, VAULT)); // nothing yet
+        assertFalse(reg.isCompliant(MAINNET, VAULT, ERC4626)); // nothing yet
         _allPass(1);
-        assertTrue(reg.isCompliant(MAINNET, VAULT));
+        assertTrue(reg.isCompliant(MAINNET, VAULT, ERC4626));
         _attest(_params(MAINNET, VAULT, 2, 29, 0, 1, 0)); // one inconclusive
-        assertFalse(reg.isCompliant(MAINNET, VAULT));
+        assertFalse(reg.isCompliant(MAINNET, VAULT, ERC4626));
         _attest(_params(MAINNET, VAULT, 3, 29, 0, 0, 1)); // one not applicable
-        assertFalse(reg.isCompliant(MAINNET, VAULT));
+        assertFalse(reg.isCompliant(MAINNET, VAULT, ERC4626));
         _attest(_params(MAINNET, VAULT, 4, 29, 1, 0, 0)); // one fail
-        assertFalse(reg.isCompliant(MAINNET, VAULT));
+        assertFalse(reg.isCompliant(MAINNET, VAULT, ERC4626));
         _attest(_params(MAINNET, VAULT, 5, 0, 0, 30, 0)); // nothing passed
-        assertFalse(reg.isCompliant(MAINNET, VAULT));
+        assertFalse(reg.isCompliant(MAINNET, VAULT, ERC4626));
         uint256 id = _allPass(6);
-        assertTrue(reg.isCompliant(MAINNET, VAULT));
-        assertFalse(reg.isCompliant(TESTNET, VAULT)); // other chain
+        assertTrue(reg.isCompliant(MAINNET, VAULT, ERC4626));
+        assertFalse(reg.isCompliant(TESTNET, VAULT, ERC4626)); // other chain
         vm.prank(issuer);
         reg.revoke(id, keccak256("x"));
-        assertFalse(reg.isCompliant(MAINNET, VAULT)); // a revoked latest does not fall back to older ones
+        assertFalse(reg.isCompliant(MAINNET, VAULT, ERC4626)); // a revoked latest does not fall back to older ones
     }
 
     function testFuzz_isCompliant_matchesDefinition(uint16 pass, uint16 fail, uint16 inc, uint16 na) public {
@@ -324,12 +420,56 @@ contract CheckAttestationRegistryTest is Test {
         na = uint16(bound(na, 0, 64));
         vm.assume(uint256(pass) + fail + inc + na > 0);
         _attest(_params(MAINNET, VAULT, 1, pass, fail, inc, na));
-        assertEq(reg.isCompliant(MAINNET, VAULT), pass > 0 && fail == 0 && inc == 0 && na == 0);
+        bool expected = pass > 0 && fail == 0 && inc == 0 && na == 0;
+        assertEq(reg.isCompliant(MAINNET, VAULT, ERC4626), expected);
+        assertEq(reg.isCompliantWith(MAINNET, VAULT, ERC4626, keccak256("suite")), expected);
+        assertFalse(reg.isCompliantWith(MAINNET, VAULT, ERC4626, keccak256("other suite")));
+    }
+
+    function test_isCompliantWith_pinsTheSuite() public {
+        bytes32 suite = keccak256("suite");
+        assertFalse(reg.isCompliantWith(MAINNET, VAULT, ERC4626, suite)); // nothing yet
+        _allPass(1);
+        assertTrue(reg.isCompliantWith(MAINNET, VAULT, ERC4626, suite));
+        assertFalse(reg.isCompliantWith(MAINNET, VAULT, ERC4626, keccak256("other suite")));
+        assertFalse(reg.isCompliantWith(MAINNET, VAULT, ERC20, suite)); // other standard
+        // A newer all-pass attestation with another suite: isCompliant stays true, isCompliantWith the old
+        // suite turns false and does not fall back to the older attestation.
+        CheckAttestationRegistry.AttestParams memory p = _params(MAINNET, VAULT, 2, 30, 0, 0, 0);
+        p.suiteHash = keccak256("other suite");
+        uint256 id = _attest(p);
+        assertTrue(reg.isCompliant(MAINNET, VAULT, ERC4626));
+        assertFalse(reg.isCompliantWith(MAINNET, VAULT, ERC4626, suite));
+        assertTrue(reg.isCompliantWith(MAINNET, VAULT, ERC4626, keccak256("other suite")));
+        vm.prank(issuer);
+        reg.revoke(id, keccak256("x"));
+        assertFalse(reg.isCompliantWith(MAINNET, VAULT, ERC4626, keccak256("other suite")));
+    }
+
+    function test_isCompliant_staysTrueAfterIssuerRemoved() public {
+        // Removing an issuer does not touch what it attested (ADR 0004): the attestation stays Valid.
+        uint256 id = _allPass(1);
+        reg.setIssuer(issuer, false);
+        assertTrue(reg.isCompliant(MAINNET, VAULT, ERC4626));
+        assertEq(uint8(reg.attestationOf(id).status), uint8(CheckAttestationRegistry.Status.Valid));
+        // The removed issuer can no longer revoke it; any remaining issuer can, and can supersede it.
+        vm.prank(issuer);
+        vm.expectRevert(CheckAttestationRegistry.NotIssuer.selector);
+        reg.revoke(id, keccak256("x"));
+        address other = makeAddr("other issuer");
+        reg.setIssuer(other, true);
+        vm.prank(other);
+        uint256 next = reg.attest(_params(MAINNET, VAULT, 2, 29, 1, 0, 0));
+        assertEq(reg.attestationOf(id).supersededBy, next);
+        assertEq(reg.attestationOf(next).issuer, other);
+        assertFalse(reg.isCompliant(MAINNET, VAULT, ERC4626));
     }
 
     function test_latest_revertsWhenNone() public {
-        vm.expectRevert(abi.encodeWithSelector(CheckAttestationRegistry.NoAttestation.selector, MAINNET, VAULT));
-        reg.latest(MAINNET, VAULT);
+        vm.expectRevert(
+            abi.encodeWithSelector(CheckAttestationRegistry.NoAttestation.selector, MAINNET, VAULT, ERC4626)
+        );
+        reg.latest(MAINNET, VAULT, ERC4626);
         vm.expectRevert(abi.encodeWithSelector(CheckAttestationRegistry.UnknownAttestation.selector, uint256(0)));
         reg.attestationOf(0);
     }
@@ -342,8 +482,10 @@ contract CheckAttestationRegistryTest is Test {
             upstreamRepo: "https://github.com/a16z/erc4626-tests",
             upstreamCommit: bytes20(hex"ac485460e014f22807c1ff687e0b4dc3af96ee40"),
             forgeStdCommit: bytes20(hex"bf647bd6046f2f7da30d0c2bf435e5c76a780c1b"),
+            forgeVersion: "forge Version: 1.5.1-Homebrew",
             harnessSha256: 0xbba3289225c7d99cf1a395446c110c21356a8b48b6f9743c82b3886d2e741582,
             sfPropertiesSha256: 0xfc1755ebeef03b7fb6d77baf80cf6fbb4dde35b8f54cfa3d49cfbbc10c723198,
+            propertiesHash: PROPERTIES_HASH,
             foundryTomlSha256: 0x9a6d9659052d552b6b19810de600561dc6d9bbb1a7aa45d6f04669ff4603e77e,
             runs: 16,
             maxTestRejects: 4096,
@@ -361,9 +503,17 @@ contract CheckAttestationRegistryTest is Test {
         s = _suite();
         s.delta = 1;
         assertTrue(reg.suiteHashOf(s) != SUITE_HASH_VECTOR);
+        s = _suite();
+        s.forgeVersion = "forge Version: 1.5.2";
+        assertTrue(reg.suiteHashOf(s) != SUITE_HASH_VECTOR);
+        s = _suite();
+        s.propertiesHash = keccak256("a property table in another order");
+        assertTrue(reg.suiteHashOf(s) != SUITE_HASH_VECTOR);
     }
 
-    bytes32 internal constant SUITE_HASH_VECTOR = 0x583b17e2ce455495cbdf0c337c1c9235b81aedaef8373e57521e36311cd11d50;
+    /// keccak256 of the canonical JSON of ERC4626_CHECK_PROPERTIES (packages/core), the 30 properties in bit order.
+    bytes32 internal constant PROPERTIES_HASH = 0x33117c4fed6c8e64829e6397d577a69153a43774fddd609e952264514e270204;
+    bytes32 internal constant SUITE_HASH_VECTOR = 0x49a246fc992c88a122f878579e0ee415f79ff4cf8c5f021b21a12d703e83023e;
 
     // ---------------------------------------------------------------- no external calls
 

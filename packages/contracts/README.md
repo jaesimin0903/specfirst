@@ -12,8 +12,8 @@ Foundry project for `CertificateRegistry.sol`, the onchain certificate registry 
 | `test/CertificateRegistry.t.sol` | Unit tests for every 6.1 case |
 | `test/CertificateRegistry.invariant.t.sol` | Handler based invariant tests |
 | `script/Deploy.s.sol` | Deploys the registry and allows the deployer as issuer |
-| `src/CheckAttestationRegistry.sol` | Check attestations: attest, supersede per (subjectChainId, subject), revoke, isCompliant, suiteHashOf |
-| `test/CheckAttestationRegistry.t.sol` | Unit and fuzz tests: permissions, validation, bitmaps, supersede, revoke, isCompliant, suiteHash vector, no external calls |
+| `src/CheckAttestationRegistry.sol` | Check attestations: attest, supersede per (subjectChainId, subject, standardId), revoke, isCompliant, isCompliantWith, suiteHashOf |
+| `test/CheckAttestationRegistry.t.sol` | Unit and fuzz tests: permissions, validation, bitmaps, supersede, standards kept apart, block order after revoke, revoke, isCompliant, isCompliantWith, suiteHash vector, no external calls |
 | `lib/forge-std` | forge-std v1.16.2, vendored as plain files (no submodule) |
 
 ## Commands
@@ -33,7 +33,8 @@ through the expected `PartialCannotSupersede` path, which it catches and counts.
 CheckAttestationRegistry is deployed with `specfirst attest-registry deploy`, not with a forge script: the
 CLI sends from a guarded wallet that refuses mainnet and checks the RPC chain id before sending.
 `packages/core/src/attest/artifact.ts` bundles its ABI and creation code; regenerate it with
-`node packages/core/scripts/gen-attest-artifact.mjs` after `forge build` whenever the contract changes.
+`node packages/core/scripts/gen-attest-artifact.mjs` after `forge build` whenever the contract changes;
+`packages/core/test/attest.test.ts` runs `forge build` and fails when the bundle differs.
 
 ## Results (2026-09-29, forge 1.5.1)
 
@@ -72,14 +73,22 @@ across 4 targets and 3 projectIds):
 
 | Check | Result |
 |---|---|
-| `forge test --match-contract CheckAttestationRegistryTest` | 21 passed, 0 failed (20 unit, 1 fuzz with 256 runs) |
-| `forge coverage --report summary` | `src/CheckAttestationRegistry.sol` lines 100% (90/90), statements 100% (120/120), branches 100% (20/20), functions 100% (17/17) |
+| `forge test --match-contract CheckAttestationRegistryTest` | 27 passed, 0 failed (26 unit, 1 fuzz with 256 runs) |
+| `forge coverage --report summary` | `src/CheckAttestationRegistry.sol` lines 100% (98/98), statements 100% (137/137), branches 100% (24/24), functions 100% (18/18) |
 
 - An attestation id is the zero based index of a global list; `latest` resolves the newest id of a
-  (subjectChainId, subject) pair. A new attestation supersedes the previous one of the same pair when it is
-  Valid, and may not be for an earlier block than it.
+  (subjectChainId, subject, standardId) key, standardId = keccak256(bytes(standard)). A new attestation
+  supersedes the previous one of the same key when it is Valid, and may not be for an earlier block than a
+  Valid latest one. After the latest is revoked any block is accepted, so a wrong block number can be repaired.
 - The subject is not required to have code on the registry's chain; its code hash is reported by the issuer.
+  For a proxy it is the proxy's own code; the implementation is identified by `implementationKey`.
 - `isCompliant` is true only for a Valid latest attestation with pass > 0 and no fail, inconclusive or
-  not applicable result. A revoked latest attestation does not fall back to an older one.
+  not applicable result; `isCompliantWith` also requires the latest attestation's suiteHash. A revoked
+  latest attestation does not fall back to an older one.
+- `Attested` carries the submitted `AttestParams` tuple and the issuer (flat event arguments hit stack too
+  deep without via-IR). reportURI is at most 512 bytes; zero standardId, implementationKey, suiteHash and
+  reportHash are refused.
+- The owner is immutable. Removing an issuer leaves its attestations Valid; any issuer can supersede or revoke
+  any attestation (ADR 0004, Roles).
 - The runtime code holds no CALL, CALLCODE, DELEGATECALL or STATICCALL (a test walks the bytecode), so the
   registry needs no reentrancy guard.
