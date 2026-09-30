@@ -21,7 +21,8 @@ export const ADDRESS_EXPLORER_BASE = 'https://testnet.monadscan.com/address/';
 
 const STATUS_NAMES: readonly AttestationStatusName[] = ['None', 'Valid', 'Superseded', 'Revoked'];
 const MAX_ATTESTATIONS = 2000;
-const CONCURRENCY = 4;
+// Monad's public testnet RPC answers "requests limited to 15/sec" above that rate; two readers stay well under it.
+const CONCURRENCY = 2;
 
 export interface RegistryReader {
   readContract(args: { address: `0x${string}`; abi: readonly unknown[]; functionName: string; args?: readonly unknown[] }): Promise<unknown>;

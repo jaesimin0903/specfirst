@@ -81,7 +81,8 @@ async function main() {
   let client = null;
   if (!offline) {
     const { createPublicClient, http } = await import('viem');
-    client = createPublicClient({ transport: http(registry.rpc, { timeout: 10_000, retryCount: 1 }) });
+    // The public testnet RPC limits requests to 15 per second; back off and retry instead of failing the read.
+    client = createPublicClient({ transport: http(registry.rpc, { timeout: 10_000, retryCount: 6, retryDelay: 1_000 }) });
   }
 
   const meta = await readVaultMeta(path.join(dataDir, 'vault-meta.json'));
