@@ -155,7 +155,7 @@ describe('specfirst check against a stub RPC (no forge, no public RPC)', () => {
     expect(r.code).toBe(17);
     expect(r.err).toMatch(/specfirst check: incomplete, not verified: 0 pass, 0 inconclusive, 30 not applicable/);
     const summary = r.events.find((e) => e.type === 'check-summary')!;
-    expect(summary).toMatchObject({ exitCode: 17, blockNumber: '5', seed: null, sender: null, reportPath: `.specfirst/checks/31337/${VAULT.toLowerCase()}/5.json` });
+    expect(summary).toMatchObject({ exitCode: 17, blockNumber: '5', vaultKind: 'erc7535', seed: null, sender: null, reportPath: `.specfirst/checks/31337/${VAULT.toLowerCase()}/5.json` });
     expect(summary).not.toHaveProperty('rawPath');
     expect(existsSync(path.join(checkDir, '5.forge.json'))).toBe(false);
     expect(JSON.parse(await readFile(path.join(checkDir, '5.json'), 'utf8')).summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
