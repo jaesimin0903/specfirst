@@ -1,0 +1,99 @@
+# ADR 0005: Paid check requests (`CheckRequestDesk`) and the unattended worker
+
+Date: 2026-09-30. Status: accepted for the first deployment on Monad testnet (not deployed yet; deployment and the first live run follow review).
+
+## Problem
+Every attestation in `CheckAttestationRegistry` (ADR 0004) so far was made by hand: someone runs `specfirst check <vault>`, then `specfirst cert attest <report>`. Nobody outside the project can ask for a check, and the work earns nothing. For the demo the loop has to close without us: a user pays a fee in testnet MON to have a vault checked, a worker checks it, records the attestation and delivers, and the fee becomes ours only once the check is delivered. If we deliver nothing, the user gets the fee back.
+
+## Decision
+A new contract, `packages/contracts/src/CheckRequestDesk.sol` (MIT), next to `CheckAttestationRegistry`, which does not change. The web builds on this interface, so it is fixed for the first deployment:
+
+    enum RequestStatus { None, Pending, Fulfilled, Rejected, Refunded }
+    struct Request { address requester; uint64 subjectChainId; address subject; bytes32 standardId; uint96 fee;
+                     uint64 requestedAt; RequestStatus status; uint256 attestationId; bytes32 rejectReason; }
+    constructor(address owner, address worker, address registry, uint96 fee, uint64 timeout)
+    requestCheck(subjectChainId, subject, standardId) payable returns (id)     anyone, msg.value == fee
+    fulfill(id, attestationId)                                                  worker, Pending only
+    reject(id, reasonCode)                                                      worker, Pending only, full refund
+    refundExpired(id)                                                           anyone, Pending and timed out
+    withdraw(to)                                                                owner, earned - withdrawn only
+    setFee(fee), setWorker(worker)                                              owner
+    views: requestOf(id), requestCount(), fee(), worker(), owner(), registry(), timeout(), earned(), withdrawn(), escrowed()
+    events: CheckRequested, CheckFulfilled, CheckRejected, CheckRefunded, FeesWithdrawn, FeeSet, WorkerSet
+
+- Request ids are the zero based index of one list: valid ids are `0 .. requestCount() - 1`, like attestation ids. `requestOf` of any other id reverts with `UnknownRequest(id)`.
+- `standardId` is `keccak256(bytes(standard))`, the registry's key. `requestCheck` refuses a zero subject, chain id or standardId.
+- The constructor parameters are named `owner_`, `worker_`, ... in the source so they do not shadow the getters; the ABI types and order are the ones above.
+
+### Fee escrow
+- `requestCheck` takes exactly `fee` (`WrongFee(sent, fee)` otherwise) and stores it in the request; a later `setFee` changes only new requests. The fee is added to `escrowed`, the sum of the fees of Pending requests.
+- `earned` grows only in `fulfill`, by that request's fee. `withdraw(to)` pays `earned - withdrawn` and reverts with `NothingToWithdraw` at zero, so the owner can never reach an escrowed fee.
+- Without forced transfers the balance is exactly `escrowed + earned - withdrawn`. The desk has no receive or fallback function; coins forced in with selfdestruct or as a coinbase stay locked (nothing pays them out).
+
+### Fulfill: the registry is the evidence
+`fulfill(id, attestationId)` reads `registry.attestationOf(attestationId)` and requires, in this order:
+1. the attestation exists (`attestationId < registry.attestationCount()`, else `UnknownAttestation`);
+2. it is about the request's `subjectChainId`, `subject` and `standardId` (`AttestationMismatch`);
+3. it was issued at or after the request: `issuedAt >= requestedAt`, both block timestamps in seconds (`AttestationBeforeRequest`), so an old attestation cannot be passed off as the delivery;
+4. it is not Revoked (`AttestationRevoked`). A Superseded attestation is accepted: a later check of the same subject does not undo a delivery that was valid.
+
+The attestation's result does not matter: the user pays for a check, not for a pass, so a report with failures or inconclusive properties is delivered like any other. One attestation may close several requests for the same subject made before it. Timestamps have a resolution of one second and Monad blocks are faster, so an attestation from an earlier block of the same second counts as issued at the request; the worker always attests after it has read the request, so this only matters for attestations made by someone else.
+
+### Two refund paths
+- `reject(id, reasonCode)`: the worker closes the request without a check and the whole fee goes back to the requester in the same transaction. `reasonCode` is a short ASCII code right padded with zeros into a bytes32 (not a hash); the worker's codes are exported as `REJECT_REASONS` from `@specfirst/core`: `not-erc4626`, `check-failed`, `unsupported-chain`, `unsupported-standard`, `unknown-proxy`, `attest-failed`, `fulfill-failed`.
+- `refundExpired(id)`: anyone, once `block.timestamp >= requestedAt + timeout` (seconds; `NotExpired(id, expiresAt)` before), pays the fee to the requester, not to the caller. This is the user's protection when the worker is down or stuck. The worker may still fulfill a timed-out request until someone refunds it.
+- A requester that refuses coins (a contract without a payable receive) cannot be refunded: both paths revert with `TransferFailed` and the fee stays escrowed until the request is fulfilled. Pull payments would avoid that but add a claim step and state to the interface the web already builds on; requests come from wallets through the web, so the desk pushes.
+
+### Roles, transfers, reentrancy
+- The owner is set by the constructor and is immutable (no transfer, no renounce), as in the registry. It sets the fee and the worker and withdraws earned fees. If its key is lost, fee and worker are frozen and a new desk is deployed. `registry` and `timeout` are immutable too.
+- Coins leave only through `call`, after every state change, and a failed call reverts (`TransferFailed`). `requestCheck`, `fulfill`, `reject`, `refundExpired` and `withdraw` share a reentrancy lock (a storage flag, not transient storage, so nothing depends on the chain's TSTORE support). Tests re-enter from a refund into another refund and into `requestCheck`, and from a payout into `withdraw`; each nested call gets `Reentrancy`.
+
+## Worker trust model
+Can the worker take a fee with a fake attestation? Yes, and the desk cannot stop it. The worker signs with `ISSUER_PRIVATE_KEY`, the same key that is an issuer of the registry, and an issuer can attest any values for any subject (ADR 0004: the registry cannot read the subject chain). A dishonest or stolen worker key can attest a subject without running the suite, then fulfill with that attestation and earn the fee. What the desk does guarantee:
+- the fee is earned only against an attestation that exists, names the requested subject, chain and standard, is newer than the request and is not revoked; the worker cannot fulfill with someone else's old attestation or with an attestation about another contract;
+- the worker cannot withdraw (owner only), cannot redirect refunds (they go to the requester), and cannot touch escrowed fees except by fulfilling or rejecting their own request;
+- every attestation can be rechecked by anyone (ADR 0004: reportURI, reportHash, suiteHash, seed, block), so a fake one is provable after the fact; the owner can `setWorker` to a new key and the registry owner can remove the issuer.
+
+A revocation after the fact does not return the fee: fulfill is final. The desk does not ask who issued the attestation: after `setWorker`, attestations of the previous worker still fulfill, and so do attestations of any other issuer. Splitting the worker key from the issuer key does not help while one operator holds both. Real separation needs an independent attester or a challenge window (below), which is out of scope for the first deployment.
+
+## The worker (`specfirst worker`)
+- Signs with `ISSUER_PRIVATE_KEY`. At start it refuses to run unless that address is `desk.worker()` and an issuer of `desk.registry()`; the registry is read from the desk, not from the environment. Writes go through the guarded wallet: monad-mainnet is refused before a key is read, the wallet refuses chain 143, and each RPC's `eth_chainId` is checked before its first transaction.
+- It serves one subject chain: the chain of `--subject-rpc` (read only; default Monad mainnet from `MONAD_MAINNET_RPC` or the public RPC). Requests for any other chain are rejected with `unsupported-chain`, other standards with `unsupported-standard`.
+- It reads requests with `requestCount()` and `requestOf(i)` from a cursor, not from event logs: the testnet caps `eth_getLogs` at 100 blocks and the public RPC allows about 15 requests per second. Every id below the cursor is closed onchain or given up, so a pass costs one read plus one per open request.
+- Requests are handled one at a time in id order. For a Pending request: pre-check the subject at `latest - --block-lag` (default 10) blocks (code, `asset()` a non-zero address, `totalAssets()`; a revert means `not-erc4626`, a transport failure is retried); run `runStandardCheck` at that block (30 properties, `--runs` default 16, report under `.specfirst/checks` as `specfirst check` writes it); copy the report to `certs/checks/<chainId>/<address>/<block>-<hash8>.json` (the `cert attest` rule); check the subject's identity on its chain (`verifySubjectCode`); attest; fulfill. An unresolved proxy is rejected with `unknown-proxy` unless `--allow-unknown-proxy`.
+- Failures: the pre-check, the suite and the identity check get 3 attempts within a pass (5 s and 20 s apart); after that the request is rejected with `check-failed` and refunded. A failing attest, fulfill or reject is retried in the next passes, 3 passes in a row, before `attest-failed` or `fulfill-failed` (reject with refund) or, for a reject that keeps failing, giving up (the requester can still `refundExpired`). A request refunded by someone else while it waits is noticed and not checked.
+- `reportURI` is `<base>/<chainId>/<address>/<block>-<hash8>.json` with base `--report-base-url`, else `SPECFIRST_REPORT_BASE_URL`, else `https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks`. The worker writes the copy locally; with the default base the URI resolves only once `certs/checks` is committed and pushed, which stays an operator step.
+- Files, both in `.specfirst/worker/` of `--project`:
+  - `state.json`: `{ version: 1, desk, chainId, cursor, requests: { "<id>": { failures, block?, reportPath?, reportURI?, attestationId?, reject?, detail?, gaveUp? } } }`. It keeps the saved report and the attestation id of unfinished requests, so a restart resumes at the failed step instead of paying for the check again. A state.json of another desk or chain is refused.
+  - `status.json`, for the web: a flat object with the request ids (decimal strings) and one `totals` key side by side: `{ "<id>": { stage, updatedAt, block?, reportPath?, attestationId?, txs: { attest?, fulfill?, reject? }, gasCostWei?, error? }, "totals": { gasCostWei, fulfilled, rejected } }`. `stage` is `queued`, `prechecking`, `running`, `attesting`, `fulfilling`, `fulfilled` or `rejected`; big numbers are decimal strings; `gasCostWei` is gasUsed times effectiveGasPrice over the request's transactions; totals are recomputed from the entries on every write. The zod schema is `workerStatusSchema` in `@specfirst/core/desk`, a browser-safe subpath (viem and zod only).
+- Logs are NDJSON events with `--json` (`worker-start`, `worker-pass`, `worker-stage`, `worker-retry`, `worker-step-failed`, `worker-fulfilled`, `worker-rejected`, `worker-closed`, `worker-gave-up`, `worker-error`, `worker-pass-done`, plus the `check-*` events of the suite). The loop never stops on a failed pass; `--once` runs one pass and exits.
+
+### CLI
+
+    specfirst desk deploy [--network monad-testnet|anvil] [--rpc <url>] [--registry-attest <address>] [--worker <address>] [--fee <MON>] [--timeout <sec>]
+    specfirst desk request <address> [--subject-chain 143] [--standard erc4626] [--network ...] [--desk <address>]
+    specfirst desk status [<id>] [--limit 20] [--network ...] [--desk <address>]
+    specfirst desk withdraw --to <address> [--network ...] [--desk <address>]
+    specfirst worker [--network monad-testnet] [--subject-rpc <url>] [--poll 15] [--once] [--runs 16] [--block-lag 10]
+                     [--report-base-url <url>] [--allow-unknown-proxy] [--desk <address>]
+
+The desk address defaults to `SPECFIRST_DESK_<chainId>`. `desk deploy` signs with `DEPLOYER_PRIVATE_KEY` (the owner), takes the registry from `SPECFIRST_ATTEST_REGISTRY_<chainId>`, makes the address of `ISSUER_PRIVATE_KEY` the worker unless `--worker` is given (with a warning when the worker is not a registry issuer or not that key), defaults to a fee of 0.1 MON and a timeout of 21600 s (6 hours), and prints the address and its `export` line as soon as the deploy is mined. `desk request` pays from `REQUESTER_PRIVATE_KEY` and refuses to run without it, even on anvil. `desk withdraw` signs with the owner key and refuses when there is nothing earned to withdraw. `desk status` only reads. Desk failures exit with 18.
+
+## Subscriptions later (design note)
+Monitoring (periodic rechecks of a subject) is not in this contract, and the desk cannot be changed after deployment. It fits best as a separate contract next to the desk, using the same registry and worker, so the request path keeps its small, tested surface:
+- `subscribe(subjectChainId, subject, standardId, periods)` pays `pricePerPeriod * periods` into escrow; each period is a slot of fixed length.
+- `fulfillPeriod(subId, period, attestationId)` by the worker earns one period's price with the same registry checks as `fulfill`, except that `issuedAt` must fall inside that period's window.
+- A period that ends without a delivery becomes refundable to the subscriber after a grace time (the `refundExpired` rule per period), and `cancel` refunds the periods that have not started. The accounting invariant stays `balance == escrowed + earned - withdrawn`.
+- The worker walks `subscriptionCount()` and `subscriptionOf(i)` with its own cursor, and can also recheck early when the subject's implementation key at the latest block differs from the last attestation (a proxy upgrade), which needs no contract support. Its progress goes to a separate file so `status.json` keeps this schema.
+- A challenge window fits the same place: fees earned only after N hours without a revocation, which would let an independent checker's revocation return the fee.
+
+## Consequences
+- Anyone with testnet MON can get a vault checked and attested without us; we earn a fee only for delivered checks, and the requester gets it back when we cannot deliver or do not deliver in time.
+- Operating cost is the worker's gas (recorded per request in `status.json`) and the suite's RPC load on the subject chain.
+- The worker's honesty is not enforced onchain (see the trust model); it is checkable after the fact.
+- The report URIs of worker attestations resolve only after `certs/checks` is pushed.
+
+## Evidence
+- `forge test --match-contract CheckRequestDesk`: 34 tests (30 unit, 2 fuzz with 256 runs, 2 handler invariants with 256 runs of depth 64): exact fee, ids from 0 and `UnknownRequest` at `requestCount()`, permissions, fulfill against the registry (missing attestation, other subject, chain or standard, issued before the request, revoked, superseded accepted, same second accepted), reject refund in the same transaction, the refund after a fee change, `refundExpired` at `requestedAt + timeout - 1` and at `requestedAt + timeout` (and a fuzz of the boundary), double closing, withdraw never reaching escrow, refused refunds and payouts, three reentrancy attempts, and the invariants `balance == escrowed + earned - withdrawn`, `escrowed` = Pending fees, `earned` = Fulfilled fees. `forge coverage`: 100% lines (95/95), statements (114/114), branches (23/23) and functions (19/19) of the contract.
+- Core (`packages/core/test/desk.test.ts`): the browser-safe subpath imports only viem, zod and the artifact; the ABI matches this interface; reason codes; the status.json schema (decimal ids next to `totals`, strict fields); the pure decisions; `precheckErc4626` against a mock client; `runWorkerPass` with stub effects (fulfill, not-erc4626, unsupported chain and standard, retries then `check-failed`, identity mismatch, unknown proxy, attest failure resumed without a second check, `attest-failed`, `fulfill-failed`, a reject given up, a request refunded before its turn, an unexpected error, a request closed by an unrecorded transaction); the store refusing another desk's state; `RequestDeskClient` taking the id from its own log; and the bundled bytecode against a fresh forge build.
+- CLI on a local anvil (`packages/cli/test/desk.e2e.test.ts`, the suite replaced by the Morpho fixture re-pointed at the subject): refusals on monad-mainnet, deploy, requests from `REQUESTER_PRIVATE_KEY`, one `worker --once` pass that fulfills a vault with an attestation whose report copy hashes to the recorded reportHash and rejects and refunds a non-vault and a vault whose check keeps failing, `refundExpired` before and after the timeout, withdraw of earned fees with escrow left in place, status, a wrong worker key and another desk's state refused, and the human output. With the pinned cache present (`packages/cli/test/desk.forge.test.ts`), the worker runs the real suite with forge against a vault compiled from the core fixtures on anvil: 30 of 30 pass, the attestation is compliant and the request is fulfilled.

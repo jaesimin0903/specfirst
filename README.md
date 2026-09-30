@@ -6,7 +6,7 @@ Plan of record: see docs/plan.md. Status: week 1, scaffolding.
 
 ## Keys
 
-Commands that send transactions read `DEPLOYER_PRIVATE_KEY` and `ISSUER_PRIVATE_KEY` from the environment; they do not read `.env` on their own. Copy `.env.example` to `.env`, fill it in, and run with Node's env loader:
+Commands that send transactions read `DEPLOYER_PRIVATE_KEY` and `ISSUER_PRIVATE_KEY` (and `REQUESTER_PRIVATE_KEY` for `desk request`) from the environment; they do not read `.env` on their own. Copy `.env.example` to `.env`, fill it in, and run with Node's env loader:
 
 ```
 node --env-file=.env packages/cli/dist/index.js <command>
@@ -26,6 +26,27 @@ node --env-file=.env packages/cli/dist/index.js cert attest <report.json> \
 ```
 
 Commit and push the copy under `certs/checks/` so the URI resolves. `attest-registry deploy` makes the address of `ISSUER_PRIVATE_KEY` the issuer by default (the deployer when that key is unset); `attest-registry set-issuer <address> [--remove]` changes issuers later, signed by the owner (`DEPLOYER_PRIVATE_KEY`).
+
+## Request desk and worker
+
+`CheckRequestDesk` lets anyone pay a fee in testnet MON to have a vault checked; the worker checks it without anyone in the loop, attests the result in `CheckAttestationRegistry` and fulfills the request, and the fee is ours only once it is fulfilled. A request the worker cannot serve is rejected with a full refund, and anyone can refund a request that is still open after the timeout. See `docs/adr/0005-check-request-desk.md` for the escrow, the fulfill conditions and the worker's trust model.
+
+```
+# owner = DEPLOYER_PRIVATE_KEY, worker = address of ISSUER_PRIVATE_KEY, registry = $SPECFIRST_ATTEST_REGISTRY_10143
+node --env-file=.env packages/cli/dist/index.js desk deploy --network monad-testnet --fee 0.1 --timeout 21600
+export SPECFIRST_DESK_10143=0x...                       # printed by desk deploy
+
+# a test request paid from REQUESTER_PRIVATE_KEY (users request from the web)
+node --env-file=.env packages/cli/dist/index.js desk request 0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E --subject-chain 143
+
+# the unattended worker: signs with ISSUER_PRIVATE_KEY, reads Monad mainnet, NDJSON log
+node --env-file=.env packages/cli/dist/index.js --json worker --network monad-testnet --subject-rpc "$MONAD_MAINNET_RPC" --runs 16 --poll 15
+
+node --env-file=.env packages/cli/dist/index.js desk status                      # requests, earned, withdrawn, escrowed
+node --env-file=.env packages/cli/dist/index.js desk withdraw --to 0x...          # owner: earned fees only
+```
+
+The worker keeps its cursor in `.specfirst/worker/state.json` and writes each request's progress to `.specfirst/worker/status.json` (schema `workerStatusSchema` in `@specfirst/core/desk`). Its report copies go to `certs/checks/` with `reportURI` under `--report-base-url` (default `$SPECFIRST_REPORT_BASE_URL`, else the raw GitHub URL above); commit and push them so the URIs resolve.
 
 ## Board
 
