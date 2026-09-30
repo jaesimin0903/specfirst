@@ -26,6 +26,7 @@ import {
   summarize,
   type StandardCheckReport,
   type StandardName,
+  type VaultKind,
   type StandardPropertyResult,
 } from './report.js';
 import { ERC4626_FOUNDRY_TOML, EVENTS_DIR, FUZZ_MAX_TEST_REJECTS, prepareErc4626Workspace, type StandardWorkspace } from './workspace.js';
@@ -41,7 +42,13 @@ export const ERC7535_NATIVE_ASSET: Address = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeee
 export const NATIVE_ASSET_REASON =
   `asset() is the ERC-7535 native-asset sentinel ${ERC7535_NATIVE_ASSET}: the harness funds users with ERC-20 deal and approve, which a native-asset vault does not take`;
 
+/** Why forge is skipped for an ERC-7575 vault whose shares live in another token. */
+export function erc7575Reason(shareToken: Address): string {
+  return `ERC-7575 vault: shares are a separate token (share() = ${shareToken}); both suites assume the vault is its own share token and call balanceOf, allowance and approve on it`;
+}
+
 const assetAbi = [{ type: 'function', name: 'asset', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] }] as const;
+const shareAbi = [{ type: 'function', name: 'share', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] }] as const;
 
 export class StandardCheckError extends Error {
   constructor(message: string) {
@@ -59,7 +66,7 @@ export type StandardCheckEvent =
   | { type: 'check-start'; standard: StandardName; chainId: number; address: Address; blockNumber: string; runs: number; delta: string }
   | { type: 'check-identity'; identity: ImplementationIdentity }
   | { type: 'check-workspace'; dir: string; fetched: string[]; harnessSha256: string }
-  | { type: 'check-skip'; reason: string }
+  | { type: 'check-skip'; vaultKind: VaultKind; reason: string }
   | { type: 'check-forge'; args: string[]; seed: Hex; sender: Address; forgeVersion: string | null };
 
 export type StandardCheckClient = IdentityClient & Pick<PublicClient, 'getChainId' | 'getBlockNumber'>;
@@ -269,8 +276,9 @@ function defaultClient(rpcUrl: string): StandardCheckClient {
 /**
  * Runs a third-party standard property suite against a contract already deployed, on a fork pinned at one
  * block (docs/adr/0003). Nothing is signed or sent: forge executes against a local fork of `rpcUrl`.
- * Steps: chain id and block, implementation identity, asset() (an ERC-7535 native-asset vault is not
- * applicable and skips forge), cached workspace, forge, parse, validate, write.
+ * Steps: chain id and block, implementation identity, pre-checks (asset() is the ERC-7535 native sentinel,
+ * or share() names a separate ERC-7575 share token: not applicable, forge skipped), cached workspace,
+ * forge, parse, validate, write.
  */
 export async function runStandardCheck(input: RunStandardCheckInput): Promise<StandardCheckReport> {
   if (input.standard !== 'erc4626') throw new StandardCheckError(`unknown standard "${input.standard}" (expected erc4626)`);
@@ -305,15 +313,30 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
   let harnessSha256: Hex;
   let sfPropertiesSha256: Hex;
   let foundryTomlSha256: Hex = sha256Hex(ERC4626_FOUNDRY_TOML);
-  // An asset() that reverts is left to forge, whose setUp failure becomes the recorded reason.
+  // Pre-checks. An asset() that reverts is left to forge, whose setUp failure becomes the recorded reason.
+  // A share() that reverts, answers nothing or names the vault itself means a plain ERC-4626 vault.
   const asset = await client
     .readContract({ address, abi: assetAbi, functionName: 'asset', blockNumber })
     .catch(() => null);
+  const shareToken =
+    asset && asset.toLowerCase() === ERC7535_NATIVE_ASSET.toLowerCase()
+      ? null
+      : await client.readContract({ address, abi: shareAbi, functionName: 'share', blockNumber }).catch(() => null);
+  let vaultKind: VaultKind = 'erc4626';
+  let skipReason: string | null = null;
   if (asset && asset.toLowerCase() === ERC7535_NATIVE_ASSET.toLowerCase()) {
-    input.onEvent?.({ type: 'check-skip', reason: NATIVE_ASSET_REASON });
+    vaultKind = 'erc7535';
+    skipReason = NATIVE_ASSET_REASON;
+  } else if (shareToken && !/^0x0{40}$/i.test(shareToken) && shareToken.toLowerCase() !== address.toLowerCase()) {
+    vaultKind = 'erc7575';
+    skipReason = erc7575Reason(getAddress(shareToken));
+  }
+  if (skipReason !== null) {
+    input.onEvent?.({ type: 'check-skip', vaultKind, reason: skipReason });
     harnessSha256 = sha256Hex(await readFile(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8'));
     sfPropertiesSha256 = sha256Hex(await readFile(erc4626SourceFile('SpecfirstMaxHonored.t.sol'), 'utf8'));
-    results = ERC4626_CHECK_PROPERTIES.map((p) => ({ id: p.id, test: p.test, description: p.description, status: 'not_applicable', reason: NATIVE_ASSET_REASON }));
+    const reason = skipReason;
+    results = ERC4626_CHECK_PROPERTIES.map((p) => ({ id: p.id, test: p.test, description: p.description, status: 'not_applicable', reason }));
   } else {
     const ws = await prepareErc4626Workspace({ cacheDir: input.cacheDir, ...input.pins });
     input.onEvent?.({ type: 'check-workspace', dir: ws.dir, fetched: ws.fetched, harnessSha256: ws.harnessSha256 });
@@ -345,6 +368,7 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
     address,
     blockNumber: blockNumber.toString(),
     standard: input.standard,
+    vaultKind,
     upstream: { repo: upstream.repo, commit: upstream.commit },
     harnessSha256,
     sfPropertiesSha256,

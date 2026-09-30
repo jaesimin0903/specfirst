@@ -172,3 +172,78 @@ contract HonestClosedExitVault is VaultBase {
     function withdraw(uint256, address, address) public pure override returns (uint256) { revert WithdrawalRequestRequired(); }
     function redeem(uint256, address, address) public pure override returns (uint256) { revert WithdrawalRequestRequired(); }
 }
+
+address constant SHARE_TOKEN = 0x5f00000000000000000000000000000000000041;
+address constant SPLIT_VAULT = 0x5F00000000000000000000000000000000000042;
+
+/// ERC-7575 share token of SplitShareVault: an ERC-20 whose supply only the vault changes.
+contract SplitShareToken {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+
+    function decimals() external pure returns (uint8) { return 6; }
+    function approve(address s, uint256 a) external returns (bool) { allowance[msg.sender][s] = a; return true; }
+    function transfer(address to, uint256 a) external returns (bool) { balanceOf[msg.sender] -= a; balanceOf[to] += a; return true; }
+
+    function transferFrom(address f, address to, uint256 a) external returns (bool) {
+        if (allowance[f][msg.sender] != type(uint256).max) allowance[f][msg.sender] -= a;
+        balanceOf[f] -= a; balanceOf[to] += a; return true;
+    }
+
+    function mint(address to, uint256 a) external { require(msg.sender == SPLIT_VAULT); balanceOf[to] += a; totalSupply += a; }
+
+    function burnFrom(address spender, address from, uint256 a) external {
+        require(msg.sender == SPLIT_VAULT);
+        if (spender != from && allowance[from][spender] != type(uint256).max) allowance[from][spender] -= a;
+        balanceOf[from] -= a; totalSupply -= a;
+    }
+}
+
+/// ERC-7575 vault (the shape of Centrifuge V3 vaults): the ERC-4626 entry points without the ERC-20 part.
+/// Shares live in SplitShareToken, returned by share(); balanceOf, allowance, approve and totalSupply do
+/// not exist on the vault, so calls to them revert without data.
+contract SplitShareVault {
+    function share() external pure returns (address) { return SHARE_TOKEN; }
+    function asset() external pure returns (address) { return TOKEN; }
+    function totalAssets() public view returns (uint256) { return IERC20Min(TOKEN).balanceOf(address(this)); }
+    function convertToShares(uint256 a) public pure returns (uint256) { return a; }
+    function convertToAssets(uint256 s) public pure returns (uint256) { return s; }
+    function maxDeposit(address) external pure returns (uint256) { return type(uint256).max; }
+    function maxMint(address) external pure returns (uint256) { return type(uint256).max; }
+    function maxWithdraw(address o) external view returns (uint256) { return SplitShareToken(SHARE_TOKEN).balanceOf(o); }
+    function maxRedeem(address o) external view returns (uint256) { return SplitShareToken(SHARE_TOKEN).balanceOf(o); }
+    function previewDeposit(uint256 a) external pure returns (uint256) { return a; }
+    function previewMint(uint256 s) external pure returns (uint256) { return s; }
+    function previewWithdraw(uint256 a) external pure returns (uint256) { return a; }
+    function previewRedeem(uint256 s) external pure returns (uint256) { return s; }
+
+    function deposit(uint256 a, address r) external returns (uint256) {
+        IERC20Min(TOKEN).transferFrom(msg.sender, address(this), a);
+        SplitShareToken(SHARE_TOKEN).mint(r, a);
+        return a;
+    }
+
+    function mint(uint256 s, address r) external returns (uint256) {
+        IERC20Min(TOKEN).transferFrom(msg.sender, address(this), s);
+        SplitShareToken(SHARE_TOKEN).mint(r, s);
+        return s;
+    }
+
+    function withdraw(uint256 a, address r, address o) external returns (uint256) {
+        SplitShareToken(SHARE_TOKEN).burnFrom(msg.sender, o, a);
+        IERC20Min(TOKEN).transfer(r, a);
+        return a;
+    }
+
+    function redeem(uint256 s, address r, address o) external returns (uint256) {
+        SplitShareToken(SHARE_TOKEN).burnFrom(msg.sender, o, s);
+        IERC20Min(TOKEN).transfer(r, s);
+        return s;
+    }
+}
+
+/// A plain ERC-4626 vault that also answers share() with its own address, as EIP-7575 allows.
+contract SelfShareVault is VaultBase {
+    function share() external view returns (address) { return address(this); }
+}

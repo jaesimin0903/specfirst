@@ -303,6 +303,7 @@ export {
   standardPropertyResultSchema,
   standardPropertyStatusSchema,
   standardNameSchema,
+  vaultKindSchema,
   implementationIdentitySchema,
   STANDARD_CHECK_SCHEMA_VERSION,
   STANDARD_CHECK_FAILED_EXIT_CODE,
@@ -314,6 +315,7 @@ export {
   type StandardPropertyResult,
   type StandardPropertyStatus,
   type StandardName,
+  type VaultKind,
 } from './standards/report.js';
 export {
   runStandardCheck,
@@ -322,6 +324,7 @@ export {
   StandardCheckError,
   ERC7535_NATIVE_ASSET,
   NATIVE_ASSET_REASON,
+  erc7575Reason,
   MAX_UINT256,
   maskRpcUrl,
   forgeEnv,

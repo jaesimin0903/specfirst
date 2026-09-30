@@ -3,7 +3,11 @@ import { z } from 'zod';
 import { callsOf, extractJson, formatForgeCall, type ForgeTestResult } from '../fuzz/forge.js';
 import type { StandardProperty } from './erc4626.js';
 
-export const STANDARD_CHECK_SCHEMA_VERSION = 1;
+/**
+ * 2 adds `vaultKind`. Version 1 reports (without it) still validate, so reports written before the change,
+ * and attestations built from them, stay readable.
+ */
+export const STANDARD_CHECK_SCHEMA_VERSION = 2;
 /** CLI exit code when any standard property fails on the checked contract. */
 export const STANDARD_CHECK_FAILED_EXIT_CODE = 16;
 /**
@@ -19,6 +23,14 @@ const decimal = z.string().regex(/^\d+$/, 'expected a non-negative decimal integ
 const count = z.number().int().nonnegative();
 
 export const standardNameSchema = z.enum(STANDARDS);
+
+/**
+ * What the pre-checks found before forge ran. erc4626: a vault that is its own share token (the suites
+ * run). erc7535: asset() is the native-asset sentinel. erc7575: share() names a separate share token.
+ * For the last two forge does not run and every property is not_applicable.
+ */
+export const vaultKindSchema = z.enum(['erc4626', 'erc7535', 'erc7575']);
+export type VaultKind = z.infer<typeof vaultKindSchema>;
 export type StandardName = z.infer<typeof standardNameSchema>;
 
 /**
@@ -94,12 +106,14 @@ export type StandardCheckSummary = z.infer<typeof standardCheckSummarySchema>;
  */
 export const standardCheckReportSchema = z
   .object({
-    schemaVersion: z.literal(STANDARD_CHECK_SCHEMA_VERSION),
+    schemaVersion: z.union([z.literal(1), z.literal(STANDARD_CHECK_SCHEMA_VERSION)]),
     chainId: z.number().int().positive(),
     address,
     /** Fork block, decimal. */
     blockNumber: decimal,
     standard: standardNameSchema,
+    /** Required from schemaVersion 2 on; absent in version 1 reports. */
+    vaultKind: vaultKindSchema.optional(),
     upstream: z.object({ repo: z.string().url(), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
     harnessSha256: hex32,
     /** sha256 of Specfirst's own properties (SpecfirstMaxHonored.t.sol). */
@@ -129,6 +143,12 @@ export const standardCheckReportSchema = z
   })
   .strict()
   .superRefine((r, ctx) => {
+    if (r.schemaVersion >= 2 && r.vaultKind === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['vaultKind'], message: `vaultKind is required from schemaVersion 2 on` });
+    }
+    if (r.schemaVersion === 1 && r.vaultKind !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['vaultKind'], message: 'vaultKind does not exist in schemaVersion 1' });
+    }
     const expected = summarize(r.results);
     for (const k of Object.keys(expected) as Array<keyof StandardCheckSummary>) {
       if (r.summary[k] !== expected[k]) {

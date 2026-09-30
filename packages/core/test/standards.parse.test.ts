@@ -322,3 +322,30 @@ describe('Specfirst properties sf-* (real forge output, local anvil with anvil_s
     expect(r.get('sf-maxWithdraw-honored')).toMatchObject({ status: 'not_applicable', reason: 'setUp failed: EvmError: Revert' });
   });
 });
+
+describe('ERC-7575 vault run without the pre-check (local anvil, SplitShareVault)', () => {
+  it('the 16 properties that touch the vault as an ERC-20 fail with "EvmError: Revert" and no counterexample logs', async () => {
+    const results = parseStandardForgeJson(await fx('local-erc7575-no-precheck.json'), ERC4626_CHECK_PROPERTIES)!;
+    const failed = results.filter((r) => r.status === 'fail');
+    expect(failed.map((r) => r.id)).toEqual([
+      'deposit',
+      'mint',
+      'previewWithdraw',
+      'withdraw',
+      'withdraw-zero-allowance',
+      'previewRedeem',
+      'redeem',
+      'redeem-zero-allowance',
+      'RT-deposit-redeem',
+      'RT-deposit-withdraw',
+      'RT-redeem-deposit',
+      'RT-redeem-mint',
+      'RT-mint-withdraw',
+      'RT-mint-redeem',
+      'RT-withdraw-mint',
+      'RT-withdraw-deposit',
+    ]);
+    expect(failed.every((r) => r.reason === 'EvmError: Revert')).toBe(true);
+    expect(summarize(results)).toEqual({ pass: 14, fail: 16, inconclusive: 0, notApplicable: 0 });
+  });
+});
