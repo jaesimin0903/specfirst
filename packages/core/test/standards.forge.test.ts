@@ -129,7 +129,20 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await writeFile(path.join(mocks, 'foundry.toml'), '[profile.default]\nsrc = "src"\nsolc_version = "0.8.28"\nevm_version = "prague"\n');
     const built = await execa('forge', ['build', '--offline'], { cwd: mocks, env: forgeEnv({}), extendEnv: false, reject: false });
     if (built.exitCode !== 0) throw new Error(String(built.stderr));
-    for (const name of ['MockToken', 'PackedToken', 'PackedAssetVault', 'ComputedToken', 'ComputedAssetVault', 'HonouringVault', 'AsyncExitVault', 'HonestClosedExitVault']) {
+    for (const name of [
+      'MockToken',
+      'PackedToken',
+      'PackedAssetVault',
+      'ComputedToken',
+      'ComputedAssetVault',
+      'HonouringVault',
+      'AsyncExitVault',
+      'HonestClosedExitVault',
+      'SplitShareToken',
+      'SplitShareVault',
+      'SelfShareVault',
+      'ZeroMaxVault',
+    ]) {
       const art = JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${name}.json`), 'utf8')) as { deployedBytecode: { object: string } };
       code[name] = art.deployedBytecode.object;
     }
@@ -142,6 +155,10 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000031', code.HonouringVault]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000032', code.AsyncExitVault]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000033', code.HonestClosedExitVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000041', code.SplitShareToken]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000042', code.SplitShareVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000043', code.SelfShareVault]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000051', code.ZeroMaxVault]);
     await rpc('anvil_mine', ['0x1']);
   });
   afterAll(async () => {
@@ -180,6 +197,46 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 30, notApplicable: 0 });
     expect(report.results[0]!.reason).toMatch(/^the asset's balance slot cannot be written, test users cannot be funded \(non-standard token\): stdStorage /);
     expect(standardCheckExitCode(report.summary)).toBe(17);
+  });
+
+  it('ERC-7575 vault (shares in a separate token): forge is skipped, 30 not_applicable, exit 17', async () => {
+    const events: string[] = [];
+    const report = await runStandardCheck({
+      standard: 'erc4626',
+      address: '0x5F00000000000000000000000000000000000042',
+      rpcUrl: anvil.url,
+      blockNumber: 1n,
+      runs: 4,
+      cacheDir: path.join(root, 'cache-7575'),
+      rawPath: path.join(root, 'reports', '7575.forge.json'),
+      onEvent: (e) => void events.push(e.type),
+    });
+    expect(report.vaultKind).toBe('erc7575');
+    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
+    expect(report.results[0]!.reason).toMatch(/^ERC-7575 vault: shares are a separate token \(share\(\) = 0x5f0+41\)/);
+    expect(standardCheckExitCode(report.summary)).toBe(17);
+    expect(events).not.toContain('check-workspace');
+    expect(existsSync(path.join(root, 'reports', '7575.forge.json'))).toBe(false);
+  });
+
+  it('share() that returns the vault itself is a plain ERC-4626 vault: forge runs, all 30 pass', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000043');
+    expect(report.vaultKind).toBe('erc4626');
+    expect(report.summary).toEqual({ pass: 30, fail: 0, inconclusive: 0, notApplicable: 0 });
+  });
+
+  it('max values of 0 for everyone (Morpho Vault V2 shape): the 26 upstream properties run and pass, sf- inconclusive, exit 17', async () => {
+    const report = await check('0x5F00000000000000000000000000000000000051');
+    expect(report.summary).toEqual({ pass: 26, fail: 0, inconclusive: 4, notApplicable: 0 });
+    expect(report.results.slice(0, 26).every((r) => r.status === 'pass')).toBe(true);
+    expect(report.results.slice(26).every((r) => r.status === 'inconclusive' && !/deposit reverted below maxDeposit/.test(r.reason!))).toBe(true);
+    expect(standardCheckExitCode(report.summary)).toBe(17);
+  });
+
+  it('a vault without share() is a plain ERC-4626 vault: forge runs', async () => {
+    const report = await check('0x5F00000000000000000000000000000000000031');
+    expect(report.vaultKind).toBe('erc4626');
+    expect(report.summary.pass).toBe(30);
   });
 });
 
@@ -256,4 +313,5 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     expect(r.get('sf-maxWithdraw-honored')!.status).toBe('inconclusive');
     expect(r.get('sf-maxRedeem-honored')!.status).toBe('inconclusive');
   });
+
 });

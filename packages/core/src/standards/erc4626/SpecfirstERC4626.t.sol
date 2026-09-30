@@ -14,7 +14,7 @@ interface IDecimals {
 /// SF_VAULT is the vault address, SF_DELTA the tolerated absolute error in base units (default 0).
 /// Differences from the upstream harness:
 ///   1. balances come from forge-std `deal` (or a packed-slot write) instead of the mock token's `mint`,
-///   2. amounts are bounded to min(maxDeposit, 1e6 whole tokens),
+///   2. amounts are bounded to min(maxDeposit, 1e6 whole tokens), or to 1e6 whole tokens when maxDeposit is 0,
 ///   3. no synthetic yield is injected (setUpYield is never called),
 ///   4. fuzzed users are mapped onto a pool of USER_POOL addresses derived from SF_POOL_SALT (the run's
 ///      recorded fuzz seed). A fresh address costs uncached fork reads for every balance and allowance slot
@@ -60,20 +60,24 @@ contract SpecfirstERC4626Test is ERC4626Test {
             address user = init.user[i];
             vm.assume(_isEOA(user) && uint160(user) > 0xffff);
             vm.assume(user != _vault_ && user != _underlying_);
+            // The amount is bounded by maxDeposit when the vault reports a positive one. A maxDeposit of 0 is an
+            // underestimate EIP-4626 allows (Morpho Vault V2 reports 0 for everyone), so the cap is tried instead
+            // and a revert only discards the input.
             uint256 maxDep = _cap;
-            bool maxKnown = false;
+            uint256 advertised = 0;
             try IERC4626(_vault_).maxDeposit(user) returns (uint256 m) {
-                maxKnown = true;
-                if (m < maxDep) maxDep = m;
+                advertised = m;
+                if (m > 0 && m < maxDep) maxDep = m;
             } catch {}
             uint256 shares = bound(init.share[i], 0, maxDep);
             _give(_underlying_, user, shares);
             _approve(_underlying_, user, _vault_, shares);
             vm.prank(user);
             try IERC4626(_vault_).deposit(shares, user) {} catch {
-                // EIP-4626: a deposit up to maxDeposit must not revert. Upstream discards the input; so do we,
-                // but the discard is recorded so a vault cannot hide the violation behind rejected inputs.
-                if (maxKnown && shares > 0) _recordDepositRevert();
+                // EIP-4626: a deposit up to a positive maxDeposit must not revert. Upstream discards the input; so
+                // do we, but the discard is recorded so a vault cannot hide the violation behind rejected inputs.
+                // A revert under a maxDeposit of 0 is not recorded: 0 honestly says "not allowed".
+                if (advertised > 0 && shares > 0 && shares <= advertised) _recordDepositRevert();
                 vm.assume(false);
             }
             _give(_underlying_, user, bound(init.asset[i], 0, _cap));

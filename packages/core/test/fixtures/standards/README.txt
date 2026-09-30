@@ -61,3 +61,18 @@ upshift-proxy-143-109061472.hex
   0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E, Monad block 109061472, read from forge's local fork cache
   (~/.foundry/cache/rpc/143/109061472). keccak256 matches the cached code_hash
   0xa60c40de9979a21d4ec81b613b9da678727c39ef441c3227d78330cf649233b0.
+
+local-erc7575-no-precheck.json
+  SplitShareVault (0x5F..42, mock-vaults.sol): an ERC-7575 vault whose shares are SplitShareToken (0x5f..41);
+  the vault has no balanceOf, allowance, approve or totalSupply. Full check run by the runner before the
+  ERC-7575 pre-check existed (--fuzz-runs 16, seed 1, local anvil): 14 pass and 16 fail with reason
+  "EvmError: Revert" (a call to a missing function, no revert data): deposit, mint, previewWithdraw,
+  withdraw, withdraw-zero-allowance, previewRedeem, redeem, redeem-zero-allowance and the 8 round trips.
+  The same 16 failed on Centrifuge V3 0x082c62088669facc1fa9f056c5efc8cbccda39b2 on Monad. Today the
+  pre-check skips forge for such a vault; the fixture pins how the parser reads that output.
+
+local-zero-max.json
+  ZeroMaxVault (0x5F..51, mock-vaults.sol): maxDeposit, maxMint, maxWithdraw and maxRedeem return 0 for
+  everyone, the actions work (the shape of Morpho Vault V2 on Monad). Full check with the harness that tries
+  the cap when maxDeposit is 0 (--fuzz-runs 16, seed 1, local anvil): the 26 upstream properties pass, the
+  four sf- properties are inconclusive (a max of 0 discards their inputs).

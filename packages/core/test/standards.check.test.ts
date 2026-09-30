@@ -11,6 +11,7 @@ import {
   ERC4626_PROPERTIES,
   ERC4626_UPSTREAM,
   ERC7535_NATIVE_ASSET,
+  erc7575Reason,
   erc4626SourceFile,
   FORGE_STD_PIN,
   forgeEnv,
@@ -21,6 +22,7 @@ import {
   sha256Hex,
   standardCheckPath,
   standardCheckReportSchema,
+  standardCheckExitCode,
   StandardCheckError,
   type StandardCheckClient,
   type StandardCheckReport,
@@ -31,15 +33,17 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const VAULT = '0x1B68626dCa36c7fE922fD2d55E4f631d962dE19c' as Address;
 const CODE: Hex = `0x6080604052a2646970667358221220${'11'.repeat(32)}64736f6c63430008180033`;
 
-function client(o: { chainId?: number; code?: Hex; asset?: Address | Error }): StandardCheckClient {
+/** Answers asset() with `asset` and share() with `share`; an Error answer reverts, undefined means no share(). */
+function client(o: { chainId?: number; code?: Hex; asset?: Address | Error; share?: Address | Error }): StandardCheckClient {
   return {
     getChainId: vi.fn(async () => o.chainId ?? 143),
     getBlockNumber: vi.fn(async () => 5n),
     getCode: vi.fn(async () => o.code),
     getStorageAt: vi.fn(async () => `0x${'0'.repeat(64)}`),
-    readContract: vi.fn(async () => {
-      if (o.asset instanceof Error) throw o.asset;
-      return o.asset;
+    readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
+      const answer = functionName === 'share' ? (o.share ?? new Error('execution reverted')) : o.asset;
+      if (answer instanceof Error) throw answer;
+      return answer;
     }),
   } as unknown as StandardCheckClient;
 }
@@ -80,6 +84,7 @@ describe('runStandardCheck without forge', () => {
     expect(report).toMatchObject({ seed: null, sender: null, toolchain: { forgeVersion: null, forgeStd: { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit } } });
     expect(events).toEqual(['check-start', 'check-identity', 'check-skip']);
     expect(report.blockNumber).toBe('5');
+    expect(report).toMatchObject({ schemaVersion: 2, vaultKind: 'erc7535' });
     expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
     expect(report.results.every((r) => r.status === 'not_applicable' && r.reason === NATIVE_ASSET_REASON)).toBe(true);
     expect(report.upstream).toEqual(ERC4626_UPSTREAM);
@@ -88,6 +93,35 @@ describe('runStandardCheck without forge', () => {
     expect(report.results.slice(26).map((r) => r.id)).toEqual(['sf-maxDeposit-honored', 'sf-maxMint-honored', 'sf-maxWithdraw-honored', 'sf-maxRedeem-honored']);
     const written = JSON.parse(await readFile(recordPath, 'utf8')) as StandardCheckReport;
     expect(standardCheckReportSchema.parse(written)).toEqual(report);
+  });
+
+  it('ERC-7575 vault (share() names another token): every property not_applicable, forge never runs, exit 17', async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'specfirst-check-'));
+    const shareToken = '0x5f00000000000000000000000000000000000041' as Address;
+    const events: Array<{ type: string; vaultKind?: string; reason?: string }> = [];
+    const c = client({ code: CODE, asset: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603', share: shareToken });
+    const report = await runStandardCheck({
+      standard: 'erc4626',
+      address: VAULT,
+      rpcUrl: 'http://127.0.0.1:1',
+      client: c,
+      cacheDir: path.join(dir, 'cache'),
+      forgeBin: '/nonexistent/forge',
+      recordPath: path.join(dir, 'r.json'),
+      onEvent: (e) => void events.push(e),
+    });
+    const reason = erc7575Reason(shareToken);
+    expect(reason).toBe(
+      'ERC-7575 vault: shares are a separate token (share() = 0x5f00000000000000000000000000000000000041); both suites assume the vault is its own share token and call balanceOf, allowance and approve on it',
+    );
+    expect(events.map((e) => e.type)).toEqual(['check-start', 'check-identity', 'check-skip']);
+    expect(events[2]).toMatchObject({ vaultKind: 'erc7575', reason });
+    expect(report).toMatchObject({ schemaVersion: 2, vaultKind: 'erc7575', seed: null, sender: null });
+    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
+    expect(report.results.every((r) => r.status === 'not_applicable' && r.reason === reason)).toBe(true);
+    expect(standardCheckExitCode(report.summary)).toBe(17);
+    expect(c.readContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: 'share', blockNumber: 5n }));
+    expect(existsSync(path.join(dir, 'cache'))).toBe(false);
   });
 
   it('refuses an address without code before preparing anything', async () => {
@@ -234,6 +268,24 @@ describe('runStandardCheck with a stand-in forge (M6, M7, L3, L6, L7)', () => {
     expect(argAfter((await recorded(forge.record)).args, '--sender')).toBe('0x00000000000000000000000000000000000abcde');
   });
 
+  it('share() that names the vault itself, or answers zero, is a plain ERC-4626 vault: forge runs', async () => {
+    const { forge, input } = await setup();
+    for (const share of [VAULT, '0x0000000000000000000000000000000000000000' as Address]) {
+      await rm(forge.record, { force: true });
+      const report = await runStandardCheck({ ...input, client: client({ code: CODE, asset: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603', share }) });
+      expect(existsSync(forge.record)).toBe(true);
+      expect(report).toMatchObject({ schemaVersion: 2, vaultKind: 'erc4626' });
+      expect(report.results.find((r) => r.id === 'asset')!.status).toBe('pass');
+    }
+  });
+
+  it('share() that reverts (no such function) is a plain ERC-4626 vault: forge runs', async () => {
+    const { forge, input } = await setup();
+    const report = await runStandardCheck({ ...input, client: client({ code: CODE, asset: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603', share: new Error('execution reverted') }) });
+    expect(existsSync(forge.record)).toBe(true);
+    expect(report.vaultKind).toBe('erc4626');
+  });
+
   it('M6: forge sees a minimal environment without the caller FOUNDRY_* or ETH_RPC_URL', async () => {
     const { forge, input } = await setup();
     Object.assign(process.env, { FOUNDRY_FUZZ_RUNS: '1', FOUNDRY_PROFILE: 'evil', ETH_RPC_URL: 'http://evil', UNRELATED_SECRET: 's' });
@@ -321,6 +373,14 @@ describe('standardCheckReportSchema', () => {
     durationMs: 1234,
   });
 
+  it('schema version 1 reports without vaultKind still validate; version 2 needs it', () => {
+    expect(standardCheckReportSchema.parse(valid()).schemaVersion).toBe(1);
+    expect(() => standardCheckReportSchema.parse({ ...valid(), vaultKind: 'erc4626' })).toThrow(/vaultKind does not exist in schemaVersion 1/);
+    expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 2 })).toThrow(/vaultKind is required from schemaVersion 2 on/);
+    expect(standardCheckReportSchema.parse({ ...valid(), schemaVersion: 2, vaultKind: 'erc7575' }).vaultKind).toBe('erc7575');
+    expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 2, vaultKind: 'erc20' })).toThrow();
+  });
+
   it('accepts a complete report', () => {
     expect(standardCheckReportSchema.parse(valid())).toEqual(valid());
   });
@@ -335,7 +395,7 @@ describe('standardCheckReportSchema', () => {
     expect(() => standardCheckReportSchema.parse({ ...valid(), results: [{ ...valid().results[0], status: 'error' }] })).toThrow();
     expect(() => standardCheckReportSchema.parse({ ...valid(), extra: 1 })).toThrow();
     expect(() => standardCheckReportSchema.parse({ ...valid(), harnessSha256: '0x12' })).toThrow();
-    expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 2 })).toThrow();
+    expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 3 })).toThrow();
     expect(() => standardCheckReportSchema.parse({ ...valid(), blockNumber: 'latest' })).toThrow();
   });
 

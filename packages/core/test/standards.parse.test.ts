@@ -322,3 +322,44 @@ describe('Specfirst properties sf-* (real forge output, local anvil with anvil_s
     expect(r.get('sf-maxWithdraw-honored')).toMatchObject({ status: 'not_applicable', reason: 'setUp failed: EvmError: Revert' });
   });
 });
+
+describe('ERC-7575 vault run without the pre-check (local anvil, SplitShareVault)', () => {
+  it('the 16 properties that touch the vault as an ERC-20 fail with "EvmError: Revert" and no counterexample logs', async () => {
+    const results = parseStandardForgeJson(await fx('local-erc7575-no-precheck.json'), ERC4626_CHECK_PROPERTIES)!;
+    const failed = results.filter((r) => r.status === 'fail');
+    expect(failed.map((r) => r.id)).toEqual([
+      'deposit',
+      'mint',
+      'previewWithdraw',
+      'withdraw',
+      'withdraw-zero-allowance',
+      'previewRedeem',
+      'redeem',
+      'redeem-zero-allowance',
+      'RT-deposit-redeem',
+      'RT-deposit-withdraw',
+      'RT-redeem-deposit',
+      'RT-redeem-mint',
+      'RT-mint-withdraw',
+      'RT-mint-redeem',
+      'RT-withdraw-mint',
+      'RT-withdraw-deposit',
+    ]);
+    expect(failed.every((r) => r.reason === 'EvmError: Revert')).toBe(true);
+    expect(summarize(results)).toEqual({ pass: 14, fail: 16, inconclusive: 0, notApplicable: 0 });
+  });
+});
+
+describe('ZeroMaxVault: every max is 0, the actions work (Morpho Vault V2 shape)', () => {
+  it('the upstream suite runs and passes; the sf- properties discard every input and end inconclusive', async () => {
+    const results = parseStandardForgeJson(await fx('local-zero-max.json'), ERC4626_CHECK_PROPERTIES)!;
+    expect(summarize(results)).toEqual({ pass: 26, fail: 0, inconclusive: 4, notApplicable: 0 });
+    expect(results.filter((r) => r.status === 'inconclusive').map((r) => r.id)).toEqual([
+      'sf-maxDeposit-honored',
+      'sf-maxMint-honored',
+      'sf-maxWithdraw-honored',
+      'sf-maxRedeem-honored',
+    ]);
+    expect(results.filter((r) => r.status === 'inconclusive').every((r) => /^`vm\.assume` rejected too many inputs/.test(r.reason!))).toBe(true);
+  });
+});
