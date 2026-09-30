@@ -169,7 +169,7 @@ export function explainResult(result: Pick<ReportResultView, 'status' | 'reason'
       const deposits = DEPOSIT_BELOW_MAX.exec(reason)?.[1];
       const base = `Never exercised: the vault rejected nearly every amount the fuzzer tried, and forge gave up after ${limit ?? 'too many'} discarded inputs.`;
       return deposits
-        ? `${base} Along the way deposit reverted ${deposits} times at or below maxDeposit, which EIP-4626 says it must not do. Those inputs were discarded, as upstream does, so this stays inconclusive rather than failing.`
+        ? `${base} Along the way deposit reverted ${deposits} times at amounts up to maxDeposit; some of these may be tiny amounts that round to zero shares, which many vaults reject. Those inputs were discarded, as upstream does, so this stays inconclusive; whether deposit honors maxDeposit is judged by sf-maxDeposit-honored.`
         : base;
     }
     case 'max-zero': {

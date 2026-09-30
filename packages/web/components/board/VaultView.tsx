@@ -13,33 +13,10 @@ import { shortAddress, shortHash } from '../../lib/format';
 import { PropertyChip, VaultChip } from './StatusChip';
 import { Glyph } from './Glyph';
 import { CopyButton } from './CopyButton';
+import { chainName, reproduceCommandMultiline } from '../../lib/board/reproduce';
+import { BadgeSnippet } from '../desk/BadgeSnippet';
 
-const CHAIN_NAME: Record<number, string> = { 143: 'Monad mainnet', 10143: 'Monad testnet', 31337: 'anvil' };
-const NETWORK_FLAG: Record<number, string> = { 10143: ' --network monad-testnet', 31337: ' --network anvil' };
-
-export function chainName(chainId: number): string {
-  return CHAIN_NAME[chainId] ?? `chain ${chainId}`;
-}
-
-/** The arguments of `specfirst check` that replay a report: recorded block, runs, seed and (when not 0) delta. */
-export function reproduceArgs(r: VaultDetail['report']): string[] {
-  const args = [`specfirst check ${r.address}`, `--standard ${r.standard}`, `--block ${r.blockNumber}`, `--runs ${r.runs}`];
-  if (r.seed) args.push(`--seed ${r.seed}`);
-  if (r.delta !== '0') args.push(`--delta ${r.delta}`);
-  const net = NETWORK_FLAG[r.chainId];
-  if (net) args.push(net.trim());
-  return args;
-}
-
-/** One line, as the README and ADR 0004 write it. */
-export function reproduceCommand(r: VaultDetail['report']): string {
-  return reproduceArgs(r).join(' ');
-}
-
-/** The same command over several lines with shell continuations, for the page and the copy button. */
-export function reproduceCommandMultiline(r: VaultDetail['report']): string {
-  return reproduceArgs(r).join(' \\\n  ');
-}
+export { chainName, reproduceArgs, reproduceCommand, reproduceCommandMultiline } from '../../lib/board/reproduce';
 
 function rawText(r: ReportResultView): string {
   const lines: string[] = [];
@@ -185,7 +162,13 @@ function AttestationPanel({ a, detail }: { a: AttestationView; detail: VaultDeta
   );
 }
 
-export function VaultView({ detail }: { detail: VaultDetail }) {
+/**
+ * board: from the prerendered board data. requested: from a report written after the build (a paid check), read
+ * when the page was requested.
+ */
+export type VaultViewSource = 'board' | 'requested';
+
+export function VaultView({ detail, source = 'board' }: { detail: VaultDetail; source?: VaultViewSource }) {
   const { row, report } = detail;
   const split = report.results.filter((r) => !r.id.startsWith('sf-')).length;
   const skip = effectiveSkipReason(report);
@@ -217,6 +200,16 @@ export function VaultView({ detail }: { detail: VaultDetail }) {
         <p className="sb-verdict">{verdictSentence(row.status, report.summary, report.blockNumber)}</p>
         {skip && <p className="sb-skip">{explainSkip(skip)}</p>}
         <StripBig results={report.results} split={split} />
+        <p className="sb-links">
+          <a className="sb-btn" href={`/check?vault=${row.address}`}>
+            Request a re-check
+          </a>
+          <span className="soft" style={{ fontSize: 13, alignSelf: 'center' }}>
+            {source === 'requested'
+              ? `This report comes from a check requested on ${report.startedAt.slice(0, 10)}, newer than the board build.`
+              : `Runs the same ${report.results.length} properties at the latest block and attests the new report.`}
+          </span>
+        </p>
       </header>
 
       <div className="sb-vault-grid">
@@ -307,6 +300,8 @@ export function VaultView({ detail }: { detail: VaultDetail }) {
               canonical JSON (RFC 8785), the value the registry stores.
             </p>
           </section>
+
+          <BadgeAndApi chainId={row.chainId} address={row.address} />
 
           <section aria-labelledby="id-h">
             <h2 className="sb-h3" id="id-h">
@@ -437,5 +432,33 @@ function FragmentRow({ r, i, divider }: { r: ReportResultView; i: number; divide
         </td>
       </tr>
     </>
+  );
+}
+
+function BadgeAndApi({ chainId, address }: { chainId: number; address: string }) {
+  const a = address.toLowerCase();
+  const badge = `/badge/check/${chainId}/${a}.svg`;
+  const api = `/api/v1/vaults/${chainId}/${a}`;
+  return (
+    <section aria-labelledby="embed-h">
+      <h2 className="sb-h3" id="embed-h">
+        Badge and API
+      </h2>
+      <p style={{ margin: '0 0 8px' }}>
+        <img src={badge} alt="Specfirst ERC-4626 check badge" height={20} style={{ height: 20, width: 'auto' }} />
+      </p>
+      <p className="soft" style={{ fontSize: 13, margin: 0 }}>
+        The badge and the JSON read the registry when they are loaded, so they follow new attestations without a rebuild.
+      </p>
+      <BadgeSnippet badgePath={badge} vaultPath={`/v/${chainId}/${a}`} />
+      <p style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <a className="sb-btn" href={api}>
+          JSON API
+        </a>
+        <a className="sb-btn" href={badge}>
+          Badge SVG
+        </a>
+      </p>
+    </section>
   );
 }

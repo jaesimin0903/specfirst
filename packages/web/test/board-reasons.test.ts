@@ -86,8 +86,11 @@ describe('explainResult', () => {
       status: 'inconclusive',
       reason: '`vm.assume` rejected too many inputs (4096 allowed); deposit reverted below maxDeposit 37 times (inputs discarded, EIP-4626 says it must not revert)',
     });
-    expect(withNote).toMatch(/deposit reverted 37 times at or below maxDeposit/);
-    expect(withNote).toMatch(/stays inconclusive rather than failing/);
+    expect(withNote).toBe(
+      'Never exercised: the vault rejected nearly every amount the fuzzer tried, and forge gave up after 4096 discarded inputs. Along the way deposit reverted 37 times at amounts up to maxDeposit; some of these may be tiny amounts that round to zero shares, which many vaults reject. Those inputs were discarded, as upstream does, so this stays inconclusive; whether deposit honors maxDeposit is judged by sf-maxDeposit-honored.',
+    );
+    // The count includes reverts EIP-4626 does not forbid (a 1-unit deposit that mints 0 shares), so the page must not call them violations.
+    expect(withNote).not.toMatch(/must not|EIP-4626 says/);
   });
 
   it('not applicable reasons say why without blaming the vault', () => {

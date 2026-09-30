@@ -75,6 +75,9 @@ importers:
       viem:
         specifier: ^2.21.0
         version: 2.56.9(typescript@5.9.3)(zod@3.25.76)
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.0

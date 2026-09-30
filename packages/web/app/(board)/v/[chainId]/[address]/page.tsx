@@ -1,22 +1,22 @@
 import type { Metadata } from 'next';
 import { notFound, permanentRedirect } from 'next/navigation';
-import { loadBoard, loadVaultDetail } from '../../../../../lib/board/load';
 import { VaultView } from '../../../../../components/board/VaultView';
+import { resolveVault } from '../../../../../lib/desk/vault';
 
 type Params = Promise<{ chainId: string; address: string }>;
 
-/** Every vault on the board is prerendered; anything else is looked up on demand and 404s when unknown. */
-export function generateStaticParams(): { chainId: string; address: string }[] {
-  return loadBoard().vaults.map((r) => {
-    const [chainId, address] = r.id.split('/');
-    return { chainId: chainId!, address: address! };
-  });
-}
+/*
+ * Rendered per request: the board's build-time data is the default, but a newer report from a paid check (under
+ * certs/checks) replaces it at once, and a vault the board never had is shown from that report alone. Reading the
+ * prebuilt JSON is a file read, so this costs little; only a vault shown from a newer report reads the registry
+ * (cached for 30 s).
+ */
+export const dynamic = 'force-dynamic';
 
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { chainId, address } = await params;
-  const d = loadVaultDetail(chainId, address);
-  if (!d) return { title: 'Vault not on the board | Specfirst' };
+  const { detail: d } = await resolveVault(chainId, address);
+  if (!d) return { title: 'Vault not checked yet | Specfirst' };
   const name = d.row.name ?? d.row.address;
   return {
     title: `${name} | ERC-4626 check | Specfirst`,
@@ -27,7 +27,7 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 export default async function VaultPage({ params }: { params: Params }) {
   const { chainId, address } = await params;
   if (address !== address.toLowerCase()) permanentRedirect(`/v/${chainId}/${address.toLowerCase()}`);
-  const detail = loadVaultDetail(chainId, address);
+  const { detail, source } = await resolveVault(chainId, address);
   if (!detail) notFound();
-  return <VaultView detail={detail} />;
+  return <VaultView detail={detail} source={source ?? 'board'} />;
 }

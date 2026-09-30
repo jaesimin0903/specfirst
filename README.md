@@ -60,6 +60,26 @@ pnpm --filter @specfirst/web dev
 
 `board:build` reads `certs/checks/<chainId>/<address>/*.json` (or `SPECFIRST_BOARD_SOURCE`, e.g. `.specfirst/checks`), keeps each vault's latest report, and reads `CheckAttestationRegistry` on Monad testnet with view calls only. When the registry cannot be read the board still builds and says so on every vault. Transaction hashes of attestations come from `packages/web/data/attestation-txs.json`. `build` and `dev` build the data only when `data/board.json` is missing. The script needs Node 22.18 or later (built-in TypeScript type stripping).
 
+## Request desk
+
+`packages/web` also takes paid checks. A vault team or curator pastes a vault on `/check`, pays the desk's fee in testnet MON with a browser wallet (EIP-1193, the wallet is asked to add Monad testnet 10143 when it does not know it) or a testnet burner key kept in the browser, and follows the request on `/check/<id>`. The worker checks the vault, attests the report in CheckAttestationRegistry and fulfils the request; only then does the fee leave escrow and count as earned. A reject returns the fee in the same transaction, and anyone can call `refundExpired` once `requestedAt + timeout` has passed. `/desk` shows fee, requests, earned, withdrawn, escrowed, the worker's gas and the net.
+
+A report the worker writes under `certs/checks/<chainId>/<address>/` is shown at once: vault pages render per request and prefer a report newer than the board build, a vault the board never had gets a page from its report alone, and the board opens with a "Recently requested" line read when the page loads. For integrators, `GET /api/v1/vaults/<chainId>/<address>` returns the latest report summary, the four max-honored flags, the attestation read live from the registry and the replay command; `/badge/check/<chainId>/<address>.svg` shows Compliant, Mismatch, Partly checked or Not attested. The certificate badge at `/badge/<address>` is unrelated and unchanged.
+
+Environment of the web server (all optional; nothing here is a key):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NEXT_PUBLIC_SPECFIRST_DESK_10143` | unset | CheckRequestDesk on Monad testnet. Unset: the pages say "desk not deployed" and paying is closed. Read at request time, so a restart is enough. |
+| `NEXT_PUBLIC_MONAD_RPC` | `https://testnet-rpc.monad.xyz` | Testnet RPC for the server and the browser (burner, receipts). Server reads are cached a few seconds and batched with Multicall3 to stay under the public limit. |
+| `SPECFIRST_MAINNET_RPC` | `https://rpc.monad.xyz` | Monad mainnet RPC for the pre-check (code, `asset()`, name, symbol). |
+| `SPECFIRST_WORKER_STATUS` | `<repo>/.specfirst/worker/status.json` | The worker's progress file. Missing: progress follows the chain only. |
+| `SPECFIRST_CHECKS_DIR` | `<repo>/certs/checks` | Where requested reports are read from. |
+| `NEXT_PUBLIC_MONAD_FAUCET_URL` | `https://faucet.monad.xyz` | Linked from the burner card. |
+| `SPECFIRST_REPO_ROOT` | two directories above `packages/web` | Base for the relative paths above. |
+
+The desk ABI and the status.json schema live in `packages/web/lib/desk/contract.ts` until `@specfirst/core/desk` exports them; that file says how to swap.
+
 ## License
 
 MIT, see `LICENSE`. Exceptions: files whose first line is `SPDX-License-Identifier: AGPL-3.0` extend [a16z/erc4626-tests](https://github.com/a16z/erc4626-tests), which is AGPL-3.0, and carry that license:
