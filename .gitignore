@@ -3,7 +3,7 @@ dist/
 out/
 cache/
 .env
-.env.*
+.env*
 !.env.example
 .specfirst/
 .ultrafuzz/

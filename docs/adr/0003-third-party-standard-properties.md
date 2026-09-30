@@ -30,7 +30,7 @@ Add a read-only path that runs a public property suite, written and maintained b
 ## Upstream and license
 a16z/erc4626-tests is AGPL-3.0. None of its code is copied into this repository. At run time the pinned commit is fetched into a cache directory (`$SPECFIRST_CACHE_DIR`, else `$XDG_CACHE_HOME/specfirst`, else `~/.cache/specfirst`) with `git init`, `git fetch --depth 1 origin <sha>`, `git checkout FETCH_HEAD`, and the checked-out HEAD is compared with the pin. forge-std is fetched the same way. The cache is outside any user project so the upstream code never ends up committed in someone's repository.
 
-Our harness template (`packages/core/src/standards/erc4626/SpecfirstERC4626.t.sol`) and the positive control test (`control/SpecfirstERC4626Control.t.sol`) inherit the upstream contracts, so both carry `SPDX-License-Identifier: AGPL-3.0`. The control vault (`control/BrokenVault.sol`) does not inherit anything and is MIT. The rest of the repository keeps its license. The report records `upstream.repo`, `upstream.commit` and `harnessSha256` so a reader can rebuild exactly what ran.
+Our harness template (`packages/core/src/standards/erc4626/SpecfirstERC4626.t.sol`) and the positive control test (`control/SpecfirstERC4626Control.t.sol`) inherit the upstream contracts, so both carry `SPDX-License-Identifier: AGPL-3.0`. The control vault (`control/BrokenVault.sol`) does not inherit anything and is MIT. The rest of the repository is MIT (see `LICENSE`); the AGPL files are the only exception and are listed in the README. The report records `upstream.repo`, `upstream.commit` and `harnessSha256` so a reader can rebuild exactly what ran.
 
 ## How the harness differs from upstream
 The upstream `ERC4626Test` assumes a mock underlying token it can mint and burn. Against a live vault that is not possible, so the harness changes four things:
@@ -65,7 +65,7 @@ A failure reason names the action, the amount, the raw 4-byte revert selector (n
 
 These properties are written by Specfirst, not by the deployer. They encode only the EIP-4626 sentences above, their source is in this repository under MIT (it imports forge-std, not the upstream suite), and the report records its sha256 as `sfPropertiesSha256`.
 
-Case that motivated them, Upshift earnAUSD on Monad, facts only; the Upshift team will be told before this is published:
+Case that motivated them, Upshift earnAUSD on Monad, facts only. It is described as a mismatch with the EIP-4626 MUST sentences, not as a vulnerability; no loss of funds follows from it:
 - 0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E is an OpenZeppelin TransparentUpgradeableProxy (2,001 bytes) over implementation 0xfd2f793c248dd673c830df610a95a045054de267 (Sourcify match, TokenizedAccount.flattened.sol).
 - In that source, withdraw and redeem always revert with `WithdrawalRequestRequired()` (selector 0x75ed2e3e); exits go through requestRedeem. maxWithdraw returns `_convertToAssets(_balances[holder])` and maxRedeem returns `_balances[holder]`.
 - On a fork at block 109061472, right after a deposit of 1e9 AUSD base units, maxWithdraw was 999999999 and maxRedeem 994754665, while withdraw(1e6) and redeem of half the shares both reverted with 0x75ed2e3e.
