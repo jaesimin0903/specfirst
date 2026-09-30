@@ -10,6 +10,12 @@ export function BoardNav() {
       <a href="/" aria-current={path === '/' ? 'page' : undefined}>
         Vaults
       </a>
+      <a href="/check" aria-current={path?.startsWith('/check') ? 'page' : undefined}>
+        Request a check
+      </a>
+      <a href="/desk" aria-current={path === '/desk' ? 'page' : undefined}>
+        Desk
+      </a>
       <a href="/about" aria-current={path === '/about' ? 'page' : undefined}>
         Method
       </a>
