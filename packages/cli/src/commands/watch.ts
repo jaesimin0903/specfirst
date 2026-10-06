@@ -13,6 +13,9 @@ import {
   ANVIL_DEFAULT_RPC,
   AttestationRegistryClient,
   builtinSources,
+  checkAllowedLocalOrigins,
+  createSubscriptionSource,
+  createWebhookAlertSink,
   DEFAULT_BLOCK_LAG,
   DEFAULT_LOG_WINDOW,
   DEFAULT_REPORT_BASE_URL,
@@ -35,11 +38,14 @@ import {
   seedKnownVaults,
   sourcesFromFile,
   SourcesError,
+  SubscriptionsClient,
   verifySourceFixture,
+  WATCH_DIR,
   WATCH_FAILED_EXIT_CODE,
   Watcher,
   WatchError,
   WatchStore,
+  WEBHOOKS_JSON,
   type FeedEvent,
   type RunStandardCheckInput,
   type SourceFixture,
@@ -67,8 +73,11 @@ import {
   resolveAttestRegistry,
   resolveKey,
   resolveNetwork,
+  resolveSubs,
+  subsEnvVar,
   WATCH_ISSUER_KEY_ENV,
   attestRegistryEnvVar,
+  type ResolvedNetwork,
 } from '../lib/network.js';
 import { StageError } from '../lib/pipeline.js';
 import { cont, stage } from '../lib/runLog.js';
@@ -108,6 +117,8 @@ interface WatchOptions {
   registryAttest?: string;
   reportBaseUrl?: string;
   allowUnknownProxy?: boolean;
+  subs?: string;
+  webhookLocalOrigin: string[];
 }
 
 function nonNegative(raw: string, what: string, max = BigInt(Number.MAX_SAFE_INTEGER)): bigint {
@@ -148,6 +159,43 @@ export function watchSubjectRpcs(chainId: number, explicit: string[], env: NodeJ
   }
   if (chainId === ANVIL_CHAIN_ID) return [env[ANVIL_RPC_ENV] ?? ANVIL_DEFAULT_RPC];
   throw new ConfigError(`no default RPC for subject chain ${chainId}; pass --subject-rpc <url>`);
+}
+
+interface AlertHooks {
+  hooks: WatchHooks;
+  subs: Address;
+  webhooksFile: string;
+}
+
+/**
+ * The subscription hooks (ADR 0006, Alerts) from the configuration: with a CheckSubscriptions address (--subs, else
+ * $SPECFIRST_SUBS_<chainId> of --network, the attest network), the active subscriptions are read there (read only)
+ * and changes are POSTed to the webhooks the web stores in <watch dir>/webhooks.json. Without one, null: no
+ * subscriptions and no alerts. --webhook-local-origin lists the exact origins a local webhook may use.
+ */
+async function alertHooksFrom(net: ResolvedNetwork, opts: WatchOptions, projectDir: string, reportBaseUrl: string): Promise<AlertHooks | null> {
+  const envName = subsEnvVar(net.clients.chain.id);
+  if (!opts.subs && !process.env[envName]) {
+    if (opts.webhookLocalOrigin.length) throw new ConfigError(`--webhook-local-origin needs a CheckSubscriptions contract: set ${envName} or pass --subs <address>`);
+    return null;
+  }
+  try {
+    checkAllowedLocalOrigins(opts.webhookLocalOrigin);
+  } catch (err) {
+    throw new ConfigError(`--webhook-local-origin: ${(err as Error).message}`);
+  }
+  const subs = getAddress(resolveSubs(net, opts));
+  const code = await net.clients.publicClient.getCode({ address: subs });
+  if (!code || code === '0x') throw new ConfigError(`no contract at the subscriptions address ${subs} on ${net.name}`);
+  const webhooksFile = path.join(projectDir, WATCH_DIR, WEBHOOKS_JSON);
+  return {
+    subs,
+    webhooksFile,
+    hooks: {
+      subscriptions: createSubscriptionSource(new SubscriptionsClient(subs, net.clients.publicClient)),
+      alerts: createWebhookAlertSink({ webhooksFile, reportBaseUrl, allowedLocalOrigins: opts.webhookLocalOrigin }),
+    },
+  };
 }
 
 async function loadSources(file: string | undefined, chainId: number, projectDir: string): Promise<{ sources: WatchSource[]; fixtures: SourceFixture[]; from: string }> {
@@ -239,8 +287,10 @@ function logWatchEvent(ctx: CliContext, e: WatchEvent): void {
  * `specfirst watch` (docs/adr/0006): the unattended loop from chain events to checks and attestations, and
  * `specfirst watch sources` to list (and with --verify, check against the chain) the signal sources. Reads
  * the subject chain only; attests on --network (monad-testnet or anvil, monad-mainnet refused) with
- * WATCH_ISSUER_PRIVATE_KEY, falling back to ISSUER_PRIVATE_KEY only with --share-issuer-key. Files under
- * .specfirst/watch/<subjectChainId>/ of --project. NDJSON events with --json. Exit 19 when it cannot start.
+ * WATCH_ISSUER_PRIVATE_KEY, falling back to ISSUER_PRIVATE_KEY only with --share-issuer-key. With a
+ * CheckSubscriptions address on that network it reads the active subscriptions and POSTs changes to the
+ * webhooks in .specfirst/watch/webhooks.json. Files under .specfirst/watch/<subjectChainId>/ of --project.
+ * NDJSON events with --json. Exit 19 when it cannot start.
  */
 export function registerWatchCommand(program: Command, deps: WatchCommandDeps = {}): void {
   const watch = program
@@ -268,6 +318,8 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
     .option('--registry-attest <address>', 'CheckAttestationRegistry (default: $SPECFIRST_ATTEST_REGISTRY_<chainId>)')
     .option('--report-base-url <url>', `public URL of certs/checks for reportURI (default: $${REPORT_BASE_URL_ENV} or ${DEFAULT_REPORT_BASE_URL})`)
     .option('--allow-unknown-proxy', 'attest proxy-shaped subjects whose implementation cannot be resolved')
+    .option('--subs <address>', 'CheckSubscriptions on --network to read active subscriptions from and alert (default: $SPECFIRST_SUBS_<chainId>; neither: no subscriptions, no alerts)')
+    .option('--webhook-local-origin <origin>', 'exact http(s) origin a webhook may use although it is local, e.g. http://localhost:3417 for the web demo receiver; repeat for more', collect, [])
     .action(async (opts: WatchOptions, command: Command) => {
       const ctx = contextFrom(command);
       await runStage(ctx, 'watch', WATCH_FAILED_EXIT_CODE, async () => {
@@ -291,8 +343,9 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         let registry: AttestationRegistryClient | null = null;
         let issuer: string | null = null;
         let attestOn = '';
+        let net: ResolvedNetwork;
         if (opts.attest) {
-          const net = resolveNetwork(opts);
+          net = resolveNetwork(opts);
           let key = optionalKey(WATCH_ISSUER_KEY_ENV);
           if (!key && opts.shareIssuerKey) key = optionalKey(ISSUER_KEY_ENV);
           if (!key) {
@@ -316,12 +369,16 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           attestOn = `${net.name} ${net.clients.chain.id}`;
         } else {
           // Without attesting, a registry that is configured is still read: it decides what would be attested.
-          const net = resolveNetwork(opts, process.env, { readOnly: true });
+          net = resolveNetwork(opts, process.env, { readOnly: true });
           if (opts.registryAttest ?? process.env[attestRegistryEnvVar(net.clients.chain.id)]) {
             registry = new AttestationRegistryClient(getAddress(resolveAttestRegistry(net, opts)), net.clients.publicClient);
             attestOn = `${net.name} ${net.clients.chain.id}, read only`;
           }
         }
+
+        // Injected hooks (tests) replace the configured ones.
+        const alerting = deps.hooks ? null : await alertHooksFrom(net, opts, ctx.projectDir, base);
+        const hooks = deps.hooks ?? alerting?.hooks;
 
         const urls = watchSubjectRpcs(subjectChainId, opts.subjectRpc);
         const subjectClient = await subjectClientFor(urls, subjectChainId);
@@ -368,7 +425,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             sources,
             config,
             window: new LogWindow(logWindow),
-            ...(deps.hooks ? { hooks: deps.hooks } : {}),
+            ...(hooks ? { hooks } : {}),
             onEvent: (e) => {
               emitEvent(ctx, e);
               logWatchEvent(ctx, e);
@@ -381,6 +438,18 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           printLine(
             ctx,
             cont(pc.dim(registry ? `registry ${registry.address} on ${attestOn}${issuer ? `  issuer ${issuer}` : ''}  ${opts.attest ? `max ${maxAttestPerDay} attestations a day` : 'no attest'}` : 'no attest, no registry: decisions assume no attestation')),
+          );
+          printLine(
+            ctx,
+            cont(
+              pc.dim(
+                alerting
+                  ? `subscriptions ${alerting.subs} on ${net.name}  webhooks ${rel(alerting.webhooksFile)}${opts.webhookLocalOrigin.length ? `  local origins ${opts.webhookLocalOrigin.join(', ')}` : ''}`
+                  : deps.hooks
+                    ? 'subscriptions and alerts from the caller'
+                    : `no subscriptions contract (${subsEnvVar(net.clients.chain.id)} unset): no alerts`,
+              ),
+            ),
           );
           emitEvent(ctx, {
             type: 'watch-start',
@@ -402,6 +471,9 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             issuer,
             maxAttestPerDay,
             reportBaseUrl: base,
+            subs: alerting?.subs ?? null,
+            webhooks: alerting ? rel(alerting.webhooksFile) : null,
+            webhookLocalOrigins: opts.webhookLocalOrigin,
             dir: rel(store.dir),
           });
 
