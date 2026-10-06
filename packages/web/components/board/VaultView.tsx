@@ -15,6 +15,10 @@ import { Glyph } from './Glyph';
 import { CopyButton } from './CopyButton';
 import { chainName, reproduceCommandMultiline } from '../../lib/board/reproduce';
 import { BadgeSnippet } from '../desk/BadgeSnippet';
+import type { ReactNode } from 'react';
+import type { VaultWatchJson } from '../../lib/watch/types';
+import { foundSentence } from '../../lib/watch/words';
+import { VaultHistory } from '../watch/VaultHistory';
 
 export { chainName, reproduceArgs, reproduceCommand, reproduceCommandMultiline } from '../../lib/board/reproduce';
 
@@ -164,11 +168,20 @@ function AttestationPanel({ a, detail }: { a: AttestationView; detail: VaultDeta
 
 /**
  * board: from the prerendered board data. requested: from a report written after the build (a paid check), read
- * when the page was requested.
+ * when the page was requested. watcher: from a report the watcher wrote after the build, nobody asked for it.
  */
-export type VaultViewSource = 'board' | 'requested';
+export type VaultViewSource = 'board' | 'requested' | 'watcher';
 
-export function VaultView({ detail, source = 'board' }: { detail: VaultDetail; source?: VaultViewSource }) {
+export interface VaultViewProps {
+  detail: VaultDetail;
+  source?: VaultViewSource;
+  /** What the watcher knows about this vault (ADR 0006); its history is shown when there is any. */
+  watch?: VaultWatchJson | null;
+  /** The "Watch this vault" box, placed under the attestation. */
+  subscribe?: ReactNode;
+}
+
+export function VaultView({ detail, source = 'board', watch = null, subscribe = null }: VaultViewProps) {
   const { row, report } = detail;
   const split = report.results.filter((r) => !r.id.startsWith('sf-')).length;
   const skip = effectiveSkipReason(report);
@@ -199,6 +212,12 @@ export function VaultView({ detail, source = 'board' }: { detail: VaultDetail; s
         </p>
         <p className="sb-verdict">{verdictSentence(row.status, report.summary, report.blockNumber)}</p>
         {skip && <p className="sb-skip">{explainSkip(skip)}</p>}
+        {watch?.found && (
+          <p className="sw-vault-found">
+            {foundSentence(watch.found)}
+            {watch.label.onList ? '' : ' It was not on the hand-made list the board started from.'}
+          </p>
+        )}
         <StripBig results={report.results} split={split} />
         <p className="sb-links">
           <a className="sb-btn" href={`/check?vault=${row.address}`}>
@@ -207,7 +226,9 @@ export function VaultView({ detail, source = 'board' }: { detail: VaultDetail; s
           <span className="soft" style={{ fontSize: 13, alignSelf: 'center' }}>
             {source === 'requested'
               ? `This report comes from a check requested on ${report.startedAt.slice(0, 10)}, newer than the board build.`
-              : `Runs the same ${report.results.length} properties at the latest block and attests the new report.`}
+              : source === 'watcher'
+                ? `This report comes from a check the watcher ran on its own on ${report.startedAt.slice(0, 10)}; nobody asked for it.`
+                : `Runs the same ${report.results.length} properties at the latest block and attests the new report.`}
           </span>
         </p>
       </header>
@@ -244,6 +265,8 @@ export function VaultView({ detail, source = 'board' }: { detail: VaultDetail; s
             </section>
           )}
 
+          {watch && <VaultHistory watch={watch} />}
+
           <section aria-labelledby="props-h">
             <h2 className="sb-h2" id="props-h">
               All {report.results.length} properties
@@ -278,6 +301,8 @@ export function VaultView({ detail, source = 'board' }: { detail: VaultDetail; s
 
         <aside className="sb-aside">
           <AttestationPanel a={row.attestation} detail={detail} />
+
+          {subscribe}
 
           <section aria-labelledby="repro-h">
             <h2 className="sb-h3" id="repro-h">

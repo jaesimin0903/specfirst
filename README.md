@@ -138,6 +138,21 @@ Environment of the web server (all optional; nothing here is a key):
 
 The desk ABI and the status.json schema live in `packages/web/lib/desk/contract.ts` until `@specfirst/core/desk` exports them; that file says how to swap.
 
+## Watch pages
+
+`/watch` is a window on the watcher (ADR 0006): it reads `feed.ndjson`, `status.json` and `vaults.json` under `SPECFIRST_WATCH_DIR/<chainId>/` per request and then every three seconds, and shows what the watcher is doing, how far behind the head it is, its queue and sources, and its feed with each check's 30 results read from the report the feed names. Nothing there needs a person; a missing directory reads as "not running". Vaults the watcher found that the board build does not have join the board's table (`GET /api/v1/watch/overlay`) and get a vault page with their history and a "Watch this vault" box that pays `CheckSubscriptions` per day. `/watch/inbox` lists the paying address's subscriptions and alerts, cancels with the days not started refunded, and registers a webhook by signing the ADR text; the URL is stored in `<watch dir>/webhooks.json` only for a subscriber holding an active subscription (at most 1000 subscribers), and only its origin is ever shown. `/watch/demo-hook` is a demo receiver for a webhook delivery. `/desk` adds subscription revenue and the watcher's gas when its status reports it.
+
+JSON: `GET /api/v1/watch/status`, `/api/v1/watch/feed?after=<seq>|before=<seq>`, `/api/v1/watch/vaults/<chainId>/<address>`, `/api/v1/watch/subs`, `/api/v1/watch/subs/<subscriber>`, `/api/v1/watch/inbox?subscriber=`, `POST /api/v1/watch/webhooks`. For local rendering without a watcher: `node packages/web/test/fixtures/watch/generate.mjs --now --out /tmp/w`, then `SPECFIRST_WATCH_DIR=/tmp/w SPECFIRST_CHECKS_DIR=/tmp/w/checks` (synthetic data).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SPECFIRST_WATCH_DIR` | `<repo>/.specfirst/watch` | The watcher's files, and where the web writes `webhooks.json` and `demo-hook.json`. |
+| `NEXT_PUBLIC_SPECFIRST_SUBS_10143` | unset | CheckSubscriptions on Monad testnet. Unset: the subscribe box and the inbox say "not deployed yet". |
+| `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS` | unset | `1` lets a webhook at this site's own origin register even when it is local (`http://localhost:3418/api/v1/watch/demo-hook`), for demos on one machine. Other local URLs stay refused. |
+| `SPECFIRST_DEMO_HOOK` | on | `off` turns the demo receiver off. |
+
+Until the watcher and subscriptions branches are merged, the web carries stand-ins with core's names and behavior: `packages/web/lib/watch/core.ts` for `@specfirst/core/watch` (file schemas), `packages/web/lib/subs/core.ts` for `@specfirst/core/subs` (ABI, day accounting, webhook message, URL rules, verification) and the first part of `packages/web/lib/watch/webhooks.ts` for the root's `readWebhooks`, `saveWebhookRegistration` and `registerWebhook`. Each becomes an import.
+
 ## License
 
 MIT, see `LICENSE`. Exceptions: files whose first line is `SPDX-License-Identifier: AGPL-3.0` extend [a16z/erc4626-tests](https://github.com/a16z/erc4626-tests), which is AGPL-3.0, and carry that license:

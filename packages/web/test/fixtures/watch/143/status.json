@@ -1,0 +1,89 @@
+{
+  "v": 1,
+  "chainId": 143,
+  "head": "110977320",
+  "cursor": "110977290",
+  "lagBlocks": 10,
+  "startedAt": "2026-10-05T08:30:00.000Z",
+  "updatedAt": "2026-10-06T09:29:56.000Z",
+  "running": {
+    "subject": "0xFEEd000000000000000000000000000000000007",
+    "source": "factory",
+    "stage": "checking",
+    "startedAt": "2026-10-06T09:29:00.000Z"
+  },
+  "queue": [
+    {
+      "subject": "0xfEeD000000000000000000000000000000000005",
+      "source": "factory",
+      "enqueuedAt": "2026-10-06T09:28:01.000Z"
+    },
+    {
+      "subject": "0xfeEd000000000000000000000000000000000003",
+      "source": "sweep",
+      "enqueuedAt": "2026-10-06T09:29:30.000Z"
+    }
+  ],
+  "counts": {
+    "known": 291,
+    "detected24h": 7,
+    "checked24h": 6,
+    "attested24h": 4,
+    "changed24h": 4
+  },
+  "sources": [
+    {
+      "name": "Euler EVK GenericFactory",
+      "address": "0xba4Dd672062dE8FeeDb665DD4410658864483f1E",
+      "topic0": "0x04e664079117e113faa9684bc14aecb41651cbf098b14eda271248c6d0cda57c",
+      "seen": 1
+    },
+    {
+      "name": "Morpho VaultV2Factory",
+      "address": "0x8B2F922162FBb60A6a072cC784A2E4168fB0bb0c",
+      "topic0": "0x341ce009267aa0d78cc12b34155e223904a51ed49d144beb6eb8be87813edb4e",
+      "seen": 1
+    },
+    {
+      "name": "MetaMorpho V1.1 factory",
+      "address": "0x33f20973275B2F574488b18929cd7DCBf1AbF275",
+      "topic0": "0xed8c95d05909b0f217f3e68171ef917df4b278d5addfe4dda888e90279be7d1d",
+      "seen": 1
+    },
+    {
+      "name": "Euler Earn factory",
+      "address": "0xF463d4Acb650cc6C4E1D6cD4D0d1b0cb224094cF",
+      "topic0": "0x2ecfce4fdb2055c9639b56f59c2a14eeafce06a51d93d898155bc11b6141896f",
+      "seen": 0
+    },
+    {
+      "name": "Neverland static wrapper factory",
+      "address": "0x81148e8e1D9910080317E11c9f178559Ba23Bc80",
+      "topic0": "0x7397831292236fdc8043acf7b9d21183e46fd54f9b06bd34210068f95dd378d6",
+      "seen": 0
+    },
+    {
+      "name": "ERC-4626 Deposit",
+      "address": null,
+      "topic0": "0xdcbc1c05240f31ff3ad067ef1ee35ce4997762752e3a095284754544f4c709d7",
+      "seen": 1834
+    },
+    {
+      "name": "EIP-1967 Upgraded",
+      "address": null,
+      "topic0": "0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b",
+      "seen": 2
+    },
+    {
+      "name": "EIP-1967 BeaconUpgraded",
+      "address": null,
+      "topic0": "0x1cf3b03a6cf19fa2baba4df148e9dcabedea7f8a5c07840e207e5c089be95d3e",
+      "seen": 0
+    }
+  ],
+  "attestBudget": {
+    "perDay": 40,
+    "usedToday": 4
+  },
+  "gasCostWei": "208000000000000000"
+}

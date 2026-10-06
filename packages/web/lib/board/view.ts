@@ -2,11 +2,20 @@ import type { AttestationLite, VaultRow, VaultStatus } from './types';
 
 /* Filtering and sorting for the vault table. Client-safe: no Node imports. */
 
+/** A vault the watcher found that the board build does not have (ADR 0006): how it was found. */
+export interface WatchFoundMark {
+  /** "from Morpho VaultV2Factory", "first Deposit event from an unknown address" */
+  sourceText: string;
+  /** Block of the signal that found it. */
+  block: string | null;
+  at: string;
+}
+
 /** The part of a board row the vault table ships to the browser. */
 export type ExplorerRow = Pick<
   VaultRow,
   'id' | 'address' | 'name' | 'protocol' | 'assetSymbol' | 'status' | 'summary' | 'cells' | 'implementationKey' | 'implementationKeyKind' | 'implementationAddress' | 'groupSize'
-> & { failed: { id: string }[]; attestation: AttestationLite };
+> & { failed: { id: string }[]; attestation: AttestationLite; found?: WatchFoundMark };
 
 export type ExplorerView = 'vaults' | 'implementations';
 
@@ -47,7 +56,8 @@ const STATUS_RANK: Record<VaultStatus, number> = { mismatch: 0, complete: 1, par
 export function matchesQuery(row: ExplorerRow, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  const hay = [row.name, row.address, row.protocol, row.assetSymbol, row.implementationKey, row.implementationAddress, ...row.failed.map((f) => f.id)]
+  const found = row.found ? `watcher ${row.found.sourceText}` : null;
+  const hay = [row.name, row.address, row.protocol, row.assetSymbol, row.implementationKey, row.implementationAddress, found, ...row.failed.map((f) => f.id)]
     .filter(Boolean)
     .join(' ')
     .toLowerCase();

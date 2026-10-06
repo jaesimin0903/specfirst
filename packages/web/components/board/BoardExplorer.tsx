@@ -224,6 +224,11 @@ export function BoardExplorer({ rows, protocols, split }: BoardExplorerProps) {
                       {r.assetSymbol ? `${r.assetSymbol}, ` : ''}
                       {r.name ? <span className="mono">{shortAddress(r.address)}</span> : 'no name in metadata'}
                     </span>
+                    {r.found && (
+                      <span className="sw-found-mark" title={`Found by the watcher ${r.found.sourceText}${r.found.block ? ` at block ${r.found.block}` : ''}, ${r.found.at.slice(0, 10)}`}>
+                        Found by the watcher
+                      </span>
+                    )}
                   </td>
                   <td style={{ minWidth: 120 }}>{r.protocol ?? <span className="soft">Unknown</span>}</td>
                   <td className="nowrap">
