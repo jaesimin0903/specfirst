@@ -19,7 +19,8 @@ export type FeedKind = (typeof FEED_KINDS)[number];
 /**
  * Why something happened to a subject. factory, deposit, upgrade, beacon-upgrade and implementation are
  * chain signals (docs/adr/0006, "Signals"); first-deposit, sweep and subscribed are re-check reasons;
- * backfill marks the vaults the watcher knew before it started (certs/checks/<chainId>/).
+ * backfill marks the vaults the watcher knew before it started (certs/checks/<chainId>/); price-drop marks a
+ * confirmed fall of the share value and the re-check it queues.
  */
 export const FEED_SOURCES = [
   'factory',
@@ -31,6 +32,7 @@ export const FEED_SOURCES = [
   'sweep',
   'subscribed',
   'backfill',
+  'price-drop',
 ] as const;
 export const feedSourceSchema = z.enum(FEED_SOURCES);
 export type FeedSource = (typeof FEED_SOURCES)[number];
@@ -40,7 +42,11 @@ export type FeedSource = (typeof FEED_SOURCES)[number];
  * that did not fail before. recovered: no new failure, and a property that failed no longer does.
  * changed: the same failures, other counts. implementation: the same results, another implementation key.
  */
-export const CHANGE_KINDS = ['new', 'regressed', 'recovered', 'changed', 'implementation'] as const;
+export const CHECK_CHANGE_KINDS = ['new', 'regressed', 'recovered', 'changed', 'implementation'] as const;
+export type CheckChangeKind = (typeof CHECK_CHANGE_KINDS)[number];
+
+/** Every change kind of a `changed` event: those of a check, and price-drop, a confirmed fall of the share value. */
+export const CHANGE_KINDS = [...CHECK_CHANGE_KINDS, 'price-drop'] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
 
 export const WATCH_STAGES = ['probing', 'checking', 'attesting'] as const;
@@ -93,7 +99,21 @@ export type FeedCheck = z.infer<typeof feedCheckSchema>;
 export const feedAttestationSchema = z.object({ id: decimal, txHash: hex32, supersedes: decimal.nullable() }).strict();
 export type FeedAttestation = z.infer<typeof feedAttestationSchema>;
 
-export const feedChangeSchema = z.object({ kind: z.enum(CHANGE_KINDS), from: watchResultSchema.nullable(), to: watchResultSchema }).strict();
+/** A change found by a check: its result against the previous check's. */
+export const checkChangeSchema = z.object({ kind: z.enum(CHECK_CHANGE_KINDS), from: watchResultSchema.nullable(), to: watchResultSchema }).strict();
+export type CheckChange = z.infer<typeof checkChangeSchema>;
+
+/**
+ * A confirmed fall of the share value: convertToAssets of one whole share (10 ** decimals() of the vault) read at
+ * fromBlock and at toBlock, in the asset's base units, and the fall in basis points of the first, rounded down. A
+ * fact about two blocks, not a verdict on the vault.
+ */
+export const priceDropChangeSchema = z
+  .object({ kind: z.literal('price-drop'), fromAssetsPerShare: decimal, toAssetsPerShare: decimal, dropBps: z.number().int().min(0).max(10_000), fromBlock: decimal, toBlock: decimal })
+  .strict();
+export type PriceDropChange = z.infer<typeof priceDropChangeSchema>;
+
+export const feedChangeSchema = z.discriminatedUnion('kind', [checkChangeSchema, priceDropChangeSchema]);
 export type FeedChange = z.infer<typeof feedChangeSchema>;
 
 export const feedAlertSchema = z

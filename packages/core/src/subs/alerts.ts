@@ -259,15 +259,24 @@ export async function verifyWebhookRegistration(input: unknown, opts: VerifyWebh
 }
 
 /**
- * What a webhook POST is about: `change`, a `changed` event (change set), or `first-check`, the `checked` event of
- * the first check after the subscription started, delivered once (change null when nothing changed).
+ * What a webhook POST is about: `change`, a `changed` event of a check (change set); `first-check`, the `checked`
+ * event of the first check after the subscription started, delivered once (change null when nothing changed); or
+ * `price-drop`, a `changed` event whose change is a confirmed fall of the share value (change carries the numbers;
+ * check, attestation and reportURL are null).
  */
-export type WebhookAlertKind = 'change' | 'first-check';
+export type WebhookAlertKind = 'change' | 'first-check' | 'price-drop';
+
+/** The payload kind of a feed event a webhook gets. */
+export function webhookKindOf(event: FeedEvent): WebhookAlertKind {
+  if (event.kind === 'checked') return 'first-check';
+  return event.change?.kind === 'price-drop' ? 'price-drop' : 'change';
+}
 
 /**
- * The JSON body POSTed to a webhook for one `changed` event, or for the first check after a subscription started
- * (ADR 0006). One POST per subscriber: subscriptionIds lists the active subscriptions it holds on the subject that
- * the event is for, subscriptionId is the lowest of them.
+ * The JSON body POSTed to a webhook for one `changed` event (a change of the result, or a fall of the share value),
+ * or for the first check after a subscription started (ADR 0006). One POST per subscriber: subscriptionIds lists the
+ * active subscriptions it holds on the subject that the event is for, subscriptionId is the lowest of them. v stays
+ * 1: price-drop is a third kind, and a receiver dispatches on kind.
  */
 export interface WebhookPayload {
   v: 1;
@@ -301,7 +310,7 @@ export function webhookPayload(event: FeedEvent, ids: readonly bigint[], reportB
   if (sorted.length === 0) throw new Error('a webhook payload needs at least one subscription id');
   return {
     v: 1,
-    kind: event.kind === 'checked' ? 'first-check' : 'change',
+    kind: webhookKindOf(event),
     subscriptionId: sorted[0]!,
     subscriptionIds: sorted,
     subject: event.subject,
@@ -445,8 +454,9 @@ function unlessAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<{ value: 
 }
 
 /**
- * Feed events a webhook gets: a change, and the first check after a subscription started (the watcher hands the
- * sink a `checked` event only for that, with the subscriptions it is the first check of).
+ * Feed events a webhook gets: a change (of the result, or a fall of the share value), and the first check after a
+ * subscription started (the watcher hands the sink a `checked` event only for that, with the subscriptions it is
+ * the first check of).
  */
 export function isWebhookEvent(event: FeedEvent): boolean {
   return event.kind === 'changed' || (event.kind === 'checked' && event.check !== undefined);

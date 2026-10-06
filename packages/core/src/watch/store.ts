@@ -10,7 +10,7 @@ import type { StandardCheckReport } from '../standards/report.js';
 import { defaultCacheDir } from '../standards/workspace.js';
 import { ATTEST_CLASSES, outcomeOfReport } from './decide.js';
 import {
-  CHANGE_KINDS,
+  CHECK_CHANGE_KINDS,
   FEED_KINDS,
   FEED_SOURCES,
   feedEventSchema,
@@ -79,7 +79,10 @@ export const queueEntrySchema = z
  * same nonce sent before with a lower fee, any of which may still be mined. A deferred entry's `nonce` resends
  * with the nonce of a transaction the node dropped, so at most one of the two can be mined. upgrades: Upgraded
  * or BeaconUpgraded of known vaults whose fingerprint could not be read yet, carried to the next pass.
- * implementations: the implementation each known vault ran at its last check.
+ * implementations: the implementation each known vault ran at its last check. prices: the share value of each
+ * subject whose value is followed (docs/adr/0006, "Share value"): the reference a drop is measured from
+ * (assetsPerShare of one share of `decimals` at `block`), the block and time of the last read, and a drop over the
+ * threshold waiting for a read at a later block.
  */
 export const watchStateSchema = z
   .object({
@@ -149,7 +152,7 @@ export const watchStateSchema = z
             firstCheck: z.boolean(),
             attempts: count,
             /** The change the second check must agree on; absent in states written before it was recorded. */
-            kind: z.enum(CHANGE_KINDS).optional(),
+            kind: z.enum(CHECK_CHANGE_KINDS).optional(),
             /** The fuzz seed of the pending check, which its confirmation reuses. */
             seed: hex32.optional(),
           })
@@ -185,6 +188,21 @@ export const watchStateSchema = z
       .record(lowerAddress, z.object({ source, block: decimal, txHash: hex32.optional(), failures: count, notBefore: iso.optional() }).strict())
       .default({}),
     implementations: z.record(lowerAddress, lowerAddress).default({}),
+    prices: z
+      .record(
+        lowerAddress,
+        z
+          .object({
+            decimals: count,
+            assetsPerShare: decimal,
+            block: decimal,
+            readBlock: decimal,
+            readAt: iso,
+            drop: z.object({ assetsPerShare: decimal, block: decimal, at: iso }).strict().optional(),
+          })
+          .strict(),
+      )
+      .default({}),
   })
   .strict();
 export type WatchState = z.output<typeof watchStateSchema>;
@@ -223,6 +241,7 @@ export function emptyWatchState(chainId: number): WatchState {
     attesting: {},
     upgrades: {},
     implementations: {},
+    prices: {},
   };
 }
 

@@ -478,6 +478,7 @@ export {
   feedKindSchema,
   feedSourceSchema,
   CHANGE_KINDS,
+  CHECK_CHANGE_KINDS,
   WATCH_STAGES,
   ALERT_CHANNELS,
   watchSummarySchema,
@@ -485,6 +486,8 @@ export {
   feedCheckSchema,
   feedAttestationSchema,
   feedChangeSchema,
+  checkChangeSchema,
+  priceDropChangeSchema,
   feedAlertSchema,
   feedEventSchema,
   watchStatusSchema,
@@ -495,6 +498,7 @@ export {
   type FeedKind,
   type FeedSource,
   type ChangeKind,
+  type CheckChangeKind,
   type WatchStage,
   type AlertChannel,
   type WatchSummary,
@@ -502,6 +506,8 @@ export {
   type FeedCheck,
   type FeedAttestation,
   type FeedChange,
+  type CheckChange,
+  type PriceDropChange,
   type FeedAlert,
   type FeedEvent,
   type WatchStatus,
@@ -510,6 +516,7 @@ export {
   type WatchVaults,
 } from './watch/schema.js';
 export { NO_SUBSCRIPTIONS, NO_ALERTS, type ActiveSubscription, type SubscriptionSource, type AlertSink } from './watch/hooks.js';
+export { BPS, dropBpsOf, exceedsDrop, priceStep, dropPercentText, type SharePrice, type SharePriceRead, type PriceTrack, type PriceStep } from './watch/price.js';
 export {
   WATCH_SIGNALS,
   GENERIC_SOURCE_SPECS,
@@ -585,6 +592,7 @@ export {
   fixtureLogReader,
   batchedLogsReader,
   fingerprintOf,
+  readSharePrice,
   watchFuzzSeedOf,
   CHAIN_SUBJECT,
   DEFAULT_WATCH_CONFIG,
@@ -606,6 +614,7 @@ export {
   CREATE2_DEPLOYER,
   DEMO_FACTORY_SALT,
   DEMO_FACTORY_ADDRESS,
+  LEGACY_DEMO_FACTORY_ADDRESS,
   demoVaultFactoryAbi,
   demoVaultFactoryBytecode,
   demoVaultAbi,
@@ -615,6 +624,7 @@ export {
   deployDemoToken,
   deployDemoVault,
   setDemoVaultBroken,
+  setDemoVaultLoss,
   depositIntoDemoVault,
 } from './watch/demo.js';
 export { checkSubscriptionsAbi, checkSubscriptionsBytecode } from './subs/artifact.js';
@@ -657,6 +667,7 @@ export {
   webhooksFileSchema,
   emptyWebhooksFile,
   webhookPayload,
+  webhookKindOf,
   reportUrlOf,
   postWebhook,
   deliverWebhookAlerts,

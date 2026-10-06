@@ -16,6 +16,7 @@ import {
   createWebhookAlertSink,
   decodeSignal,
   DEMO_FACTORY_ADDRESS,
+  LEGACY_DEMO_FACTORY_ADDRESS,
   demoTokenAbi,
   demoTokenBytecode,
   demoVaultAbi,
@@ -103,14 +104,19 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 afterEach(cleanupHarnesses);
 
+/** A VaultDeployed log of the demo factory's ABI, without its emitter. */
+function encodeVaultDeployed(vault: Address, asset: Address): { topics: Hex[]; data: Hex } {
+  return { topics: encodeEventTopics({ abi: demoVaultFactoryAbi, eventName: 'VaultDeployed', args: { vault, asset } }) as Hex[], data: '0x' };
+}
+
 
 describe('browser-safe @specfirst/core/watch', () => {
   it('imports only viem, zod and its own browser-safe modules', () => {
-    const modules = ['index.ts', 'schema.ts', 'hooks.ts', 'sources.ts'];
+    const modules = ['index.ts', 'schema.ts', 'hooks.ts', 'sources.ts', 'price.ts'];
     for (const m of modules) {
       const src = readFileSync(path.join(here, '../src/watch', m), 'utf8');
       const imports = [...src.matchAll(/from '([^']+)'/g)].map((x) => x[1]!);
-      for (const i of imports) expect(['viem', 'zod', './schema.js', './hooks.js', './sources.js'], `${m} imports ${i}`).toContain(i);
+      for (const i of imports) expect(['viem', 'zod', './schema.js', './hooks.js', './sources.js', './price.js'], `${m} imports ${i}`).toContain(i);
     }
     const pkg = JSON.parse(readFileSync(path.join(here, '../package.json'), 'utf8')) as { exports: Record<string, { import: string }> };
     expect(pkg.exports['./watch']!.import).toBe('./dist/watch/index.js');
@@ -118,7 +124,7 @@ describe('browser-safe @specfirst/core/watch', () => {
 
   it('exports the schemas, the hooks and the sources, the same objects as the package root', () => {
     expect(browserWatch.feedEventSchema).toBe(feedEventSchema);
-    for (const name of ['watchStatusSchema', 'watchVaultsSchema', 'parseFeed', 'FEED_KINDS', 'FEED_SOURCES', 'NO_ALERTS', 'NO_SUBSCRIPTIONS', 'builtinSources', 'decodeSignal', 'WATCH_DIR_ENV']) {
+    for (const name of ['watchStatusSchema', 'watchVaultsSchema', 'parseFeed', 'FEED_KINDS', 'FEED_SOURCES', 'NO_ALERTS', 'NO_SUBSCRIPTIONS', 'builtinSources', 'decodeSignal', 'WATCH_DIR_ENV', 'priceStep', 'dropPercentText']) {
       expect(browserWatch).toHaveProperty(name);
     }
   });
@@ -253,11 +259,17 @@ describe('signal sources (docs/adr/0006 Signals)', () => {
     expect(decodeSignal({ ...signalLog(SIGNALS.generic.implementation.log), address: addr(78) }, sources)).toBeNull();
   });
 
-  it('the demo sources file names DemoVaultFactory at its CREATE2 address and keeps testnet contracts from becoming candidates', async () => {
+  it('the demo sources file names DemoVaultFactory at its CREATE2 address, keeps the factory before setLoss, and keeps testnet contracts from becoming candidates', async () => {
     const json = JSON.parse(await readFile(DEMO_SOURCES, 'utf8'));
     const { sources } = sourcesFromFile(json, 10143);
     expect(sources[0]).toMatchObject({ name: 'Specfirst DemoVaultFactory', signal: 'factory', address: DEMO_FACTORY_ADDRESS, vault: 'vault' });
-    expect(sources.slice(1).map((s) => [s.name, s.signal, s.candidates])).toEqual([
+    expect(sources[1]).toMatchObject({ name: 'Specfirst DemoVaultFactory before setLoss', signal: 'factory', address: LEGACY_DEMO_FACTORY_ADDRESS, vault: 'vault', topic0: sources[0]!.topic0 });
+    expect(DEMO_FACTORY_ADDRESS).not.toBe(LEGACY_DEMO_FACTORY_ADDRESS);
+    // Both factories emit the same event: each log is taken from the factory that emitted it.
+    const log = (factory: Address) => ({ ...encodeVaultDeployed(addr(0xd1), addr(0xa5)), address: factory, blockNumber: 1n, transactionHash: hash(1), logIndex: 0 });
+    expect(decodeSignal(log(LEGACY_DEMO_FACTORY_ADDRESS), sources)).toMatchObject({ subject: addr(0xd1), source: { name: 'Specfirst DemoVaultFactory before setLoss' } });
+    expect(decodeSignal(log(DEMO_FACTORY_ADDRESS), sources)).toMatchObject({ subject: addr(0xd1), source: { name: 'Specfirst DemoVaultFactory' } });
+    expect(sources.slice(2).map((s) => [s.name, s.signal, s.candidates])).toEqual([
       ['ERC-4626 Deposit', 'deposit', false],
       ['EIP-1967 Upgraded', 'upgrade', false],
       ['EIP-1967 BeaconUpgraded', 'beacon-upgrade', false],

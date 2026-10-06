@@ -2,7 +2,7 @@ import type { Hex } from 'viem';
 import { STANDARD_PROPERTIES } from '../attest/params.js';
 import { ATTESTATION_STATUS, type Attestation } from '../attest/registry.js';
 import type { StandardCheckReport, StandardName } from '../standards/report.js';
-import type { ChangeKind, FeedChange, WatchSummary } from './schema.js';
+import type { CheckChange, CheckChangeKind, WatchSummary } from './schema.js';
 
 /** What a check says about a subject, in the terms the attest rule compares (docs/adr/0006, "Pipeline"). */
 export interface CheckOutcome {
@@ -90,11 +90,11 @@ export function attestDecision(outcome: CheckOutcome, latest: { id: bigint; atte
 
 /**
  * How `next` differs from the subject's previous check, or null when it does not (docs/adr/0006 change
- * kinds, defined in CHANGE_KINDS): new without a previous check; regressed when a property fails that did
+ * kinds, defined in CHECK_CHANGE_KINDS): new without a previous check; regressed when a property fails that did
  * not; recovered when none newly fails and one stopped failing; changed for other count changes;
  * implementation when only the implementation key moved.
  */
-export function changeOf(prev: CheckOutcome | null, next: CheckOutcome): FeedChange | null {
+export function changeOf(prev: CheckOutcome | null, next: CheckOutcome): CheckChange | null {
   const to = { summary: { ...next.summary }, failed: [...next.failed] };
   if (!prev) return { kind: 'new', from: null, to };
   const from = { summary: { ...prev.summary }, failed: [...prev.failed] };
@@ -118,7 +118,7 @@ export function sameOutcome(a: CheckOutcome, b: CheckOutcome): boolean {
  * between two checks (an input rejected once, a limit reached) without making a stable failure unconfirmable.
  * Without a recorded kind (a state written before it was) the whole outcome must agree.
  */
-export function confirmsChange(kind: ChangeKind | undefined, pending: CheckOutcome, next: CheckOutcome): boolean {
+export function confirmsChange(kind: CheckChangeKind | undefined, pending: CheckOutcome, next: CheckOutcome): boolean {
   if (kind === undefined) return sameOutcome(pending, next);
   if (kind === 'changed') return sameSummary(pending.summary, next.summary);
   const a = new Set(pending.failed);
@@ -130,7 +130,7 @@ export function confirmsChange(kind: ChangeKind | undefined, pending: CheckOutco
  * can miss a counterexample once, and a single RPC hiccup can make a property flip. A first check that fails
  * a property is confirmed the same way. implementation (only the key moved) needs none.
  */
-export function needsConfirmation(change: FeedChange | null, outcome: CheckOutcome): boolean {
+export function needsConfirmation(change: CheckChange | null, outcome: CheckOutcome): boolean {
   if (!change) return false;
   if (change.kind === 'regressed' || change.kind === 'recovered' || change.kind === 'changed') return true;
   return change.kind === 'new' && outcome.summary.fail > 0;

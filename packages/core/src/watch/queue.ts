@@ -19,7 +19,8 @@ export interface QueueEntry {
 
 /**
  * Queue priorities (docs/adr/0006, "Pipeline"), highest first: a subscribed subject, a new candidate, an
- * upgrade or implementation change of a known vault, a first deposit, the sweep.
+ * upgrade or implementation change of a known vault (or a confirmed fall of its share value), a first deposit,
+ * the sweep.
  */
 export const QUEUE_PRIORITY = { subscribed: 0, candidate: 1, upgrade: 2, firstDeposit: 3, sweep: 4 } as const;
 
@@ -27,7 +28,7 @@ export const QUEUE_PRIORITY = { subscribed: 0, candidate: 1, upgrade: 2, firstDe
 export function priorityOf(source: FeedSource, candidate: boolean): number {
   if (source === 'subscribed') return QUEUE_PRIORITY.subscribed;
   if (candidate) return QUEUE_PRIORITY.candidate;
-  if (source === 'upgrade' || source === 'beacon-upgrade' || source === 'implementation') return QUEUE_PRIORITY.upgrade;
+  if (source === 'upgrade' || source === 'beacon-upgrade' || source === 'implementation' || source === 'price-drop') return QUEUE_PRIORITY.upgrade;
   if (source === 'first-deposit') return QUEUE_PRIORITY.firstDeposit;
   return QUEUE_PRIORITY.sweep;
 }

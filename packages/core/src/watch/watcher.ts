@@ -18,7 +18,7 @@ import {
   type SubjectCheckInput,
 } from '../attest/subjectCheck.js';
 import { verifySubjectCode, type SubjectClient, type SubjectCodeCheck } from '../attest/verify.js';
-import { isNodeError, isRateLimited, isTransportFailure, TokenBucket } from '../chain/transport.js';
+import { isContractAnswer, isNodeError, isRateLimited, isTransportFailure, TokenBucket } from '../chain/transport.js';
 import type { StandardCheckClient } from '../standards/check.js';
 import { EIP1967_BEACON_SLOT, EIP1967_IMPLEMENTATION_SLOT } from '../standards/identity.js';
 import { forkRpcErrorsOf, type StandardCheckReport } from '../standards/report.js';
@@ -36,7 +36,8 @@ import {
 import { NO_ALERTS, NO_SUBSCRIPTIONS, type ActiveSubscription, type AlertSink, type SubscriptionSource } from './hooks.js';
 import { DEFAULT_LOG_WINDOW, LogsNodeBehindError, LogWindow, readLogWindows } from './logs.js';
 import { enqueue, nextEntry, priorityOf, QUEUE_PRIORITY, queueOrder, removeEntry, type QueueEntry } from './queue.js';
-import { WATCH_DIR, type FeedAttestation, type FeedCheck, type FeedEvent, type FeedSource, type WatchStage, type WatchStatus, type WatchVault } from './schema.js';
+import { dropBpsOf, dropPercentText, priceStep, type PriceTrack, type SharePriceRead } from './price.js';
+import { WATCH_DIR, type FeedAttestation, type FeedCheck, type FeedEvent, type FeedSource, type PriceDropChange, type WatchStage, type WatchStatus, type WatchVault } from './schema.js';
 import { decodeSignal, signalTopics, type Signal, type SignalLog, type WatchSource } from './sources.js';
 import { beaconOf, implementationOf, lastCheckOf, type FeedEventInput, type WatchState, type WatchStore } from './store.js';
 
@@ -66,6 +67,12 @@ export interface WatchEffects {
    * Upgraded of a known vault counts as "nothing changed" (the cooldown applies).
    */
   fingerprint?(subject: Address, block: bigint): Promise<Hex>;
+  /**
+   * The share value at `block`: convertToAssets of one whole share (10 ** decimals()). ok false when the contract
+   * answered without a value worth keeping (a revert, a totalSupply of 0); an RPC failure throws. Without it the
+   * share value is not followed.
+   */
+  sharePrice?(subject: Address, block: bigint): Promise<SharePriceRead>;
   /** The suite at `block` with the fuzz seed the watcher picked (live effects fall back to the subject's own). */
   runCheck(subject: Address, block: bigint, run?: { seed: bigint }): Promise<StandardCheckReport>;
   /** Writes the report copy under certs/checks; returns its repository relative path and its public URI. */
@@ -166,6 +173,18 @@ export interface WatchConfig {
   subscriptionRefreshMs: number;
   /** A subscription read that takes longer is given up (the last result stays in use). */
   subscriptionTimeoutMs: number;
+  /**
+   * The share value of subjects with a Valid attestation (and with priceAll, of every known vault) is read at most
+   * this often; subscribed subjects and drops waiting for their second read at every pass with a new block. 0 turns
+   * share value reads off.
+   */
+  priceMinutes: number;
+  /** A fall of the share value of more than this many basis points from its reference is a drop. */
+  priceDropBps: number;
+  /** Also follow the share value of known vaults nobody subscribed to and nobody attested. */
+  priceAll: boolean;
+  /** Share value reads (three eth_calls each) per minute, all subjects together; the rest wait for a later pass. */
+  maxPriceReadsPerMinute: number;
   /** Attest subjects whose proxy implementation is unknown instead of recording them unattested. */
   allowUnknownProxy: boolean;
   /** Stop reading logs after this block; null to follow the head. */
@@ -199,6 +218,10 @@ export const DEFAULT_WATCH_CONFIG: WatchConfig = {
   errorEveryMs: HOUR_MS,
   subscriptionRefreshMs: MINUTE_MS,
   subscriptionTimeoutMs: 30_000,
+  priceMinutes: 5,
+  priceDropBps: 10,
+  priceAll: false,
+  maxPriceReadsPerMinute: 60,
   allowUnknownProxy: false,
   toBlock: null,
 };
@@ -224,7 +247,13 @@ export type WatchEvent =
   | { type: 'watch-window'; fromBlock: string; toBlock: string; logs: number; signals: number }
   | { type: 'watch-window-shrunk'; fromBlock: string; toBlock: string; size: string; error: string }
   | { type: 'watch-feed'; event: FeedEvent }
-  | { type: 'watch-error'; step: 'head' | 'logs' | 'subscriptions' | 'deferred' | 'process' | 'pass' | 'rate-limited'; error: string }
+  | { type: 'watch-error'; step: 'head' | 'logs' | 'subscriptions' | 'deferred' | 'process' | 'pass' | 'rate-limited' | 'price'; error: string }
+  /**
+   * A share value read that is not routine: pending, a fall over the threshold waiting for a read at a later block;
+   * cleared, a pending fall a later read did not bear out; skipped, the contract gave no value (a revert, a
+   * totalSupply of 0). A confirmed fall is a `changed` feed event.
+   */
+  | { type: 'watch-price'; subject: Address; block: string; step: 'pending' | 'cleared' | 'skipped'; assetsPerShare?: string; referenceAssetsPerShare?: string; dropBps?: number; reason?: string }
   | { type: 'watch-attest-replaced'; subject: Address; hash: Hex; replaces: Hex; bump: number }
   | { type: 'watch-pass-done'; head: string; cursor: string; checked: number; queue: number; caughtUp: boolean; done: boolean };
 
@@ -340,6 +369,10 @@ export class Watcher {
   private probesLeft = 0;
   /** Fingerprint reads of known vaults left in the current pass. */
   private fingerprintsLeft = 0;
+  /** When each share value read of the last minute started, for maxPriceReadsPerMinute. */
+  private priceReadTimes: number[] = [];
+  /** When the share value of a subject was last asked for, whatever came of it. */
+  private priceTriedAt = new Map<string, number>();
 
   constructor(i: WatcherInput) {
     this.effects = i.effects;
@@ -549,6 +582,7 @@ export class Watcher {
     await this.retryUpgrades(safe);
     await this.retryProbes(safe);
     await this.settleSubscriptionRefresh();
+    await this.readPrices(safe);
     await this.scheduleSubscribed(safe);
     await this.scheduleSweep();
     await this.attestDeferred();
@@ -1020,6 +1054,132 @@ export class Watcher {
       if (!best || t < best.t) best = { lower, t };
     }
     if (best) await this.queueCheck(getAddress(best.lower), 'sweep', false);
+  }
+
+  // ---------------------------------------------------------------- share value
+
+  /** Lowercase subjects with a subscription active now. */
+  private activeSubjects(): Set<string> {
+    const now = BigInt(Math.floor(this.effects.now().getTime() / 1000));
+    return new Set(this.subs.filter((s) => s.startsAt <= now && now < s.endsAt).map((s) => s.subject.toLowerCase()));
+  }
+
+  /** A share value read may start now: fewer than maxPriceReadsPerMinute started in the last minute. */
+  private takePriceRead(now: number): boolean {
+    this.priceReadTimes = this.priceReadTimes.filter((t) => now - t < MINUTE_MS);
+    if (this.priceReadTimes.length >= this.config.maxPriceReadsPerMinute) return false;
+    this.priceReadTimes.push(now);
+    return true;
+  }
+
+  /**
+   * Share value reads at `block`, the block the watcher reads (docs/adr/0006, "Share value"): drops waiting for a
+   * read at a later block first, then subscribed subjects at every pass, then subjects with a Valid attestation
+   * and, with priceAll, every other known vault, each at most every priceMinutes, the longest unread first; all
+   * within maxPriceReadsPerMinute, and only where `block` is after the subject's last read. A vault in its timeout
+   * cooldown is not read. The track of a subject no longer followed is forgotten, so a later subscription starts
+   * from a fresh reference.
+   */
+  private async readPrices(block: bigint): Promise<void> {
+    if (!this.effects.sharePrice || this.config.priceMinutes <= 0) return;
+    const st = this.state;
+    const now = this.effects.now().getTime();
+    const cadence = this.config.priceMinutes * MINUTE_MS;
+    const subscribed = this.activeSubjects();
+    const due: Array<{ lower: string; rank: number; t: number }> = [];
+    for (const lower of new Set([...Object.keys(st.prices), ...Object.keys(this.store.vaults.vaults)])) {
+      const vault = this.store.vaults.vaults[lower];
+      const track = st.prices[lower];
+      const followed = subscribed.has(lower) ? 1 : vault && vault.lastAttestationId !== null ? 2 : vault && this.config.priceAll ? 3 : -1;
+      const rank = track?.drop ? 0 : followed;
+      if (rank < 0) {
+        delete st.prices[lower];
+        continue;
+      }
+      if (!vault || this.cooldownOf(lower) || (track && BigInt(track.readBlock) >= block)) continue;
+      const t = Math.max(this.priceTriedAt.get(lower) ?? 0, track ? Date.parse(track.readAt) : 0);
+      if (rank >= 2 && now - t < cadence) continue;
+      due.push({ lower, rank, t });
+    }
+    due.sort((a, b) => a.rank - b.rank || a.t - b.t || a.lower.localeCompare(b.lower));
+    for (const d of due) {
+      if (!this.takePriceRead(now)) return;
+      await this.readPrice(getAddress(d.lower), block);
+    }
+  }
+
+  /**
+   * One share value read and what follows from it (priceStep). An RPC failure says nothing about the share value:
+   * nothing is recorded and a pending drop keeps waiting. A contract that gives no value (a revert, a totalSupply
+   * of 0) is passed over the same way.
+   */
+  private async readPrice(subject: Address, block: bigint): Promise<void> {
+    const st = this.state;
+    const lower = subject.toLowerCase();
+    this.priceTriedAt.set(lower, this.effects.now().getTime());
+    let read: SharePriceRead;
+    try {
+      read = await this.effects.sharePrice!(subject, block);
+    } catch (err) {
+      this.emit({ type: 'watch-error', step: 'price', error: `${subject}: share value not read at block ${block}, not a verdict: ${classifiedErrorText(err)}` });
+      return;
+    }
+    if (!read.ok) {
+      this.emit({ type: 'watch-price', subject, block: block.toString(), step: 'skipped', reason: read.reason });
+      return;
+    }
+    const prev = st.prices[lower];
+    const track: PriceTrack | null = prev
+      ? {
+          decimals: prev.decimals,
+          assetsPerShare: BigInt(prev.assetsPerShare),
+          block: BigInt(prev.block),
+          readBlock: BigInt(prev.readBlock),
+          ...(prev.drop ? { drop: { assetsPerShare: BigInt(prev.drop.assetsPerShare), block: BigInt(prev.drop.block) } } : {}),
+        }
+      : null;
+    const step = priceStep(track, { assetsPerShare: read.assetsPerShare, shareDecimals: read.shareDecimals, block }, this.config.priceDropBps);
+    if (step.kind === 'stale') return;
+    const at = this.nowIso();
+    const n = step.next;
+    st.prices[lower] = {
+      decimals: n.decimals,
+      assetsPerShare: n.assetsPerShare.toString(),
+      block: n.block.toString(),
+      readBlock: n.readBlock.toString(),
+      readAt: at,
+      ...(n.drop ? { drop: { assetsPerShare: n.drop.assetsPerShare.toString(), block: n.drop.block.toString(), at } } : {}),
+    };
+    const value = { block: block.toString(), assetsPerShare: read.assetsPerShare.toString(), referenceAssetsPerShare: (track ?? n).assetsPerShare.toString() };
+    if (step.kind === 'pending') {
+      this.emit({ type: 'watch-price', subject, step: 'pending', ...value, dropBps: dropBpsOf(n.assetsPerShare, read.assetsPerShare) });
+    } else if (step.kind !== 'confirmed' && step.cleared) {
+      this.emit({ type: 'watch-price', subject, step: 'cleared', ...value, reason: `the fall seen at block ${step.cleared.block} is not there at block ${block}` });
+    }
+    if (step.kind === 'confirmed') await this.priceDropped(subject, step.change, step.pendingBlock);
+  }
+
+  /**
+   * A confirmed fall of the share value: a `changed` event (source price-drop), delivered to the subject's active
+   * subscribers through the alert sink, then a re-check of the subject, since its state changed. A drop is never
+   * attested: the re-check meets the attest rule and the policy like any other check.
+   */
+  private async priceDropped(subject: Address, change: PriceDropChange, pendingBlock: bigint): Promise<void> {
+    const base = { chainId: this.chainId, subject, source: 'price-drop' as const, block: change.toBlock };
+    const reason = `confirmed by a second read at block ${change.toBlock} after block ${pendingBlock}`;
+    const [changed] = await this.feed([{ ...base, at: this.nowIso(), kind: 'changed', change, reason }]);
+    const subs = this.activeSubsFor(subject);
+    if (subs.length) {
+      try {
+        const out = await this.alerts.deliver(changed!, subs);
+        await this.feed(out.map(({ v: _v, seq: _seq, ...rest }) => rest));
+      } catch (err) {
+        await this.feed([{ ...base, at: this.nowIso(), kind: 'error', reason: `alert delivery failed: ${errorText(err)}` }]);
+      }
+    }
+    const at: SignalAt = { source: 'price-drop', block: BigInt(change.toBlock) };
+    await this.queueCheck(subject, 'price-drop', false, at, `share value fell ${dropPercentText(change.dropBps)} between block ${change.fromBlock} and block ${change.toBlock}`);
+    await this.save();
   }
 
   // ---------------------------------------------------------------- budgets
@@ -1811,6 +1971,39 @@ export async function fingerprintOf(client: Pick<PublicClient, 'getCode' | 'getS
   return keccak256(concat([keccak256(code ?? '0x'), impl ?? zero, beacon ?? zero]));
 }
 
+const sharePriceAbi = [
+  { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] },
+  { type: 'function', name: 'totalSupply', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'convertToAssets', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint256' }] },
+] as const;
+
+/**
+ * The share value of `subject` at `block`: decimals(), then totalSupply() and convertToAssets(10 ** decimals).
+ * A call the contract answers with a revert, no data or data that does not decode, a totalSupply of 0, or a
+ * decimals() too large for one share to be priced give { ok: false } (nothing to record). Anything else (a
+ * transport failure, a rate limit, a node error, a -32603 viem files as a revert) is thrown, so it is never taken
+ * for a value.
+ */
+export async function readSharePrice(client: Pick<PublicClient, 'readContract'>, subject: Address, block: bigint): Promise<SharePriceRead> {
+  const call = async <T>(functionName: 'decimals' | 'totalSupply' | 'convertToAssets', args?: readonly [bigint]): Promise<{ value: T } | { error: string }> => {
+    try {
+      return { value: (await client.readContract({ address: subject, abi: sharePriceAbi, functionName, ...(args ? { args } : {}), blockNumber: block } as never)) as T };
+    } catch (err) {
+      if (isContractAnswer(err)) return { error: classifiedErrorText(err) };
+      throw err;
+    }
+  };
+  const decimals = await call<number>('decimals');
+  if ('error' in decimals) return { ok: false, reason: `decimals() at block ${block}: ${decimals.error}` };
+  // 10 ** 78 does not fit a uint256.
+  if (decimals.value > 77) return { ok: false, reason: `decimals() is ${decimals.value} at block ${block}: one share does not fit a uint256` };
+  const [supply, assets] = await Promise.all([call<bigint>('totalSupply'), call<bigint>('convertToAssets', [10n ** BigInt(decimals.value)])]);
+  if ('error' in supply) return { ok: false, reason: `totalSupply() at block ${block}: ${supply.error}` };
+  if (supply.value === 0n) return { ok: false, reason: `totalSupply() is 0 at block ${block}: no share to value` };
+  if ('error' in assets) return { ok: false, reason: `convertToAssets() at block ${block}: ${assets.error}` };
+  return { ok: true, assetsPerShare: assets.value, shareDecimals: decimals.value };
+}
+
 export interface LiveWatchEffectsInput extends SubjectCheckInput {
   subjectClient: StandardCheckClient & SubjectClient & Pick<PublicClient, 'request' | 'getStorageAt'>;
   /** Every subject RPC, primary first, for the getLogs reader; default [subjectRpcUrl]. */
@@ -1833,9 +2026,9 @@ export interface LiveWatchEffectsInput extends SubjectCheckInput {
 
 /**
  * The effects of a real watcher: reads the subject chain through `subjectClient` (getLogs through the batched
- * reader, per topic), runs the suite as the desk worker does but with the seed the watcher picks and the
- * subject's forge failures kept under .specfirst/watch/<chainId>/forge-failures, copies reports to
- * certs/checks and attests through the registry client (whose wallet is the watcher's issuer key), sending
+ * reader, per topic; share values through readSharePrice), runs the suite as the desk worker does but with the
+ * seed the watcher picks and the subject's forge failures kept under .specfirst/watch/<chainId>/forge-failures,
+ * copies reports to certs/checks and attests through the registry client (whose wallet is the watcher's issuer key), sending
  * and waiting apart (the nonce fixed before sending, so the watcher can record it with the hash), looking
  * transactions up and replacing a stuck one with a higher fee.
  */
@@ -1849,6 +2042,7 @@ export function liveWatchEffects(i: LiveWatchEffectsInput): WatchEffects {
     getLogs,
     precheck: (subject, block) => precheckErc4626(i.subjectClient, subject, block),
     fingerprint: (subject, block) => fingerprintOf(i.subjectClient, subject, block),
+    sharePrice: (subject, block) => readSharePrice(i.subjectClient, subject, block),
     runCheck: (subject, block, run) =>
       runSubjectCheck({ ...i, timeoutSec: i.timeoutSec ?? DEFAULT_WATCH_CHECK_TIMEOUT_SEC }, subject, block, {
         seed: run?.seed ?? watchFuzzSeedOf(subject),
