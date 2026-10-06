@@ -89,11 +89,6 @@ export async function registerWebhook(file: string, input: unknown, opts: Verify
 
 /* Web-only helpers, kept when the part above becomes an import from @specfirst/core. */
 
-/** SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1 lets http and https to localhost and 127.0.0.1 register, for demos on one machine. */
-export function allowLocalHttp(env: Record<string, string | undefined> = process.env): boolean {
-  return env.SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS?.trim() === '1';
-}
-
 /** The subscriber's registration, or null when there is none or the file cannot be read. */
 export async function webhookOf(subscriber: string, file: string = watchFile.webhooks()): Promise<WebhookRegistration | null> {
   try {

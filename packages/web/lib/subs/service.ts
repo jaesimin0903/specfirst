@@ -3,7 +3,7 @@ import { testnetClient } from '../desk/clients';
 import { DESK_CHAIN_ID } from '../desk/config';
 import type { ContractReader } from '../desk/read';
 import { checksum, labelFor, vaultPathOf, type LabelContext } from '../watch/view';
-import { subsAddress } from './contract';
+import { checkSubscriptionsAbi, subsAddress } from './contract';
 import { isActiveAt, refundAt, runDaysOf } from './core';
 import { latestSubscriptionIds, readSubsSummary, readSubscriptions, type SubscriptionWithId, type SubsSummary } from './read';
 import type { SubscriptionJson, SubsSummaryJson } from './types';
@@ -102,4 +102,28 @@ export async function subscriptionsOf(
   const scan = await scanSubscriptions(reader);
   const mine = scan.subscriptions.filter((x) => x.subscriber.toLowerCase() === subscriber.toLowerCase());
   return { deployed: scan.deployed, subscriptions: mine, scanned: scan.subscriptions.length, truncated: scan.truncated, error: scan.error };
+}
+
+export type SubscriberStanding = { state: 'not-deployed' } | { state: 'error'; error: string } | { state: 'none' } | { state: 'active'; ids: string[] };
+
+/**
+ * Whether `subscriber` holds an active subscription now, for the webhook registration route. subscriptionCount()
+ * is read fresh, so a subscription made seconds ago counts; the scan for that count is shared with the pages.
+ */
+export async function subscriberStanding(subscriber: string, reader: ContractReader = testnetClient(), now: number = nowSec()): Promise<SubscriberStanding> {
+  const address = subsAddress();
+  if (!address) return { state: 'not-deployed' };
+  let count: bigint;
+  try {
+    count = BigInt((await reader.readContract({ address, abi: checkSubscriptionsAbi, functionName: 'subscriptionCount' })) as bigint);
+  } catch (err) {
+    return { state: 'error', error: err instanceof Error ? err.message.split('\n')[0]! : String(err) };
+  }
+  if (count === 0n) return { state: 'none' };
+  const read = await memo(`subs:${address}:scan:${count}`, 10_000, () => readSubscriptions(reader, address, latestSubscriptionIds(count, SCAN_LIMIT))).catch(
+    (err: unknown) => ({ subscriptions: [], failed: -1, err }),
+  );
+  const mine = read.subscriptions.filter((x) => x.subscriber.toLowerCase() === subscriber.toLowerCase() && isActiveAt(x, BigInt(now)));
+  if (mine.length) return { state: 'active', ids: mine.map((x) => x.id.toString()) };
+  return read.failed !== 0 ? { state: 'error', error: 'some subscriptions could not be read' } : { state: 'none' };
 }

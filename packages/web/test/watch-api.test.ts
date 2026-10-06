@@ -301,17 +301,51 @@ describe('webhooks', () => {
     expect(JSON.stringify(inbox)).not.toContain('/specfirst');
   });
 
-  it('refuses http unless the local flag is on, then only for localhost', async () => {
+  it("a local URL registers only with the flag, and only at this site's own origin", async () => {
     const issued = Math.floor(Date.now() / 1000);
-    const url = 'http://localhost:3418/api/v1/watch/demo-hook';
-    const signature = await burner.signMessage({ message: webhookMessage({ subscriber: burner.address, url, issued }) });
-    expect((await webhookPost(post({ subscriber: burner.address, url, issued, signature }))).status).toBe(400);
+    const sign = async (url: string) => ({
+      subscriber: burner.address,
+      url,
+      issued,
+      signature: await burner.signMessage({ message: webhookMessage({ subscriber: burner.address, url, issued }) }),
+    });
+    const at = (origin: string, body: unknown) => new Request(`${origin}/api/v1/watch/webhooks`, { method: 'POST', body: JSON.stringify(body) });
+    const own = await sign('http://localhost:3418/api/v1/watch/demo-hook');
+    expect((await webhookPost(at('http://localhost:3418', own))).status).toBe(400);
     process.env.SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS = '1';
     try {
-      expect((await webhookPost(post({ subscriber: burner.address, url, issued, signature }))).status).toBe(200);
+      expect((await webhookPost(at('http://localhost:3418', own))).status).toBe(200);
+      const elsewhere = await webhookPost(at('http://localhost:3418', await sign('http://localhost:9999/hook')));
+      expect(elsewhere.status).toBe(400);
+      expect((await json<{ error: string }>(elsewhere)).error).toMatch(/only at this site's own origin, http:\/\/localhost:3418/);
     } finally {
       delete process.env.SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS;
     }
+  });
+
+  it('needs an active subscription: none is 409, contract unset is 503', async () => {
+    const stranger = privateKeyToAccount(keccak256(toHex('watch-web api test stranger')));
+    const issued = Math.floor(Date.now() / 1000);
+    const url = 'https://hooks.example.com/stranger';
+    const reg = {
+      subscriber: stranger.address,
+      url,
+      issued,
+      signature: await stranger.signMessage({ message: webhookMessage({ subscriber: stranger.address, url, issued }) }),
+    };
+    const none = await webhookPost(post(reg));
+    expect(none.status).toBe(409);
+    expect((await json<{ error: string }>(none)).error).toMatch(/holds no active subscription/);
+    delete process.env.NEXT_PUBLIC_SPECFIRST_SUBS_10143;
+    try {
+      const off = await webhookPost(post(reg));
+      expect(off.status).toBe(503);
+      expect((await json<{ error: string }>(off)).error).toMatch(/subscriptions are not deployed/);
+    } finally {
+      process.env.NEXT_PUBLIC_SPECFIRST_SUBS_10143 = SUBS;
+    }
+    const file = JSON.parse(await readFile(path.join(root, 'watch', 'webhooks.json'), 'utf8'));
+    expect(file.webhooks[stranger.address.toLowerCase()]).toBeUndefined();
   });
 
   it('rejects a stale signature, a wrong signer and bodies that are not JSON', async () => {
