@@ -6,7 +6,7 @@ Plan of record: see docs/plan.md. Status: week 1, scaffolding.
 
 ## Keys
 
-Commands that send transactions read `DEPLOYER_PRIVATE_KEY` and `ISSUER_PRIVATE_KEY` (and `REQUESTER_PRIVATE_KEY` for `desk request`) from the environment; they do not read `.env` on their own. Copy `.env.example` to `.env`, fill it in, and run with Node's env loader:
+Commands that send transactions read `DEPLOYER_PRIVATE_KEY` and `ISSUER_PRIVATE_KEY` (and `REQUESTER_PRIVATE_KEY` for `desk request`, `WATCH_ISSUER_PRIVATE_KEY` for `watch`) from the environment; they do not read `.env` on their own. Copy `.env.example` to `.env`, fill it in, and run with Node's env loader:
 
 ```
 node --env-file=.env packages/cli/dist/index.js <command>
@@ -47,6 +47,42 @@ node --env-file=.env packages/cli/dist/index.js desk withdraw --to 0x...        
 ```
 
 The worker keeps its cursor in `.specfirst/worker/state.json` and writes each request's progress to `.specfirst/worker/status.json` (schema `workerStatusSchema` in `@specfirst/core/desk`). Its report copies go to `certs/checks/` with `reportURI` under `--report-base-url` (default `$SPECFIRST_REPORT_BASE_URL`, else the raw GitHub URL above); commit and push them so the URIs resolve.
+
+## Watcher
+
+`specfirst watch` turns chain events into checks without anyone asking (docs/adr/0006-chain-as-entry-point.md). It reads the subject chain's logs from a cursor (Monad mainnet by default, read only), finds new ERC-4626 vaults from factory events and from `Deposit`, `Upgraded` and `BeaconUpgraded` of unknown emitters, probes each with the desk worker's pre-check, queues one check per vault (subscribed, new candidate, upgrade or implementation change, first deposit, sweep), checks at `head - 10`, saves the report under `certs/checks/`, and attests on testnet only when the vault has no Valid attestation or the outcome (the four counts, the failed property ids, the implementation key) differs from its latest one. An unchanged re-check is recorded in the feed with no transaction.
+
+```
+# once: register the watcher's own issuer (the desk worker keeps ISSUER_PRIVATE_KEY, two processes on one key collide on nonces)
+node --env-file=.env packages/cli/dist/index.js attest-registry set-issuer <address of WATCH_ISSUER_PRIVATE_KEY> --network monad-testnet
+
+# the unattended loop: Monad mainnet in, attestations on testnet out, NDJSON log
+node --env-file=.env packages/cli/dist/index.js --json watch --network monad-testnet
+
+# read only: decide and record, send nothing (no key needed); backfill a range and stop
+node --env-file=.env packages/cli/dist/index.js watch --no-attest --from-block 110930500 --to-block 110930700 --once --sweep-per-hour 0
+
+# the signal sources (built in for 143, or --sources <file>); --verify decodes each fixture from the chain
+node packages/cli/dist/index.js watch sources --verify
+```
+
+- Signer: `WATCH_ISSUER_PRIVATE_KEY`, an issuer of the registry next to the desk worker's key. `--share-issuer-key` falls back to `ISSUER_PRIVATE_KEY` when it is unset; never run the worker at the same time then. `--network monad-mainnet` is refused for attesting, and nothing is ever sent to the subject chain.
+- Subject RPC: `--subject-rpc` (repeat it for fallbacks; forge forks from the first), else `$MONAD_MAINNET_RPC`, else `https://rpc1.monad.xyz` then `https://rpc.monad.xyz`. getLogs starts with `--log-window` blocks (10,000) and shrinks to what the node accepts (`rpc.monad.xyz` and the testnet RPC take 100); a node error on one RPC goes to the next.
+- Budget and cadence: `--max-attest-per-day` (40; more wait for the next UTC day), `--sweep-hours` (24) and `--sweep-per-hour` (6, 0 turns the sweep off), `--subscribed-minutes` (60). `--once` reads up to the head (or `--to-block`) and runs every due check; `--to-block` alone stops once the queue is empty.
+- Files in `.specfirst/watch/<subjectChainId>/`: `feed.ndjson` (append only, one event per line), `status.json` and `vaults.json` (rewritten atomically), with zod schemas in `@specfirst/core/watch` (browser-safe, like `@specfirst/core/desk`), plus the watcher's own `state.json` (cursor, queue, rejected probes, budget) and `watch.lock` (one watcher per directory). The known set starts from `certs/checks/<chainId>/`. The web reads the directory from `SPECFIRST_WATCH_DIR` (default `<repo>/.specfirst/watch`).
+- Subscriptions and alerts plug in through `SubscriptionSource` and `AlertSink` (`packages/core/src/watch/hooks.ts`); without them the watcher runs with none.
+
+### Demo on Monad testnet
+
+New mainnet factory deployments are rare, so the live demo watches Monad testnet with `examples/watch/sources-demo.json`: `DemoVaultFactory` (`packages/contracts/src/demo/`) lives at `0x27eFcf4d95B8AB853b31b65EFB3Adb1cAd93D432` on every chain it is deployed to through the deterministic CREATE2 deployer, so the file names it in advance; `Deposit`, `Upgraded` and `BeaconUpgraded` only re-check vaults the watcher already knows. A DemoVault can carry the harness's control bug (previewDeposit promises 1% more shares than deposit mints), switched by its operator; the demo sources count its `BrokenSet` event as an upgrade, so the switch is re-checked at once. `watch demo` signs with `DEPLOYER_PRIVATE_KEY`; it takes `--network monad-testnet|anvil` like `watch`.
+
+```
+node --env-file=.env packages/cli/dist/index.js watch demo deploy --token                      # factory (once) and a DemoToken
+node --env-file=.env packages/cli/dist/index.js --json watch --subject-chain 10143 --sources examples/watch/sources-demo.json --network monad-testnet
+node --env-file=.env packages/cli/dist/index.js watch demo vault --asset <DemoToken>              # detected, checked, attested
+node --env-file=.env packages/cli/dist/index.js watch demo deposit <vault> --asset <DemoToken>   # first deposit: re-checked, unchanged, no transaction
+node --env-file=.env packages/cli/dist/index.js watch demo set-broken <vault> on                 # BrokenSet: re-checked, changed (regressed), attested
+```
 
 ## Board
 
