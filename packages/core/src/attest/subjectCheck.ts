@@ -4,8 +4,16 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Address, PublicClient } from 'viem';
-import { isContractAnswer, isRateLimited, isTransportFailure } from '../chain/transport.js';
-import { runStandardCheck, standardCheckPath, type RunStandardCheckInput, type StandardCheckClient, type StandardCheckEvent } from '../standards/check.js';
+import { isContractAnswer, isNodeError, isRateLimited, isRpcServerError, isTransportFailure } from '../chain/transport.js';
+import {
+  runStandardCheck,
+  StandardCheckError,
+  standardCheckPath,
+  StandardCheckTimeoutError,
+  type RunStandardCheckInput,
+  type StandardCheckClient,
+  type StandardCheckEvent,
+} from '../standards/check.js';
 import type { StandardCheckReport } from '../standards/report.js';
 import { attestationReportPath, checkReportHash, parseCheckReport } from './params.js';
 
@@ -43,6 +51,39 @@ export function countsAsFailure(err: unknown): boolean {
     cur = (cur as { cause?: unknown }).cause;
   }
   return false;
+}
+
+/** forge's own words when it cannot fork the subject chain: its RPC failed while forge started. */
+const FORGE_FORK_FAILURE = /could not instantiate forked environment|failed to get (?:latest )?block|error sending request|max retries exceeded|HTTP error \d{3}/i;
+
+/**
+ * True when a step of a subject check failed because the subject chain's RPC did not serve it: a transport
+ * failure, a rate limit, a node error, a JSON-RPC server error, or forge failing to fork (a 429 in its
+ * output included). Such a failure says nothing about the subject. A forge timeout is not one of them.
+ */
+export function isSubjectRpcFailure(err: unknown): boolean {
+  if (isCheckTimeout(err)) return false;
+  if (isTransportFailure(err) || isRateLimited(err) || isNodeError(err) || isRpcServerError(err)) return true;
+  return err instanceof StandardCheckError && FORGE_FORK_FAILURE.test(err.message);
+}
+
+/** forge ran past its wall-clock budget (StandardCheckTimeoutError, also when it crossed a module boundary). */
+export function isCheckTimeout(err: unknown): boolean {
+  return err instanceof StandardCheckTimeoutError || (err as { name?: unknown })?.name === 'StandardCheckTimeoutError';
+}
+
+/** The custom error name a registry or desk revert carries (errorName, or a decoded data.errorName), anywhere in the cause chain. */
+export function errorNameOf(err: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  while (cur && typeof cur === 'object' && !seen.has(cur)) {
+    seen.add(cur);
+    const e = cur as { errorName?: unknown; data?: { errorName?: unknown } };
+    if (typeof e.errorName === 'string' && e.errorName) return e.errorName;
+    if (e.data && typeof e.data === 'object' && typeof e.data.errorName === 'string') return e.data.errorName;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
 }
 
 /** One line of an error, for status.json and events. */

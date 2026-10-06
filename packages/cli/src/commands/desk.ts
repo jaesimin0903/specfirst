@@ -29,10 +29,9 @@ import {
   WorkerStore,
   type DeskRequest,
   type RunStandardCheckInput,
-  type StandardCheckClient,
   type StandardCheckReport,
   type StandardName,
-  type SubjectClient,
+  type LiveWorkerEffectsInput,
   type WorkerConfig,
   type WorkerEvent,
 } from '@specfirst/core';
@@ -364,6 +363,7 @@ interface WorkerOptions extends NetOptions {
   once?: boolean;
   runs: string;
   blockLag: string;
+  checkTimeout: string;
   reportBaseUrl?: string;
   allowUnknownProxy?: boolean;
 }
@@ -395,6 +395,9 @@ function logWorkerEvent(ctx: CliContext, e: WorkerEvent): void {
     case 'worker-step-failed':
       printLine(ctx, cont(pc.yellow(`#${e.id} ${e.step} failed (${e.failures}): ${e.error}`)));
       return;
+    case 'worker-deferred':
+      printLine(ctx, cont(pc.yellow(`#${e.id} ${e.step}: ${e.error}; trying again from ${e.retryAt}`)));
+      return;
     case 'worker-fulfilled':
       printLine(ctx, cont(`#${e.id} ${pc.green('fulfilled')}  attestation ${e.attestationId}  ${pc.dim(`tx ${e.txHash}  gas ${formatEther(BigInt(e.gasCostWei))} MON`)}`));
       return;
@@ -405,7 +408,7 @@ function logWorkerEvent(ctx: CliContext, e: WorkerEvent): void {
       printLine(ctx, cont(pc.dim(`#${e.id} closed onchain (${e.status})`)));
       return;
     case 'worker-reused':
-      printLine(ctx, cont(pc.dim(`#${e.id} delivered by this worker's attestation ${e.attestationId}, made after the request; no second check`)));
+      printLine(ctx, cont(pc.dim(`#${e.id} delivered by attestation ${e.attestationId} of ${e.issuer}, a check as of the request; no second check`)));
       return;
     case 'worker-gave-up':
       printLine(ctx, cont(pc.red(`#${e.id} gave up: ${e.error}`)));
@@ -425,9 +428,11 @@ function logWorkerEvent(ctx: CliContext, e: WorkerEvent): void {
  * `specfirst worker`: the unattended loop behind the desk. Each pass reads requestCount() and requestOf()
  * from the cursor in .specfirst/worker/state.json (no event logs: the testnet caps getLogs at 100 blocks and
  * the public RPC at about 15 requests per second), handles Pending requests one at a time (pre-check,
- * check, report copy, identity check, attest, fulfill; reject with a refund when it cannot) and writes
- * per-request progress to .specfirst/worker/status.json for the web. Signs with ISSUER_PRIVATE_KEY, which
- * must be both the desk's worker and a registry issuer; monad-mainnet is refused for the desk network.
+ * check within --check-timeout, report copy, identity check, attest, fulfill; reject with a refund when it
+ * cannot; a subject RPC failure waits for a later pass) and writes per-request progress to
+ * .specfirst/worker/status.json for the web. Signs with ISSUER_PRIVATE_KEY, which must be both the desk's
+ * worker and a registry issuer, and stops attesting when it no longer is the desk's worker; monad-mainnet is
+ * refused for the desk network.
  * NDJSON events with --json. Runs until stopped, or one pass with --once.
  */
 export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps = {}): void {
@@ -440,6 +445,11 @@ export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps 
       .option('--once', 'run a single pass and exit')
       .option('--runs <n>', 'fuzz runs per property', String(DEFAULT_WORKER_RUNS))
       .option('--block-lag <n>', 'check this many blocks below the latest subject block', DEFAULT_BLOCK_LAG.toString())
+      .option(
+        '--check-timeout <sec>',
+        "wall-clock budget of one request's check; a check that runs out is rejected and refunded, not retried, and its subject is not checked again for a day",
+        String(DEFAULT_WORKER_CONFIG.checkTimeoutSec),
+      )
       .option('--report-base-url <url>', `public URL of certs/checks for reportURI (default: $${REPORT_BASE_URL_ENV} or ${DEFAULT_REPORT_BASE_URL})`)
       .option('--allow-unknown-proxy', 'attest proxy-shaped subjects whose implementation cannot be resolved instead of rejecting them'),
   ).action(async (opts: WorkerOptions, command: Command) => {
@@ -447,6 +457,7 @@ export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps 
     await runStage(ctx, 'worker', DESK_FAILED_EXIT_CODE, async () => {
       const poll = positiveInt(opts.poll, '--poll', 86_400n);
       const runs = Number(positiveInt(opts.runs, '--runs', 100_000n));
+      const checkTimeoutSec = Number(positiveInt(opts.checkTimeout, '--check-timeout', 86_400n));
       if (!/^(0|[1-9]\d*)$/.test(opts.blockLag)) throw new ConfigError(`--block-lag must be a non-negative integer, got "${opts.blockLag}"`);
       const blockLag = BigInt(opts.blockLag);
       const base = reportBase(opts.reportBaseUrl ?? process.env[REPORT_BASE_URL_ENV] ?? DEFAULT_REPORT_BASE_URL);
@@ -467,7 +478,7 @@ export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps 
       const probe = createPublicClient({ transport: rpcTransport([subjectUrl]) });
       const subjectChainId = await probe.getChainId();
       const chain = Object.values(NETWORKS).find((c) => c.id === subjectChainId);
-      const subjectClient = createPublicClient({ ...(chain ? { chain } : {}), transport: rpcTransport([subjectUrl]) }) as unknown as StandardCheckClient & SubjectClient;
+      const subjectClient = createPublicClient({ ...(chain ? { chain } : {}), transport: rpcTransport([subjectUrl]) }) as unknown as LiveWorkerEffectsInput['subjectClient'];
 
       let store: WorkerStore;
       let release: () => Promise<void>;
@@ -480,6 +491,7 @@ export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps 
       }
       const effects = liveWorkerEffects({
         desk,
+        deskClient: net.clients.publicClient,
         registry,
         workerAddress: me,
         subjectClient,
@@ -493,10 +505,10 @@ export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps 
         ...(deps.sleep ? { sleep: deps.sleep } : {}),
         onCheckEvent: (e) => emitEvent(ctx, e),
       });
-      const config: Partial<WorkerConfig> = { ...DEFAULT_WORKER_CONFIG, blockLag, allowUnknownProxy: Boolean(opts.allowUnknownProxy), ...deps.config };
+      const config: Partial<WorkerConfig> = { ...DEFAULT_WORKER_CONFIG, blockLag, checkTimeoutSec, allowUnknownProxy: Boolean(opts.allowUnknownProxy), ...deps.config };
       const rel = (p: string) => path.relative(ctx.projectDir, p);
       printLine(ctx, stage('worker', `${me}  desk ${pc.bold(deskAddress)}  ${pc.dim(`${net.name} ${net.clients.chain.id}`)}`));
-      printLine(ctx, cont(pc.dim(`registry ${registryAddress}  subject chain ${subjectChainId}  runs ${runs}  block lag ${blockLag}  ${opts.once ? 'one pass' : `poll ${poll}s`}  ${rel(store.statusPath)}`)));
+      printLine(ctx, cont(pc.dim(`registry ${registryAddress}  subject chain ${subjectChainId}  runs ${runs}  block lag ${blockLag}  check timeout ${checkTimeoutSec}s  ${opts.once ? 'one pass' : `poll ${poll}s`}  ${rel(store.statusPath)}`)));
       emitEvent(ctx, {
         type: 'worker-start',
         worker: me,
@@ -506,6 +518,7 @@ export function registerWorkerCommand(program: Command, deps: WorkerCommandDeps 
         subjectChainId,
         runs,
         blockLag: blockLag.toString(),
+        checkTimeoutSec,
         poll: Number(poll),
         once: Boolean(opts.once),
         reportBaseUrl: base,

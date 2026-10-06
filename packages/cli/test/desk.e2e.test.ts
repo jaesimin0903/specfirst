@@ -5,7 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   anvilChain,
+  attestationParamsFromReport,
   AttestationRegistryClient,
+  checkAttestationRegistryAbi,
   checkReportHash,
   checkRequestDeskBytecode,
   createChainClients,
@@ -14,7 +16,9 @@ import {
   reasonOf,
   REQUEST_STATUS,
   RequestDeskClient,
+  saveReportCopy,
   standardIdOf,
+  WorkerStore,
   workerStateSchema,
   workerStatusSchema,
   type ChainClients,
@@ -22,7 +26,7 @@ import {
   type StandardCheckReport,
   type WorkerRequestStatus,
 } from '@specfirst/core';
-import { getAddress, keccak256, parseEther, type Address, type Hex } from 'viem';
+import { encodeFunctionData, getAddress, keccak256, parseEther, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { registerAttestRegistryCommand } from '../src/commands/attest.js';
@@ -335,5 +339,47 @@ describe.skipIf(SKIP_ANVIL)('specfirst desk and worker on anvil', { timeout: 300
     expect(REQUEST_STATUS[(await deskClient().requestOf(4n)).status]).toBe('Fulfilled');
     expect((await status()).totals).toMatchObject({ fulfilled: 2, rejected: 2 });
     expect(existsSync(path.join(dir, '.specfirst/worker/worker.lock'))).toBe(false);
+  });
+
+  it('an attest recorded in state.json is looked up first: pending, the worker waits; dropped, it goes out again with its nonce, once', async () => {
+    const rpc = (method: string, params: unknown[]) => clients.publicClient.request({ method: method as never, params: params as never });
+    const vault3 = getAddress('0x5f00000000000000000000000000000000000104');
+    await rpc('anvil_setCode', [vault3, VAULT_CODE]);
+    await rpc('anvil_mine', ['0x1']);
+    const id = event(await cli('desk', 'request', vault3, '--subject-chain', '31337', '--network', 'anvil'), 'desk-requested').id as string;
+    // What a worker that crashed right after sending the attest leaves behind: the saved report and the journal.
+    const report = await runCheck({ address: vault3, blockNumber: await clients.publicClient.getBlockNumber() } as RunStandardCheckInput);
+    const saved = await saveReportCopy(dir, BASE, report);
+    const data = encodeFunctionData({ abi: checkAttestationRegistryAbi, functionName: 'attest', args: [attestationParamsFromReport(report, { reportURI: saved.reportURI })] as never });
+    const nonce = await clients.publicClient.getTransactionCount({ address: ISSUER, blockTag: 'pending' });
+    await rpc('evm_setAutomine', [false]);
+    const first = await clients.wallet(ISSUER_KEY).sendTransaction({ to: registry, data, nonce, gas: 2_000_000n });
+    const store = await WorkerStore.load(dir, { address: desk, chainId: 31337 });
+    store.state.requests[id] = { failures: 0, block: report.blockNumber, reportPath: saved.reportPath, reportURI: saved.reportURI, attestTx: { hash: first, nonce } };
+    await store.save();
+    const reg = new AttestationRegistryClient(registry, clients.publicClient);
+    const before = await reg.attestationCount();
+    try {
+      // Pending in the mempool: nothing is sent, the request stays open.
+      const waiting = await worker();
+      expect(waiting.code).toBe(0);
+      expect(event(waiting, 'worker-pass-done')).toMatchObject({ open: [id] });
+      expect(await clients.publicClient.getTransactionCount({ address: ISSUER, blockTag: 'pending' })).toBe(nonce + 1);
+      expect(((await status())[id] as WorkerRequestStatus).error).toBe(`attest tx ${first} is not mined yet`);
+      // Dropped before it was mined, nonce unused: sent again with that nonce, then fulfilled.
+      await rpc('anvil_dropTransaction', [first]);
+    } finally {
+      await rpc('evm_setAutomine', [true]);
+    }
+    const resumed = await worker();
+    expect(resumed.code).toBe(0);
+    expect(event(resumed, 'worker-pass-done')).toMatchObject({ fulfilled: [id], open: [] });
+    expect(await reg.attestationCount()).toBe(before + 1n);
+    const r = await deskClient().requestOf(BigInt(id));
+    expect(REQUEST_STATUS[r.status]).toBe('Fulfilled');
+    const again = ((await status())[id] as WorkerRequestStatus).txs.attest as Hex;
+    expect(again).not.toBe(first);
+    expect((await clients.publicClient.getTransaction({ hash: again })).nonce).toBe(nonce);
+    expect((await reg.attestationOf(r.attestationId)).subject).toBe(vault3);
   });
 });
