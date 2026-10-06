@@ -7,8 +7,8 @@ import { latestSubscriptionIds, normalizeSubscription, readSubsSummary } from '.
 import { cancelledFromLogs, subscribedFromLogs } from '../lib/subs/wallet';
 
 /*
- * lib/subs/contract.ts is written from ADR 0006 until the CheckSubscriptions build is exported from core. These
- * pin every call and event the web relies on, so the swap shows up here if the two disagree.
+ * lib/subs/contract.ts re-exports the ABI of core's CheckSubscriptions build. These pin every call and event the
+ * web relies on, so a contract change that breaks the web shows up here.
  */
 
 const CONTRACT = '0x0000000000000000000000000000000000005005';
@@ -16,7 +16,7 @@ const SUBSCRIBER = getAddress('0x5ee0000000000000000000000000000000000001');
 const VAULT = getAddress('0xfeed000000000000000000000000000000000001');
 const DAY = 86_400;
 
-describe('local CheckSubscriptions ABI', () => {
+describe('CheckSubscriptions ABI', () => {
   const fns = checkSubscriptionsAbi.filter((x) => x.type === 'function').map((f) => toFunctionSignature(f as AbiFunction));
   const events = checkSubscriptionsAbi.filter((x) => x.type === 'event').map((e) => toEventSignature(e as AbiEvent));
 

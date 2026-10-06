@@ -1,12 +1,12 @@
 import { getAddress, isAddress } from 'viem';
 
 /*
- * The one place the web names CheckSubscriptions (ADR 0006). The ABI comes from lib/subs/core.ts, the stand-in
- * for @specfirst/core/subs; every other module imports it from here. Below it, web-only helpers that stay when
- * core.ts becomes a re-export. Client-safe.
+ * The one place the web names CheckSubscriptions (ADR 0006). The ABI is re-exported from @specfirst/core/subs;
+ * every other module imports it from here. Below it, web-only helpers. Client-safe.
  */
 
-export { checkSubscriptionsAbi } from './core';
+// The ABI comes from the contract build in @specfirst/core, so the web cannot drift from the deployed contract.
+export { checkSubscriptionsAbi } from '@specfirst/core/subs';
 
 /** Subscription ids are a zero based index, as in the registry and the desk. */
 export const FIRST_SUBSCRIPTION_ID = 0n;

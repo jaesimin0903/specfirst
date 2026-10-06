@@ -6,8 +6,8 @@ import { feedEventSchema, feedKindSchema, feedSourceSchema, watchStatusSchema, w
 import { parseFeedText, parseWatchStatus, parseWatchVaults } from '../lib/watch/read';
 
 /*
- * lib/watch/core.ts stands in for @specfirst/core/watch until the watcher branch lands. These pin it to the
- * shapes ADR 0006 fixes, on the synthetic fixtures under test/fixtures/watch.
+ * lib/watch/core.ts re-exports @specfirst/core/watch. These pin the shapes ADR 0006 fixes, as the web reads them,
+ * on the synthetic fixtures under test/fixtures/watch.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));

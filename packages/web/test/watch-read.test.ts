@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { clearWatchCaches, parseFeedText, readFeed, readStatus, readVaults, splitChunk, watchedChains } from '../lib/watch/read';
-import { resolveReportPath } from '../lib/watch/paths';
+import { WATCH_DIR, WATCH_FEED_NDJSON, WATCH_STATUS_JSON, WATCH_VAULTS_JSON } from '../lib/watch/core';
+import { resolveReportPath, watchFile } from '../lib/watch/paths';
+import { WEBHOOKS_JSON } from '../lib/watch/webhooks';
 
 /*
  * The watcher writes these files while the web reads them. Nothing may throw: a missing directory reads as "not
@@ -25,6 +27,20 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 beforeEach(() => clearWatchCaches());
+
+describe('where the files are', () => {
+  it("the watcher's layout: <dir>/<chainId>/{feed.ndjson,status.json,vaults.json}, and webhooks.json at <dir>, where the watcher's alert sink reads it", () => {
+    // `specfirst watch --project <repo>` writes <repo>/.specfirst/watch/<chainId>/ and reads <repo>/.specfirst/watch/webhooks.json.
+    const repo = { SPECFIRST_REPO_ROOT: '/srv/specfirst' };
+    expect(watchFile.feed(143, repo)).toBe(path.join('/srv/specfirst', WATCH_DIR, '143', WATCH_FEED_NDJSON));
+    expect(watchFile.status(10143, repo)).toBe(path.join('/srv/specfirst', WATCH_DIR, '10143', WATCH_STATUS_JSON));
+    expect(watchFile.vaults(143, repo)).toBe(path.join('/srv/specfirst', WATCH_DIR, '143', WATCH_VAULTS_JSON));
+    expect(watchFile.webhooks(repo)).toBe(path.join('/srv/specfirst', WATCH_DIR, WEBHOOKS_JSON));
+    const moved = { ...repo, SPECFIRST_WATCH_DIR: '/data/watch' };
+    expect(watchFile.feed(143, moved)).toBe('/data/watch/143/feed.ndjson');
+    expect(watchFile.webhooks(moved)).toBe('/data/watch/webhooks.json');
+  });
+});
 
 describe('lenient feed parsing', () => {
   it('skips and counts lines that are not JSON or not events; blank lines are not counted', () => {

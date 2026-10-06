@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { keccak256, toHex } from 'viem';
+import { getAddress, keccak256, toHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { ContractReader } from '../lib/desk/read';
 
@@ -19,7 +19,7 @@ vi.mock('../lib/desk/clients', () => ({ testnetClient: () => reader.current, mai
 import { clearMemo } from '../lib/desk/cache';
 import { clearWatchCaches } from '../lib/watch/read';
 import { clearReportCache } from '../lib/watch/reports';
-import { webhookMessage } from '../lib/subs/core';
+import { webhookMessage, webhookPayload } from '../lib/subs/core';
 import type { FeedPageJson, VaultWatchJson, WatchStatusJson } from '../lib/watch/types';
 import type { InboxJson, SubscriberJson, SubsSummaryJson } from '../lib/subs/types';
 import type { ExplorerRow } from '../lib/board/view';
@@ -317,7 +317,7 @@ describe('webhooks', () => {
       expect((await webhookPost(at('http://localhost:3418', own))).status).toBe(200);
       const elsewhere = await webhookPost(at('http://localhost:3418', await sign('http://localhost:9999/hook')));
       expect(elsewhere.status).toBe(400);
-      expect((await json<{ error: string }>(elsewhere)).error).toMatch(/only at this site's own origin, http:\/\/localhost:3418/);
+      expect(await json<{ reason: string; error: string }>(elsewhere)).toMatchObject({ reason: 'url', error: 'url not https' });
     } finally {
       delete process.env.SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS;
     }
@@ -358,6 +358,10 @@ describe('webhooks', () => {
     const now = Math.floor(Date.now() / 1000);
     const wrong = await burner.signMessage({ message: webhookMessage({ subscriber: OTHER, url, issued: now }) });
     expect((await webhookPost(post({ subscriber: OTHER, url, issued: now, signature: wrong }))).status).toBe(401);
+    // Only the canonical form verifies (the inbox signs new URL(input).href): the signed text is the URL called.
+    const bare = 'https://hooks.example.com';
+    const unslashed = await webhookPost(post({ subscriber: burner.address, url: bare, issued: now, signature: await burner.signMessage({ message: webhookMessage({ subscriber: burner.address, url: bare, issued: now }) }) }));
+    expect(await json<{ reason: string; error: string }>(unslashed)).toMatchObject({ reason: 'url', error: 'url not in canonical form (send new URL(url).href)' });
     expect((await webhookPost(post('{oops'))).status).toBe(400);
     expect((await webhookPost(post('x'.repeat(9000)))).status).toBe(413);
   });
@@ -387,7 +391,13 @@ describe('revenue on /desk', () => {
 
 describe('demo webhook receiver', () => {
   it('keeps what was POSTed, newest first, and marks ADR alert payloads', async () => {
-    const alert = { v: 1, subscriptionId: '2', subject: MORPHO, chainId: 143, change: { kind: 'changed' }, check: {}, attestation: null, reportURL: null };
+    // What the watcher's sink POSTs (core's webhookPayload) for a change, to a subscriber holding ids 2 and 5.
+    const summary = { pass: 29, fail: 1, inconclusive: 0, notApplicable: 0 };
+    const alert = webhookPayload(
+      { v: 1, seq: 9, at: '2026-10-06T09:00:00.000Z', kind: 'changed', chainId: 143, subject: getAddress(MORPHO), change: { kind: 'regressed', from: null, to: { summary, failed: ['previewDeposit'] } } },
+      [5n, 2n],
+    );
+    expect(alert).toMatchObject({ subscriptionId: '2', subscriptionIds: ['2', '5'], check: null, reportURL: null });
     const post = (body: string) =>
       new Request('http://localhost/api/v1/watch/demo-hook', { method: 'POST', body, headers: { 'user-agent': 'specfirst-watch/test' } });
     expect((await demoPost(post(JSON.stringify(alert)))).status).toBe(200);

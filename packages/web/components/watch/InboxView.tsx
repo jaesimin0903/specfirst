@@ -258,7 +258,14 @@ function WebhookForm({
     e.preventDefault();
     if (!wallet.signer || !url.trim()) return;
     const issued = Math.floor(Date.now() / 1000);
-    const target = url.trim();
+    // The server takes the URL in canonical form only (new URL(url).href), so what is signed is what gets called.
+    let target: string;
+    try {
+      target = new URL(url.trim()).href;
+    } catch {
+      setState({ phase: 'error', message: 'That is not a URL. Paste the full address, starting with https://.' });
+      return;
+    }
     let message: string;
     try {
       message = webhookMessage({ subscriber, url: target, issued });

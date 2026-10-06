@@ -4,7 +4,8 @@ import { WATCH_DIR, WATCH_DIR_ENV, WATCH_FEED_NDJSON, WATCH_STATUS_JSON, WATCH_V
 
 /*
  * Server-only locations of the watcher's files (ADR 0006): <watch dir>/<subjectChainId>/{feed.ndjson,status.json,
- * vaults.json}, and the web's own <watch dir>/webhooks.json and demo-hook.json. Read at request time.
+ * vaults.json}, <watch dir>/webhooks.json (core's WEBHOOKS_JSON, written here and read by the watcher's alert sink)
+ * and the web's own <watch dir>/demo-hook.json. Read at request time.
  */
 
 /** SPECFIRST_WATCH_DIR, relative paths against the repository root; default <repo>/.specfirst/watch. */

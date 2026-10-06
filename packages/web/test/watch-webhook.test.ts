@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -8,8 +8,8 @@ import { verifyWebhookRegistration, webhookMessage, webhookUrlProblem, WEBHOOK_M
 import { publicWebhook, readWebhooks, registerStatus, registerWebhook, webhookOf } from '../lib/watch/webhooks';
 
 /*
- * Webhook registration (ADR 0006, "Alerts"), with the stand-ins for @specfirst/core/subs and the core root's
- * webhooks.json helpers: the exact EIP-191 text, the URL rules, freshness, and the file the watcher reads. The keys
+ * Webhook registration (ADR 0006, "Alerts") as the web uses it, through @specfirst/core/subs and the core root's
+ * webhooks.json store: the exact EIP-191 text, the URL rules, freshness, and the file the watcher reads. The keys
  * are derived from fixed strings, test only.
  */
 
@@ -65,17 +65,20 @@ describe('verifyWebhookRegistration', () => {
     expect(await verifyWebhookRegistration(null, { now: NOW })).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
-  it('local http opens localhost and 127.0.0.1 only, and only with the flag', async () => {
+  it('a local URL passes only at an exactly allowed origin', async () => {
+    const allowedLocalOrigins = ['http://localhost:3418'];
     const local = await signed({ url: 'http://localhost:3418/api/v1/watch/demo-hook' });
     expect((await verifyWebhookRegistration(local, { now: NOW })).ok).toBe(false);
-    expect((await verifyWebhookRegistration(local, { now: NOW, allowLocalHttp: true })).ok).toBe(true);
-    expect((await verifyWebhookRegistration(await signed({ url: 'http://10.0.0.5/hook' }), { now: NOW, allowLocalHttp: true })).ok).toBe(false);
-    expect((await verifyWebhookRegistration(await signed({ url: 'http://[::1]/hook' }), { now: NOW, allowLocalHttp: true })).ok).toBe(false);
+    expect((await verifyWebhookRegistration(local, { now: NOW, allowedLocalOrigins })).ok).toBe(true);
+    expect((await verifyWebhookRegistration(await signed({ url: 'http://localhost:3419/hook' }), { now: NOW, allowedLocalOrigins })).ok).toBe(false);
+    expect((await verifyWebhookRegistration(await signed({ url: 'http://127.0.0.1:3418/hook' }), { now: NOW, allowedLocalOrigins })).ok).toBe(false);
+    expect((await verifyWebhookRegistration(await signed({ url: 'http://10.0.0.5/hook' }), { now: NOW, allowedLocalOrigins })).ok).toBe(false);
+    expect((await verifyWebhookRegistration(await signed({ url: 'http://[::1]/hook' }), { now: NOW, allowedLocalOrigins })).ok).toBe(false);
   });
 });
 
 describe('the URL rules', () => {
-  it('https to a public host only; no credentials, whitespace, private or CGNAT hosts, or very long URLs', () => {
+  it('https to a public host only, in canonical form; no credentials, whitespace, private or CGNAT hosts, or very long URLs', () => {
     expect(webhookUrlProblem(URL_OK)).toBeNull();
     expect(webhookUrlProblem('https://user:pw@hooks.example.com/')).toBe('carries credentials');
     for (const h of [
@@ -94,12 +97,15 @@ describe('the URL rules', () => {
     }
     expect(webhookUrlProblem('https://172.32.0.1/x')).toBeNull();
     expect(webhookUrlProblem(`https://hooks.example.com/${'a'.repeat(2100)}`)).toMatch(/longer than 2048/);
-    expect(webhookUrlProblem('https://hooks.example.com/a b')).toMatch(/whitespace/);
-    expect(webhookUrlProblem('https://hooks.example.com/a\nissued: 1')).toMatch(/whitespace/);
+    expect(webhookUrlProblem('https://hooks.example.com/a b')).toBe('contains characters other than printable ASCII');
+    expect(webhookUrlProblem('https://hooks.example.com/a\nissued: 1')).toBe('contains characters other than printable ASCII');
+    // What is signed is what gets called: the client sends new URL(input).href.
+    expect(webhookUrlProblem('https://hooks.example.com')).toBe('not in canonical form (send new URL(url).href)');
+    expect(webhookUrlProblem(new URL('https://hooks.example.com').href)).toBeNull();
     expect(webhookUrlProblem('ftp://hooks.example.com/')).toBe('not https');
-    expect(webhookUrlProblem('http://localhost:3418/x', { allowLocalHttp: true })).toBeNull();
-    expect(webhookUrlProblem('https://127.0.0.1/x', { allowLocalHttp: true })).toBeNull();
-    expect(webhookUrlProblem('http://hooks.example.com/', { allowLocalHttp: true })).toBe('not https');
+    expect(webhookUrlProblem('http://localhost:3418/x', { allowedLocalOrigins: ['http://localhost:3418'] })).toBeNull();
+    expect(webhookUrlProblem('https://127.0.0.1/x', { allowedLocalOrigins: ['https://127.0.0.1'] })).toBeNull();
+    expect(webhookUrlProblem('http://hooks.example.com/', { allowedLocalOrigins: ['http://localhost:3418'] })).toBe('not https');
   });
 });
 
@@ -119,6 +125,8 @@ describe('webhooks.json', () => {
     expect(raw.webhooks[account.address.toLowerCase()]).toMatchObject({ subscriber: account.address, url: 'https://hooks.example.com/v2', issued: NOW + 60 });
     expect((await readWebhooks(file)).webhooks[account.address.toLowerCase()]!.signature).toMatch(/^0x[0-9a-f]{130}$/);
     expect(publicWebhook(await webhookOf(account.address, file))).toEqual({ origin: 'https://hooks.example.com', issued: NOW + 60 });
+    // It holds URLs that can be secrets: readable by its owner only.
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 
   it('a refused registration writes nothing and maps to 400 or 401', async () => {

@@ -25,10 +25,11 @@ export interface DemoHookEntry {
 
 const entrySchema = z.object({ n: z.number().int(), receivedAt: z.string(), userAgent: z.string().nullable(), bytes: z.number().int(), body: z.unknown() });
 
-/** The alert payload ADR 0006 has the watcher POST. */
+/** The alert payload ADR 0006 has the watcher POST (core's WebhookPayload, from webhookPayload in @specfirst/core/subs). */
 export const alertPayloadSchema = z.object({
   v: z.literal(1),
   subscriptionId: z.string(),
+  subscriptionIds: z.array(z.string()).min(1),
   subject: z.string(),
   chainId: z.number(),
   change: z.unknown(),

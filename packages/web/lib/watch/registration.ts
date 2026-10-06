@@ -4,18 +4,18 @@ import { serialized } from './atomic';
 import { publicWebhook, readWebhooks, registerStatus, registerWebhook } from './webhooks';
 
 /*
- * The web's policy around registerWebhook (team decision on webhooks.json growth): a URL is stored only for a
- * subscriber holding an active subscription on the configured CheckSubscriptions, and the file keeps at most
+ * The web's policy around core's registerWebhook (team decision on webhooks.json growth): a URL is stored only for
+ * a subscriber holding an active subscription on the configured CheckSubscriptions, and the file keeps at most
  * MAX_WEBHOOK_SUBSCRIBERS subscribers (a subscriber already in it may always update). Local URLs are accepted only
- * for this site's own origin when SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1, the exact-origin rule core is moving to.
- * Server only.
+ * at this site's own origin when SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1, through core's allowedLocalOrigins (exact
+ * origins); the watcher delivers to them only when started with the same --webhook-local-origin. Server only.
  */
 
 export const MAX_WEBHOOK_SUBSCRIBERS = 1000;
 
 export interface RegistrationDeps {
   file: string;
-  /** Exact origins a local (localhost, 127.0.0.1) webhook may have; [] refuses local URLs. */
+  /** Exact origins a local or private webhook may have (core's allowedLocalOrigins); [] refuses them. */
   allowedLocalOrigins: readonly string[];
   standing(subscriber: string): Promise<SubscriberStanding>;
   /** unix seconds */
@@ -38,29 +38,10 @@ export function localOriginsFor(requestUrl: string, env: Record<string, string |
   }
 }
 
-/** A URL to localhost or 127.0.0.1 whose origin is not allowed exactly; null when it is fine on this count. */
-export function localOriginProblem(url: unknown, allowed: readonly string[]): string | null {
-  if (typeof url !== 'string') return null;
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return null;
-  }
-  if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') return null;
-  return allowed.includes(u.origin)
-    ? null
-    : allowed.length
-      ? `url may be local only at this site's own origin, ${allowed.join(', ')}`
-      : 'url points at a private or loopback address';
-}
-
 const fail = (status: number, error: string, reason?: string): RegistrationResponse => ({ status, body: { ok: false, ...(reason ? { reason } : {}), error } });
 
 export async function registerWithPolicy(input: unknown, deps: RegistrationDeps): Promise<RegistrationResponse> {
-  const local = localOriginProblem((input as { url?: unknown } | null)?.url, deps.allowedLocalOrigins);
-  if (local) return fail(400, local, 'url');
-  const opts = { now: deps.now, allowLocalHttp: deps.allowedLocalOrigins.length > 0 };
+  const opts = { now: deps.now, allowedLocalOrigins: deps.allowedLocalOrigins };
   const v = await verifyWebhookRegistration(input, opts);
   if (!v.ok) return fail(v.reason === 'signature' ? 401 : 400, v.message, v.reason);
   const subscriber = v.registration.subscriber;

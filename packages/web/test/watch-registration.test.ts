@@ -6,12 +6,12 @@ import { keccak256, toHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { webhookMessage } from '../lib/subs/core';
 import type { SubscriberStanding } from '../lib/subs/service';
-import { localOriginProblem, localOriginsFor, registerWithPolicy, type RegistrationDeps } from '../lib/watch/registration';
+import { localOriginsFor, registerWithPolicy, type RegistrationDeps } from '../lib/watch/registration';
 import { inboxNote } from '../lib/watch/words';
 
 /*
- * The web's policy around registerWebhook: an active subscription is required, at most N subscribers are stored
- * (an existing one may update), and a local URL is accepted only at this site's own origin.
+ * The web's policy around core's registerWebhook: an active subscription is required, at most N subscribers are
+ * stored (an existing one may update), and a local URL is accepted only at this site's own origin.
  */
 
 const NOW = 1_791_000_000;
@@ -103,15 +103,14 @@ describe('local webhooks', () => {
     expect(localOriginsFor('http://localhost:3418/api/v1/watch/webhooks', { SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS: '1' })).toEqual(['http://localhost:3418']);
     expect(localOriginsFor('http://localhost:3418/x', {})).toEqual([]);
     const allowed = ['http://localhost:3418'];
-    expect(localOriginProblem('http://localhost:3418/api/v1/watch/demo-hook', allowed)).toBeNull();
-    expect(localOriginProblem('http://localhost:9999/hook', allowed)).toMatch(/only at this site's own origin/);
-    expect(localOriginProblem('http://127.0.0.1:3418/hook', allowed)).toMatch(/only at this site's own origin/);
-    expect(localOriginProblem('https://hooks.example.com/x', allowed)).toBeNull();
     const file = path.join(dir, 'g.json');
     const d = deps(file, { state: 'active', ids: ['0'] }, { allowedLocalOrigins: allowed });
     expect((await registerWithPolicy(await reg(40, { url: 'http://localhost:3418/api/v1/watch/demo-hook' }), d)).status).toBe(200);
-    expect((await registerWithPolicy(await reg(41, { url: 'http://localhost:9999/hook' }), d)).status).toBe(400);
-    expect((await registerWithPolicy(await reg(42, { url: 'http://localhost:3418/hook' }), { ...d, allowedLocalOrigins: [] })).status).toBe(400);
+    const refused = { status: 400, body: { ok: false, reason: 'url', error: 'url not https' } };
+    expect(await registerWithPolicy(await reg(41, { url: 'http://localhost:9999/hook' }), d)).toEqual(refused);
+    expect(await registerWithPolicy(await reg(43, { url: 'http://127.0.0.1:3418/hook' }), d)).toEqual(refused);
+    expect(await registerWithPolicy(await reg(42, { url: 'http://localhost:3418/hook' }), { ...d, allowedLocalOrigins: [] })).toEqual(refused);
+    expect(Object.keys(JSON.parse(await readFile(file, 'utf8')).webhooks)).toEqual([key(40).address.toLowerCase()]);
   });
 });
 
