@@ -323,6 +323,55 @@ describe('AttestationRegistryClient.attest reads the id from the receipt (mocks,
     await expect(registry([attestedLog(DECOY, 7n)]).attest(params)).rejects.toThrow(/expected one Attested event from 0x5FbDB.* found 0/);
     await expect(registry([attestedLog(REGISTRY, 1n), attestedLog(REGISTRY, 2n)]).attest(params)).rejects.toThrow(/found 2/);
   });
+
+  it('onSent gets the hash and the nonce before the receipt is awaited; a given nonce is used as is', async () => {
+    const order: string[] = [];
+    const writeContract = vi.fn(async () => `0x${'ab'.repeat(32)}` as Hex);
+    const client = {
+      simulateContract: vi.fn(async () => ({ request: {}, result: 999n })),
+      estimateContractGas: vi.fn(async () => 100_000n),
+      getTransactionCount: vi.fn(async () => 12),
+      waitForTransactionReceipt: vi.fn(async () => {
+        order.push('receipt');
+        return { status: 'success', blockNumber: 5n, gasUsed: 21_000n, logs: [attestedLog(REGISTRY, 3n)] };
+      }),
+    };
+    const reg = new AttestationRegistryClient(REGISTRY, client as never, { account: { address: ISSUER }, writeContract } as never);
+    const sent: unknown[] = [];
+    await reg.attest(params, { onSent: (s) => void (sent.push(s), order.push('sent')) });
+    expect(sent).toEqual([{ hash: `0x${'ab'.repeat(32)}`, nonce: 12 }]);
+    expect(order).toEqual(['sent', 'receipt']);
+    expect(client.getTransactionCount).toHaveBeenCalledWith({ address: ISSUER, blockTag: 'pending' });
+    expect((writeContract.mock.calls[0] as unknown[])[0]).toMatchObject({ nonce: 12 });
+
+    await reg.attest(params, { nonce: 9, onSent: (s) => void sent.push(s) });
+    expect(sent.at(-1)).toEqual({ hash: `0x${'ab'.repeat(32)}`, nonce: 9 });
+    expect((writeContract.mock.calls[1] as unknown[])[0]).toMatchObject({ nonce: 9 });
+    expect(client.getTransactionCount).toHaveBeenCalledTimes(1);
+  });
+
+  it('attestTx: mined with the id from its receipt, reverted, pending, or unknown to the node', async () => {
+    const notFound = (name: string) => Object.assign(new Error(name), { name });
+    const lookup = (receipt: unknown, tx: unknown) =>
+      new AttestationRegistryClient(
+        REGISTRY,
+        {
+          getTransactionReceipt: vi.fn(async () => {
+            if (receipt instanceof Error) throw receipt;
+            return receipt;
+          }),
+          getTransaction: vi.fn(async () => {
+            if (tx instanceof Error) throw tx;
+            return tx;
+          }),
+        } as never,
+      ).attestTx(`0x${'ab'.repeat(32)}`);
+    expect(await lookup({ status: 'success', gasUsed: 10n, effectiveGasPrice: 3n, logs: [attestedLog(REGISTRY, 4n)] }, null)).toEqual({ state: 'mined', id: 4n, gasCostWei: 30n });
+    expect(await lookup({ status: 'reverted', gasUsed: 10n, effectiveGasPrice: 3n, logs: [] }, null)).toEqual({ state: 'reverted', gasCostWei: 30n });
+    expect(await lookup(notFound('TransactionReceiptNotFoundError'), { hash: '0x' })).toEqual({ state: 'pending' });
+    expect(await lookup(notFound('TransactionReceiptNotFoundError'), notFound('TransactionNotFoundError'))).toEqual({ state: 'unknown' });
+    await expect(lookup(Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' }), null)).rejects.toThrow(/fetch failed/);
+  });
 });
 
 describe('bundled CheckAttestationRegistry artifact', () => {

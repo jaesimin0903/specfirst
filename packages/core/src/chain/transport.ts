@@ -120,6 +120,18 @@ export function isNodeError(err: unknown): boolean {
   );
 }
 
+/**
+ * A JSON-RPC error answer in the server range: -32603 (internal error) or -32000 to -32099 (implementation
+ * defined, such as "header not found" or "resource unavailable"). It says the node could not serve the call,
+ * so the desk worker never counts it toward a reject; a revert reported with such a code ("execution
+ * reverted") is excluded, since it is the contract's answer.
+ */
+export function isRpcServerError(err: unknown): boolean {
+  return chain(err).some(
+    (e) => typeof e.code === 'number' && (e.code === -32603 || (e.code <= -32000 && e.code >= -32099)) && !/revert/i.test(`${e.message ?? ''} ${e.details ?? ''}`),
+  );
+}
+
 const CONTRACT_ANSWER_ERRORS = new Set([
   'ContractFunctionRevertedError',
   'ContractFunctionZeroDataError',

@@ -4,7 +4,9 @@ import { ATTESTATION_STATUS, type Attestation, type AttestationRegistryClient } 
 import {
   checkBlockOf,
   countsAsFailure,
+  errorNameOf,
   errorText,
+  isCheckTimeout,
   loadReportCopy,
   precheckErc4626,
   runSubjectCheck,
@@ -13,7 +15,7 @@ import {
   type SubjectCheckInput,
 } from '../attest/subjectCheck.js';
 import { verifySubjectCode, type SubjectClient, type SubjectCodeCheck } from '../attest/verify.js';
-import { StandardCheckTimeoutError, type StandardCheckClient } from '../standards/check.js';
+import type { StandardCheckClient } from '../standards/check.js';
 import { forkRpcErrorsOf, type StandardCheckReport } from '../standards/report.js';
 import { attestDecision, changeOf, outcomeOfReport, type AttestDecision, type CheckOutcome } from './decide.js';
 import { NO_ALERTS, NO_SUBSCRIPTIONS, type ActiveSubscription, type AlertSink, type SubscriptionSource } from './hooks.js';
@@ -856,24 +858,6 @@ export class Watcher {
       await this.feed([{ ...base, at: this.nowIso(), kind: 'error', reason: `alert delivery failed: ${errorText(err)}` }]);
     }
   }
-}
-
-/** The custom error name a registry revert carries (RegistryError.errorName or a decoded data.errorName). */
-function errorNameOf(err: unknown): string | undefined {
-  const seen = new Set<unknown>();
-  let cur: unknown = err;
-  while (cur && typeof cur === 'object' && !seen.has(cur)) {
-    seen.add(cur);
-    const e = cur as { errorName?: unknown; data?: { errorName?: unknown } };
-    if (typeof e.errorName === 'string' && e.errorName) return e.errorName;
-    if (e.data && typeof e.data === 'object' && typeof e.data.errorName === 'string') return e.data.errorName;
-    cur = (cur as { cause?: unknown }).cause;
-  }
-  return undefined;
-}
-
-function isCheckTimeout(err: unknown): boolean {
-  return err instanceof StandardCheckTimeoutError || (err as { name?: unknown })?.name === 'StandardCheckTimeoutError';
 }
 
 function feedCheckOf(report: StandardCheckReport, reportPath: string): FeedCheck {

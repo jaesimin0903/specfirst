@@ -77,6 +77,22 @@ export async function deployAttestationRegistry(i: {
   return { address, deployTx, issuer, issuerTx };
 }
 
+/**
+ * How attest sends: `nonce` reuses a nonce recorded earlier (a resend that can only replace the first
+ * transaction, never add a second attestation); `onSent` runs once the transaction is accepted, before its
+ * receipt is awaited, so the caller can record the hash and nonce first.
+ */
+export interface AttestSendOptions {
+  nonce?: number;
+  onSent?: (sent: { hash: Hex; nonce: number }) => void | Promise<void>;
+}
+
+export type AttestTxState =
+  | { state: 'mined'; id: bigint; gasCostWei: bigint }
+  | { state: 'reverted'; gasCostWei: bigint }
+  | { state: 'pending' }
+  | { state: 'unknown' };
+
 /** Thin client over CheckAttestationRegistry. Writes are simulated first so custom errors surface by name. */
 export class AttestationRegistryClient {
   constructor(
@@ -89,13 +105,20 @@ export class AttestationRegistryClient {
     return this.client.readContract({ address: this.address, abi: checkAttestationRegistryAbi, functionName, args } as never) as Promise<T>;
   }
 
-  private async write(functionName: 'attest' | 'revoke' | 'setIssuer', args: readonly unknown[]): Promise<TxOutcome & { receipt: TransactionReceipt }> {
+  private async write(
+    functionName: 'attest' | 'revoke' | 'setIssuer',
+    args: readonly unknown[],
+    send: AttestSendOptions = {},
+  ): Promise<TxOutcome & { receipt: TransactionReceipt }> {
     if (!this.wallet) throw new RegistryError(`${functionName} needs a wallet client`);
     const call = { address: this.address, abi: checkAttestationRegistryAbi, functionName, args, account: this.wallet.account } as never;
     try {
       const sim = await this.client.simulateContract(call);
       const gas = gasLimitFor(await this.client.estimateContractGas(call));
-      const hash = await this.wallet.writeContract({ ...(sim as { request: object }).request, gas } as never);
+      // The nonce is fixed here (viem would read the same pending count) so a caller can record it with the hash.
+      const nonce = send.nonce ?? (send.onSent ? await this.client.getTransactionCount({ address: this.wallet.account.address, blockTag: 'pending' }) : undefined);
+      const hash = await this.wallet.writeContract({ ...(sim as { request: object }).request, gas, ...(nonce !== undefined ? { nonce } : {}) } as never);
+      if (send.onSent) await send.onSent({ hash, nonce: nonce! });
       const receipt = await this.client.waitForTransactionReceipt({ hash });
       if (receipt.status !== 'success') throw new RegistryError(`${functionName} tx ${hash} reverted`);
       return { hash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed, receipt };
@@ -112,16 +135,44 @@ export class AttestationRegistryClient {
    * emitted. The simulation's return value is not used, since another attestation can land between the
    * simulation and the transaction.
    */
-  async attest(p: AttestParams): Promise<TxOutcome & { id: bigint; effectiveGasPrice: bigint }> {
-    const out = await this.write('attest', [p]);
+  async attest(p: AttestParams, send: AttestSendOptions = {}): Promise<TxOutcome & { id: bigint; effectiveGasPrice: bigint }> {
+    const out = await this.write('attest', [p], send);
+    return { hash: out.hash, blockNumber: out.blockNumber, gasUsed: out.gasUsed, id: this.attestedIdOf(out.hash, out.receipt), effectiveGasPrice: out.receipt.effectiveGasPrice ?? 0n };
+  }
+
+  private attestedIdOf(hash: Hex, receipt: Pick<TransactionReceipt, 'logs'>): bigint {
     const self = this.address.toLowerCase();
-    const events = parseEventLogs({ abi: checkAttestationRegistryAbi, eventName: 'Attested', logs: out.receipt.logs }).filter(
-      (l) => l.address.toLowerCase() === self,
-    );
+    const events = parseEventLogs({ abi: checkAttestationRegistryAbi, eventName: 'Attested', logs: receipt.logs }).filter((l) => l.address.toLowerCase() === self);
     if (events.length !== 1) {
-      throw new RegistryError(`attest tx ${out.hash}: expected one Attested event from ${this.address} in the receipt, found ${events.length}`);
+      throw new RegistryError(`attest tx ${hash}: expected one Attested event from ${this.address} in the receipt, found ${events.length}`);
     }
-    return { hash: out.hash, blockNumber: out.blockNumber, gasUsed: out.gasUsed, id: events[0]!.args.id, effectiveGasPrice: out.receipt.effectiveGasPrice ?? 0n };
+    return events[0]!.args.id;
+  }
+
+  /**
+   * Where an attest transaction sent earlier stands: mined (with the attestation id from its receipt), reverted,
+   * pending (the node knows it, no receipt yet) or unknown to the node (dropped, or replaced by another
+   * transaction with its nonce). RPC failures are thrown.
+   */
+  async attestTx(hash: Hex): Promise<AttestTxState> {
+    let receipt: TransactionReceipt | null = null;
+    try {
+      receipt = await this.client.getTransactionReceipt({ hash });
+    } catch (err) {
+      if ((err as { name?: string }).name !== 'TransactionReceiptNotFoundError') throw err;
+    }
+    if (receipt) {
+      const gasCostWei = receipt.gasUsed * (receipt.effectiveGasPrice ?? 0n);
+      if (receipt.status !== 'success') return { state: 'reverted', gasCostWei };
+      return { state: 'mined', id: this.attestedIdOf(hash, receipt), gasCostWei };
+    }
+    try {
+      await this.client.getTransaction({ hash });
+      return { state: 'pending' };
+    } catch (err) {
+      if ((err as { name?: string }).name !== 'TransactionNotFoundError') throw err;
+    }
+    return { state: 'unknown' };
   }
 
   async revoke(id: bigint, reasonHash: Hex): Promise<TxOutcome> {
