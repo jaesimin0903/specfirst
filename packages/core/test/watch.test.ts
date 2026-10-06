@@ -90,6 +90,7 @@ import {
   FakeRegistry,
   rangeError,
   harness,
+  UPGRADE_CANDIDATE_SOURCES,
   kinds,
   attestParams,
   cleanupHarnesses,
@@ -176,6 +177,21 @@ describe('watcher file schemas (docs/adr/0006 Interfaces)', () => {
 });
 
 describe('signal sources (docs/adr/0006 Signals)', () => {
+  it('unknown Upgraded and BeaconUpgraded emitters are not candidates by default, only Deposit emitters are', async () => {
+    expect(Object.fromEntries(GENERIC_SOURCES.map((s) => [s.name, s.candidates]))).toEqual({
+      'ERC-4626 Deposit': true,
+      'EIP-1967 Upgraded': false,
+      'EIP-1967 BeaconUpgraded': false,
+    });
+    const h = await harness();
+    for (let i = 0; i < 5; i++) h.chain.logs.push({ ...upgradedLog(addr(0x7000 + i), 1995n), logIndex: i });
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    await h.watcher().pass();
+    expect(await h.feed()).toEqual([]);
+    expect(h.store.state.probing).toEqual({});
+  });
+
   it('the built-in topics are the ADR table, computed from the event signatures', () => {
     const byName = Object.fromEntries([...MONAD_MAINNET_SOURCES, ...GENERIC_SOURCES].map((s) => [s.name, s.topic0]));
     expect(byName).toEqual({
@@ -815,7 +831,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     h.chain.logs.push(depositLog(X, 1995n), depositLog(X, 1996n));
     h.store.state.cursor = '1991';
     h.chain.head = 2010n;
-    const w = h.watcher();
+    const w = h.watcher({}, undefined, UPGRADE_CANDIDATE_SOURCES);
     await w.pass();
     expect(kinds(await h.feed())).toEqual(['detected:deposit', 'probe-rejected:deposit']);
     expect((await h.feed())[1]!.reason).toBe('asset() failed at block 2000: reverted');

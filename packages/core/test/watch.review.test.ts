@@ -35,6 +35,7 @@ import {
   EVK_FACTORY,
   factoryLog,
   harness,
+  UPGRADE_CANDIDATE_SOURCES,
   hash,
   kinds,
   reportOf,
@@ -83,7 +84,7 @@ describe('the reviewer repros, as regressions', { timeout: 60_000 }, () => {
     for (let i = 0; i < 50; i++) h.chain.logs.push({ ...upgradedLog(X, 1995n), logIndex: i });
     h.store.state.cursor = '1991';
     h.chain.head = 2010n;
-    const w = h.watcher();
+    const w = h.watcher({}, undefined, UPGRADE_CANDIDATE_SOURCES);
     await w.pass();
     expect(probes).toBe(1);
     expect(kinds(await h.feed())).toEqual(['detected:upgrade', 'probe-rejected:upgrade']);
@@ -855,11 +856,16 @@ describe('M1, M2 and L1 on the shared primitives', { timeout: 60_000 }, () => {
 
 describe('the re-review repros, as regressions', { timeout: 60_000 }, () => {
   /** V found through its factory and checked once (attested as factory) at block 2000. */
-  const known = async (h: Harness, config: Parameters<Harness['watcher']>[0] = {}, hooks?: Parameters<Harness['watcher']>[1]) => {
+  const known = async (
+    h: Harness,
+    config: Parameters<Harness['watcher']>[0] = {},
+    hooks?: Parameters<Harness['watcher']>[1],
+    sources?: Parameters<Harness['watcher']>[2],
+  ) => {
     h.chain.logs.push(factoryLog(V, 1995n));
     h.store.state.cursor = '1991';
     h.chain.head = 2010n;
-    const w = h.watcher(config, hooks);
+    const w = h.watcher(config, hooks, sources);
     await w.pass({ drain: true });
     return w;
   };
@@ -867,7 +873,7 @@ describe('the re-review repros, as regressions', { timeout: 60_000 }, () => {
 
   it('N1: a real upgrade of a known vault is checked even when unknown emitters use up the probes of the pass', async () => {
     const h = await harness();
-    const w = await known(h);
+    const w = await known(h, {}, undefined, UPGRADE_CANDIDATE_SOURCES);
     for (let i = 0; i < 25; i++) {
       const a = addr(0x9000 + i);
       h.chain.notVaults.add(a.toLowerCase());

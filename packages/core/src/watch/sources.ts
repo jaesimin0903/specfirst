@@ -84,11 +84,17 @@ export function sourceOf(spec: SourceSpec): WatchSource {
   return { name: spec.name, signal: spec.signal, address, topic0, event, vault: spec.vault, candidates: spec.candidates ?? true };
 }
 
-/** The signals every chain has: ERC-4626 Deposit and EIP-1967 Upgraded and BeaconUpgraded from any emitter. */
+/**
+ * The signals every chain has: ERC-4626 Deposit and EIP-1967 Upgraded and BeaconUpgraded from any emitter.
+ * Upgraded and BeaconUpgraded only re-check vaults the watcher already knows: every proxy emits one when it
+ * is constructed, and on Monad mainnet 3,597 distinct BeaconUpgraded emitters (wallet-style beacon proxies,
+ * none of them a vault) showed up in the first 86,000 blocks of a backfill on 2026-10-06. A vault behind a
+ * new proxy is still found by its factory or at its first Deposit.
+ */
 export const GENERIC_SOURCE_SPECS: readonly SourceSpec[] = [
   { name: 'ERC-4626 Deposit', signal: 'deposit', address: null, event: 'event Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares)', vault: null },
-  { name: 'EIP-1967 Upgraded', signal: 'upgrade', address: null, event: 'event Upgraded(address indexed implementation)', vault: null },
-  { name: 'EIP-1967 BeaconUpgraded', signal: 'beacon-upgrade', address: null, event: 'event BeaconUpgraded(address indexed beacon)', vault: null },
+  { name: 'EIP-1967 Upgraded', signal: 'upgrade', address: null, event: 'event Upgraded(address indexed implementation)', vault: null, candidates: false },
+  { name: 'EIP-1967 BeaconUpgraded', signal: 'beacon-upgrade', address: null, event: 'event BeaconUpgraded(address indexed beacon)', vault: null, candidates: false },
 ];
 
 /**

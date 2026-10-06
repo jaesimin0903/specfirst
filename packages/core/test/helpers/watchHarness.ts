@@ -64,6 +64,11 @@ export function signalLog(l: RecordedLog): SignalLog {
 
 export const source = (name: string): WatchSource => [...MONAD_MAINNET_SOURCES, ...GENERIC_SOURCES].find((s) => s.name === name)!;
 
+/** The built-in 143 list with unknown Upgraded and BeaconUpgraded emitters as candidates again (a sources file can ask for it). */
+export const UPGRADE_CANDIDATE_SOURCES: WatchSource[] = builtinSources(143).sources.map((s) =>
+  s.signal === 'upgrade' || s.signal === 'beacon-upgrade' ? { ...s, candidates: true } : s,
+);
+
 /** A CreateVaultV2 log of the Morpho V2 factory naming `vault`. */
 export function factoryLog(vault: Address, block: bigint, logIndex = 0): SignalLog {
   const s = source('Morpho VaultV2Factory');
