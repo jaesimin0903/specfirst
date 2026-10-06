@@ -100,6 +100,8 @@ describe.skipIf(SKIP_ANVIL)('CheckSubscriptions on anvil', { timeout: 120_000 },
     expect(await balance(TREASURY)).toBe(3n * FEE);
     expect(await balance(address)).toBe(0n);
     await expect(owner.withdraw(TREASURY)).rejects.toMatchObject({ errorName: 'NothingToWithdraw' });
+    await expect(owner.setFeePerDay(0n)).rejects.toMatchObject({ errorName: 'ZeroFee' });
+    await expect(alice.setFeePerDay(1n)).rejects.toMatchObject({ errorName: 'NotOwner' });
   });
 
   it('an extend after expiry starts a new run now; the gap is never charged', async () => {

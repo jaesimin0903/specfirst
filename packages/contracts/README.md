@@ -21,8 +21,8 @@ about one subject and the fee of each started day becomes earned (docs/adr/0006)
 | `test/CheckRequestDesk.t.sol` | Unit and fuzz tests: fee, ids from 0 and UnknownRequest, permissions, fulfill checks against the registry, reject and expiry refunds with the timeout boundary, withdraw never reaching escrow, refused transfers, reentrancy |
 | `test/CheckRequestDesk.invariant.t.sol` | Handler based invariants: balance == escrowed + earned - withdrawn, escrowed and earned equal the Pending and Fulfilled fees |
 | `src/CheckSubscriptions.sol` | Prepaid alert subscriptions: subscribe and extend (exact fee per day, escrowed), settle of started days, cancel with a refund of the days not started, withdraw of earned fees only |
-| `test/CheckSubscriptions.t.sol` | Unit and fuzz tests: exact value, 1 to 365 days, uint96 limits, ids from 0 and UnknownSubscription, day boundaries, extend of an active and of an expired subscription, cancel refunds, withdraw never reaching escrow, refused transfers, reentrancy |
-| `test/CheckSubscriptions.invariant.t.sol` | Handler based invariants: balance == escrowed + earned - withdrawn, escrowed and earned match the subscriptions, settled <= paid and <= the fee of the started days, earned, withdrawn and settled never go down |
+| `test/CheckSubscriptions.t.sol` | Unit and fuzz tests: exact value, 1 to 365 days, no fee of 0, uint96 limits, ids from 0 and UnknownSubscription, day boundaries, extend of an active and of an expired subscription, cancel refunds, withdraw never reaching escrow, refused transfers, reentrancy |
+| `test/CheckSubscriptions.invariant.t.sol` | Handler based invariants against the handler's own model of every subscription: balance == escrowed + earned - withdrawn, escrowed and earned match the subscriptions, paid and the run match the model, settled <= the fee of the model's started days, a cancel refunds exactly the rest, earned, withdrawn and settled never go down; adversarial calls (a coin-refusing subscriber, stranger cancels, wrong values, a fee of 0) fail as they must |
 | `lib/forge-std` | forge-std v1.16.2, vendored as plain files (no submodule) |
 
 ## Commands
@@ -130,13 +130,14 @@ across 4 targets and 3 projectIds):
 | Check | Result |
 |---|---|
 | `forge test --match-contract CheckSubscriptions` | 36 passed, 0 failed (31 unit, 2 fuzz with 256 runs, 3 invariant with 256 runs x 64 depth) |
-| `forge coverage --report summary` | `src/CheckSubscriptions.sol` lines 100% (96/96), statements 100% (121/121), branches 100% (23/23), functions 100% (19/19) |
+| `forge coverage --report summary` | `src/CheckSubscriptions.sol` lines 100% (98/98), statements 100% (125/125), branches 100% (25/25), functions 100% (19/19) |
 
 - Subscription ids are the zero based index of a global list; `subscriptionOf(id)` and `isActive(id)` revert
   with `UnknownSubscription(id)` for `id >= subscriptionCount()`. `subscribe` takes exactly `feePerDay * days_`
   for 1 to 365 days (`WrongValue`, `BadDays`) and refuses a zero subject, chain id or standardId. The
   subscription keeps its fee per day; `setFeePerDay` only changes new subscriptions, and `extend` charges the
-  subscription's own fee.
+  subscription's own fee. The fee is never 0 (`ZeroFee` in the constructor and `setFeePerDay`), or a subscription
+  made at that fee could be extended for free forever.
 - Days: a run is `[startsAt, endsAt)` in whole days of 86400 s, and a day that has started counts as used
   (at a day boundary the next day has started). `settle` (anyone) moves `paid - unstarted days * feePerDay -
   settled` into `earned`; `cancel` (subscriber only) settles, refunds the rest and ends the subscription.

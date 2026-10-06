@@ -125,7 +125,7 @@ export function registerSubsCommand(program: Command): void {
 
   group
     .command('deploy')
-    .description('Deploy CheckSubscriptions with DEPLOYER_PRIVATE_KEY as owner.')
+    .description('Deploy CheckSubscriptions with DEPLOYER_PRIVATE_KEY as owner. The fee per day must be above 0.')
     .option('--network <name>', 'monad-testnet or anvil (monad-mainnet is refused)', 'monad-testnet')
     .option('--rpc <url>', 'RPC URL (default: $MONAD_TESTNET_RPC or $ANVIL_RPC)')
     .option('--fee-per-day <MON>', 'fee per day of new subscriptions in MON, decimal', DEFAULT_FEE_PER_DAY_MON)
@@ -134,15 +134,12 @@ export function registerSubsCommand(program: Command): void {
       await runStage(ctx, 'subs deploy', SUBS_FAILED_EXIT_CODE, async () => {
         if (!/^\d+(\.\d{1,18})?$/.test(opts.feePerDay)) throw new ConfigError(`--fee-per-day must be a decimal amount of MON with at most 18 decimals, got "${opts.feePerDay}"`);
         const feePerDay = parseEther(opts.feePerDay);
+        // The contract refuses 0: a subscription made at a fee of 0 could be extended by anyone for free, forever.
+        if (feePerDay === 0n) throw new ConfigError('--fee-per-day must be above 0 (the contract refuses a fee of 0)');
         if (feePerDay * BigInt(MAX_SUBSCRIPTION_DAYS) > MAX_UINT96) throw new ConfigError(`--fee-per-day ${opts.feePerDay} MON for ${MAX_SUBSCRIPTION_DAYS} days does not fit uint96`);
         const net = resolveNetwork(opts);
         const ownerKey = resolveKey(net, DEPLOYER_KEY_ENV);
         for (const n of net.notices) printLine(ctx, `         ! ${n}`);
-        const warnings: string[] = [];
-        if (feePerDay === 0n) {
-          warnings.push('the fee per day is 0: subscriptions are free, and every subscribed subject costs the watcher re-checks');
-          console.error(pc.yellow(`specfirst subs deploy: warning: ${warnings[0]}`));
-        }
         const wallet = net.clients.wallet(ownerKey);
         const envName = subsEnvVar(net.clients.chain.id);
         let out;
@@ -165,7 +162,6 @@ export function registerSubsCommand(program: Command): void {
           blockNumber: out.tx.blockNumber.toString(),
           creationCodeKeccak: checkSubscriptionsCreationCodeHash,
           envName,
-          warnings,
         });
       });
     });

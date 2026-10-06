@@ -31,6 +31,8 @@ pragma solidity 0.8.28;
 ///      Subscription ids are the zero based index of a global list: valid ids are 0..subscriptionCount()-1.
 ///      A subscriber that refuses the native coin (a contract without a payable receive) cannot cancel with
 ///      a refund: cancel reverts with TransferFailed and the subscription runs to its end.
+///      feePerDay is never 0 (ZeroFee in the constructor and setFeePerDay): extend charges the subscription's
+///      own fee, so a subscription made at a fee of 0 could be extended by anyone for free, forever.
 ///      Roles: the owner is set at deployment and is immutable (no transfer, no renounce), as in
 ///      CheckRequestDesk; it sets the fee for new subscriptions and withdraws earned fees. If its key is
 ///      lost, the fee is frozen and earned fees stay locked; subscribers can still cancel.
@@ -68,6 +70,7 @@ contract CheckSubscriptions {
     error NotOwner();
     error NotSubscriber(uint256 id);
     error ZeroAddress();
+    error ZeroFee();
     error ZeroChainId();
     error EmptyStandardId();
     error BadDays(uint32 days_);
@@ -109,6 +112,7 @@ contract CheckSubscriptions {
 
     constructor(address owner_, uint96 feePerDay_) {
         if (owner_ == address(0)) revert ZeroAddress();
+        if (feePerDay_ == 0) revert ZeroFee();
         owner = owner_;
         feePerDay = feePerDay_;
         emit FeePerDaySet(feePerDay_);
@@ -203,8 +207,9 @@ contract CheckSubscriptions {
         _send(to, amount);
     }
 
-    /// @notice Fee per day for new subscriptions. Existing subscriptions keep theirs, extensions included.
+    /// @notice Fee per day for new subscriptions, above 0. Existing subscriptions keep theirs, extensions included.
     function setFeePerDay(uint96 feePerDay_) external onlyOwner {
+        if (feePerDay_ == 0) revert ZeroFee();
         feePerDay = feePerDay_;
         emit FeePerDaySet(feePerDay_);
     }

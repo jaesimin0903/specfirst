@@ -62,12 +62,12 @@ contract ReentrantSubscriber {
                 reentryError = err;
             }
         } else if (mode == Mode.SubscribeAgain) {
-            try subs.subscribe{value: 0}(143, address(0xBEEF), keccak256("erc4626"), 1) {}
+            try subs.subscribe{value: subs.feePerDay()}(143, address(0xBEEF), keccak256("erc4626"), 1) {}
             catch (bytes memory err) {
                 reentryError = err;
             }
         } else if (mode == Mode.ExtendOther) {
-            try subs.extend{value: 0}(otherId, 1) {}
+            try subs.extend{value: subs.subscriptionOf(otherId).feePerDay}(otherId, 1) {}
             catch (bytes memory err) {
                 reentryError = err;
             }
@@ -190,9 +190,11 @@ contract CheckSubscriptionsTest is Test {
         assertEq(s.escrowed(), 0);
     }
 
-    function test_constructor_rejectsAZeroOwner() public {
+    function test_constructor_rejectsAZeroOwnerAndAZeroFee() public {
         vm.expectRevert(CheckSubscriptions.ZeroAddress.selector);
         new CheckSubscriptions(address(0), FEE);
+        vm.expectRevert(CheckSubscriptions.ZeroFee.selector);
+        new CheckSubscriptions(owner, 0);
     }
 
     // ---------------------------------------------------------------- subscribe
@@ -266,25 +268,18 @@ contract CheckSubscriptionsTest is Test {
         vm.stopPrank();
     }
 
-    function test_subscribe_isFreeWhenTheFeeIsZero() public {
+    function test_feePerDay_isNeverZero_soNoSubscriptionCanBeExtendedForFree() public {
         vm.prank(owner);
+        vm.expectRevert(CheckSubscriptions.ZeroFee.selector);
         subs.setFeePerDay(0);
+        assertEq(subs.feePerDay(), FEE);
         vm.prank(subscriber);
-        vm.expectRevert(abi.encodeWithSelector(CheckSubscriptions.WrongValue.selector, 1, 0));
-        subs.subscribe{value: 1}(MAINNET, VAULT, ERC4626, 5);
-        uint256 id = _subscribe(5);
-        assertEq(_sub(id).paid, 0);
-        assertTrue(subs.isActive(id));
-        _extend(stranger, id, 2);
-        assertEq(_sub(id).endsAt, T0 + 7 * DAY);
-        // Settling and cancelling a free subscription move nothing and send nothing.
-        vm.recordLogs();
-        _settle(id);
-        assertEq(vm.getRecordedLogs().length, 0);
-        _cancel(id);
-        assertFalse(subs.isActive(id));
-        assertEq(subs.escrowed(), 0);
-        assertEq(subs.earned(), 0);
+        vm.expectRevert(abi.encodeWithSelector(CheckSubscriptions.WrongValue.selector, 0, FEE));
+        subs.subscribe(MAINNET, VAULT, ERC4626, 1);
+        uint256 id = _subscribe(1);
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(CheckSubscriptions.WrongValue.selector, 0, 365 * FEE));
+        subs.extend(id, 365);
     }
 
     function test_subscribe_paidMustFitUint96() public {
@@ -302,7 +297,7 @@ contract CheckSubscriptionsTest is Test {
 
     function testFuzz_subscribe_acceptsOnlyFeeTimesDays(uint96 fee, uint32 days_, uint256 sent) public {
         days_ = uint32(bound(days_, 1, 365));
-        fee = uint96(bound(fee, 0, type(uint96).max / 365));
+        fee = uint96(bound(fee, 1, type(uint96).max / 365));
         uint256 cost = uint256(fee) * days_;
         sent = bound(sent, 0, 2 * cost + 1);
         vm.prank(owner);
@@ -720,19 +715,15 @@ contract CheckSubscriptionsTest is Test {
             ids[i] = r.subscribe{value: 5 * FEE}(5);
         }
         uint256 other = r.subscribe{value: 5 * FEE}(5);
-        // A free subscription, so the nested subscribe and extend would pass their value checks.
-        vm.prank(owner);
-        subs.setFeePerDay(0);
-        uint256 free = r.subscribe(1);
+        // Each nested call pays its exact fee out of the refund being received, so only the lock refuses it.
         ReentrantSubscriber.Mode[4] memory modes = [
             ReentrantSubscriber.Mode.CancelOther,
             ReentrantSubscriber.Mode.SubscribeAgain,
             ReentrantSubscriber.Mode.SettleOther,
             ReentrantSubscriber.Mode.ExtendOther
         ];
-        uint256[4] memory targets = [other, 0, other, free];
         for (uint256 i; i < 4; ++i) {
-            r.arm(modes[i], targets[i]);
+            r.arm(modes[i], other);
             r.cancel(ids[i]);
             assertEq(r.reentryError(), abi.encodeWithSelector(CheckSubscriptions.Reentrancy.selector));
             assertTrue(_sub(ids[i]).cancelled);
@@ -742,14 +733,15 @@ contract CheckSubscriptionsTest is Test {
         // None of the nested calls changed anything, though each succeeds on its own.
         assertFalse(_sub(other).cancelled);
         assertEq(_sub(other).settled, 0);
-        assertEq(_sub(free).endsAt, T0 + DAY);
-        assertEq(subs.subscriptionCount(), 6);
+        assertEq(_sub(other).endsAt, T0 + 5 * DAY);
+        assertEq(subs.subscriptionCount(), 5);
+        vm.deal(address(r), FEE);
         vm.prank(address(r));
-        subs.extend(free, 1);
-        assertEq(_sub(free).endsAt, T0 + 2 * DAY);
+        subs.extend{value: FEE}(other, 1);
+        assertEq(_sub(other).endsAt, T0 + 6 * DAY);
         _settle(other);
         assertEq(_sub(other).settled, FEE);
-        assertEq(subs.escrowed(), 4 * FEE);
+        assertEq(subs.escrowed(), 5 * FEE);
         _assertBooks();
     }
 

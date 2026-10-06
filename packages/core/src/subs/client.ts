@@ -85,7 +85,7 @@ export interface DeploySubscriptionsInput {
   client: SpecfirstPublicClient;
   wallet: SpecfirstWalletClient;
   owner: Address;
-  /** Fee per day in wei; must fit uint96. */
+  /** Fee per day in wei: above 0 (the contract refuses 0 with ZeroFee) and within uint96. */
   feePerDay: bigint;
 }
 
@@ -96,7 +96,7 @@ const MAX_UINT96 = 2n ** 96n - 1n;
  * createChainClients apply; no forge --broadcast). One transaction: the constructor sets owner and feePerDay.
  */
 export async function deploySubscriptions(i: DeploySubscriptionsInput): Promise<{ address: Address; tx: SubsTx }> {
-  if (i.feePerDay < 0n || i.feePerDay > MAX_UINT96) throw new SubscriptionsError(`feePerDay ${i.feePerDay} wei does not fit uint96`);
+  if (i.feePerDay <= 0n || i.feePerDay > MAX_UINT96) throw new SubscriptionsError(`feePerDay ${i.feePerDay} wei must be above 0 and fit uint96`, i.feePerDay === 0n ? 'ZeroFee' : undefined);
   const data = encodeDeployData({ abi: checkSubscriptionsAbi, bytecode: checkSubscriptionsBytecode, args: [i.owner, i.feePerDay] });
   let gas: bigint;
   try {

@@ -80,18 +80,20 @@ describe.skipIf(SKIP_ANVIL)('specfirst subs on anvil', { timeout: 300_000 }, () 
     }
   });
 
-  it('deploys with DEPLOYER_PRIVATE_KEY as owner and 0.05 MON per day by default', async () => {
+  it('deploys with DEPLOYER_PRIVATE_KEY as owner and 0.05 MON per day by default; refuses a fee of 0', async () => {
     expect((await cli('subs', 'deploy', '--network', 'anvil', '--fee-per-day', 'x')).err).toMatch(/--fee-per-day must be a decimal amount of MON/);
     const r = await cli('subs', 'deploy', '--network', 'anvil');
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
     const d = event(r, 'subs-deployed');
-    expect(d).toMatchObject({ chainId: 31337, owner: DEPLOYER, feePerDay: FEE.toString(), envName: 'SPECFIRST_SUBS_31337', creationCodeKeccak: keccak256(checkSubscriptionsBytecode), warnings: [] });
+    expect(d).toMatchObject({ chainId: 31337, owner: DEPLOYER, feePerDay: FEE.toString(), envName: 'SPECFIRST_SUBS_31337', creationCodeKeccak: keccak256(checkSubscriptionsBytecode) });
     subs = d.address as Address;
     expect(await client().summary()).toMatchObject({ owner: DEPLOYER, feePerDay: FEE, subscriptionCount: 0n });
-    const free = await cli('subs', 'deploy', '--network', 'anvil', '--fee-per-day', '0');
-    expect(free.code).toBe(0);
-    expect(free.err).toMatch(/warning: the fee per day is 0/);
+    for (const fee of ['0', '0.0']) {
+      const free = await cli('subs', 'deploy', '--network', 'anvil', '--fee-per-day', fee);
+      expect(free.code).toBe(19);
+      expect(free.err).toMatch(/--fee-per-day must be above 0/);
+    }
   });
 
   it('subscribe and extend pay from REQUESTER_PRIVATE_KEY and refuse to run without it', async () => {
