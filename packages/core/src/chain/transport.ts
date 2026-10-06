@@ -142,9 +142,15 @@ const CONTRACT_ANSWER_ERRORS = new Set([
 
 /**
  * True when a read failed because of what the contract returned (a revert, no data, data that does not
- * decode), not because of the RPC or the node.
+ * decode), not because of the RPC or the node. viem 2 files a JSON-RPC -32603 under
+ * ContractFunctionRevertedError whatever its message, so rpc1's "Error getting block by number" arrives
+ * looking like a revert: an error whose chain holds a transport failure, a rate limit or a node error is
+ * never the contract's answer, unless viem recognized the node's message as a revert (ExecutionRevertedError,
+ * as for "execution reverted" sent with -32603).
  */
 export function isContractAnswer(err: unknown): boolean {
+  if (isTransportFailure(err) || isRateLimited(err)) return false;
+  if (isNodeError(err) && !chain(err).some((e) => e.name === 'ExecutionRevertedError')) return false;
   const seen = new Set<unknown>();
   let cur: unknown = err;
   while (cur && typeof cur === 'object' && !seen.has(cur)) {

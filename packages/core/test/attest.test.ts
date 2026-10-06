@@ -350,6 +350,27 @@ describe('AttestationRegistryClient.attest reads the id from the receipt (mocks,
     expect(client.getTransactionCount).toHaveBeenCalledTimes(1);
   });
 
+  it('sendAttest returns the hash and nonce without waiting; waitAttest reads the id; hasPendingTransactions compares counts', async () => {
+    const counts: Record<string, number> = { pending: 13, latest: 12 };
+    const client = {
+      simulateContract: vi.fn(async () => ({ request: {}, result: 999n })),
+      estimateContractGas: vi.fn(async () => 100_000n),
+      getTransactionCount: vi.fn(async ({ blockTag }: { blockTag: string }) => counts[blockTag]),
+      waitForTransactionReceipt: vi.fn(async () => ({ status: 'success', blockNumber: 5n, gasUsed: 21_000n, effectiveGasPrice: 2n, logs: [attestedLog(REGISTRY, 6n)] })),
+    };
+    const reg = new AttestationRegistryClient(REGISTRY, client as never, { account: { address: ISSUER }, writeContract: vi.fn(async () => `0x${'cd'.repeat(32)}` as Hex) } as never);
+    expect(await reg.sendAttest(params)).toEqual({ hash: `0x${'cd'.repeat(32)}`, nonce: 13 });
+    expect(await reg.sendAttest(params, { nonce: 4 })).toEqual({ hash: `0x${'cd'.repeat(32)}`, nonce: 4 });
+    expect(client.waitForTransactionReceipt).not.toHaveBeenCalled();
+    expect(await reg.waitAttest(`0x${'cd'.repeat(32)}`)).toEqual({ hash: `0x${'cd'.repeat(32)}`, blockNumber: 5n, gasUsed: 21_000n, id: 6n, effectiveGasPrice: 2n });
+    expect(await reg.hasPendingTransactions()).toBe(true);
+    counts.pending = 12;
+    expect(await reg.hasPendingTransactions(DECOY)).toBe(false);
+    expect(client.getTransactionCount).toHaveBeenLastCalledWith({ address: DECOY, blockTag: 'latest' });
+    client.waitForTransactionReceipt.mockResolvedValueOnce({ status: 'reverted', blockNumber: 5n, gasUsed: 21_000n, effectiveGasPrice: 2n, logs: [] });
+    await expect(reg.waitAttest(`0x${'cd'.repeat(32)}`)).rejects.toThrow(/attest tx 0xcdcd.* reverted/);
+  });
+
   it('attestTx: mined with the id from its receipt, reverted, pending, or unknown to the node', async () => {
     const notFound = (name: string) => Object.assign(new Error(name), { name });
     const lookup = (receipt: unknown, tx: unknown) =>

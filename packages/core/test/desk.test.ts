@@ -1,10 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { encodeAbiParameters, encodeEventTopics, getAddress, type Address, type Hex } from 'viem';
+import { createPublicClient, encodeAbiParameters, encodeEventTopics, getAddress, http, type Address, type Hex } from 'viem';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   acquireWorkerLock,
@@ -238,6 +240,50 @@ describe('precheckErc4626 (mock client)', () => {
     await expect(precheckErc4626(client({ code: '0x60', asset: node }) as never, VAULT, 7n)).rejects.toThrow(/missing trie node/);
     expect(isContractAnswer(node)).toBe(false);
     expect(isContractAnswer(reverted())).toBe(true);
+  });
+
+  it('real viem errors from a JSON-RPC stub: -32603 from the node is thrown, a revert (also sent as -32603) is not a vault', async () => {
+    // eth_getCode answers code; eth_call answers `error`. viem 2 files every -32603 under ContractFunctionRevertedError.
+    const stub = async (error: { code: number; message: string; data?: Hex }, run: (url: string) => Promise<void>) => {
+      const server = createServer((req, res) => {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          const { id, method } = JSON.parse(body) as { id: number; method: string };
+          const answer = method === 'eth_call' ? { error } : { result: method === 'eth_getCode' ? '0x6001' : '0x8f' };
+          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id, ...answer }));
+        });
+      });
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+      try {
+        await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+      } finally {
+        await new Promise((r) => server.close(r));
+      }
+    };
+    const viemClient = (url: string) => createPublicClient({ transport: http(url, { retryCount: 0 }) });
+    const nameChain = (e: unknown) => {
+      const names: string[] = [];
+      for (let c = e as { name?: string; cause?: unknown } | undefined; c && typeof c === 'object'; c = c.cause as typeof c) names.push(String(c.name));
+      return names;
+    };
+
+    await stub({ code: -32603, message: 'Error getting block by number' }, async (url) => {
+      const err = await precheckErc4626(viemClient(url), VAULT, 7n).then(() => null, (e: unknown) => e);
+      expect(err).not.toBeNull();
+      expect(nameChain(err).slice(0, 4)).toEqual(['ContractFunctionExecutionError', 'ContractFunctionRevertedError', 'CallExecutionError', 'InternalRpcError']);
+      expect(isContractAnswer(err)).toBe(false);
+      expect(isSubjectRpcFailure(err)).toBe(true);
+    });
+    for (const code of [-32603, 3]) {
+      await stub({ code, message: 'execution reverted', data: '0x' }, async (url) => {
+        const out = await precheckErc4626(viemClient(url), VAULT, 7n);
+        expect(out).toMatchObject({ ok: false, reason: /^asset\(\) failed at block 7: / });
+      });
+    }
+    await stub({ code: -32000, message: 'header not found' }, async (url) => {
+      await expect(precheckErc4626(viemClient(url), VAULT, 7n)).rejects.toThrow(/header not found/);
+    });
   });
 
   it('throws transport failures and rate limits so the worker retries', async () => {
