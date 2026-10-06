@@ -27,6 +27,7 @@ import {
   type StandardCheckReport,
   type WatchConfig,
   type WatchEffects,
+  type WatchAttestTxStatus,
   type WatchEvent,
   type WatcherInput,
   type WatchSource,
@@ -114,25 +115,33 @@ export function reportOf(
   );
 }
 
-/** Registry stand-in with the rules the watcher relies on: latest per subject, supersede, OlderThanLatest. */
+type FakeTx = { params: AttestParams; nonce: number; state: 'pending' | 'mined' | 'reverted' | 'dropped'; id?: bigint };
+
+/**
+ * Registry stand-in with the rules the watcher relies on: latest per subject, supersede, OlderThanLatest. A
+ * send is mined at once unless `hold` keeps it pending; `mine` and `drop` settle a held one later.
+ */
 export class FakeRegistry {
   readonly list: Array<{ subject: Address; attestation: Attestation }> = [];
   failNext: Error | null = null;
   /** Runs at the start of the next attest: another issuer acting between the watcher's read and its send. */
   beforeAttest: ((p: AttestParams) => void) | null = null;
+  /** The next send stays pending: its receipt does not come until mine(). */
+  hold = false;
+  /** The next wait throws although its transaction was mined: a receipt lost on the way. */
+  loseReceipt = false;
+  readonly txs = new Map<Hex, FakeTx>();
+  readonly sends: Array<{ hash: Hex; nonce: number }> = [];
+  /** The issuer's mined transaction count. */
+  minedNonce = 0;
 
   latest(subject: Address): { id: bigint; attestation: Attestation } | null {
     for (let i = this.list.length - 1; i >= 0; i--) if (this.list[i]!.subject.toLowerCase() === subject.toLowerCase()) return { id: BigInt(i), attestation: this.list[i]!.attestation };
     return null;
   }
 
+  /** The contract's attest: another issuer's when a test calls it directly. */
   attest(p: AttestParams): { id: bigint; hash: Hex; gasCostWei: bigint } {
-    this.beforeAttest?.(p);
-    if (this.failNext) {
-      const err = this.failNext;
-      this.failNext = null;
-      throw err;
-    }
     const prev = this.latest(p.subject);
     if (prev && prev.attestation.status === 1) {
       if (p.blockNumber < prev.attestation.blockNumber) throw Object.assign(new Error('OlderThanLatest reverted'), { errorName: 'OlderThanLatest' });
@@ -151,6 +160,71 @@ export class FakeRegistry {
       } as Attestation,
     });
     return { id, hash: hash(0x7000 + Number(id)), gasCostWei: 1n };
+  }
+
+  /** sendAttest: the simulation (failNext, OlderThanLatest) throws before anything is sent. */
+  send(p: AttestParams, opts: { nonce?: number } = {}): { hash: Hex; nonce: number } {
+    this.beforeAttest?.(p);
+    if (this.failNext) {
+      const err = this.failNext;
+      this.failNext = null;
+      throw err;
+    }
+    const prev = this.latest(p.subject);
+    if (prev && prev.attestation.status === 1 && p.blockNumber < prev.attestation.blockNumber) throw Object.assign(new Error('OlderThanLatest reverted'), { errorName: 'OlderThanLatest' });
+    const nonce = opts.nonce ?? this.minedNonce + [...this.txs.values()].filter((t) => t.state === 'pending').length;
+    const h = hash(0x7000 + this.list.length + this.sends.length - this.minedSends());
+    this.sends.push({ hash: h, nonce });
+    this.txs.set(h, { params: p, nonce, state: 'pending' });
+    if (this.hold) this.hold = false;
+    else this.mine(h);
+    return { hash: h, nonce };
+  }
+
+  private minedSends(): number {
+    return [...this.txs.values()].filter((t) => t.state === 'mined').length;
+  }
+
+  /** Mines a pending send; it reverts when a later attestation landed meanwhile. */
+  mine(h: Hex): void {
+    const tx = this.txs.get(h)!;
+    this.minedNonce = Math.max(this.minedNonce, tx.nonce + 1);
+    try {
+      tx.id = this.attest(tx.params).id;
+      tx.state = 'mined';
+    } catch {
+      tx.state = 'reverted';
+    }
+  }
+
+  /** The node forgets a pending send; `nonceUsed` says another transaction took its nonce. */
+  drop(h: Hex, nonceUsed = false): void {
+    const tx = this.txs.get(h)!;
+    tx.state = 'dropped';
+    if (nonceUsed) this.minedNonce = Math.max(this.minedNonce, tx.nonce + 1);
+  }
+
+  wait(h: Hex): { id: bigint; gasCostWei: bigint } {
+    const tx = this.txs.get(h);
+    if (this.loseReceipt) {
+      this.loseReceipt = false;
+      throw Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' });
+    }
+    if (tx?.state === 'mined') return { id: tx.id!, gasCostWei: 1n };
+    if (tx?.state === 'reverted') throw Object.assign(new Error(`attest tx ${h} reverted`), { name: 'RegistryError' });
+    throw Object.assign(new Error(`Timed out while waiting for transaction with hash "${h}" to be confirmed.`), { name: 'WaitForTransactionReceiptTimeoutError' });
+  }
+
+  status(sent: { hash: Hex; nonce: number }): WatchAttestTxStatus {
+    const tx = this.txs.get(sent.hash);
+    if (tx?.state === 'mined') return { state: 'mined', id: tx.id!, gasCostWei: 1n };
+    if (tx?.state === 'reverted') return { state: 'reverted', gasCostWei: 1n };
+    if (tx?.state === 'pending') return { state: 'pending' };
+    return { state: 'dropped', nonceUsed: this.minedNonce > sent.nonce };
+  }
+
+  hasPending(): boolean {
+    return [...this.txs.values()].some((t) => t.state === 'pending');
   }
 }
 
@@ -298,7 +372,12 @@ export async function harness(): Promise<Harness> {
     reportURIOf: (p) => `https://example.org/checks/${p.replace(/^certs\/checks\//, '')}`,
     verifySubject: async (report) => ({ chainId: 143, blockNumber: BigInt(report.blockNumber), codeHash: report.identity.codeHash as Hex, identity: report.identity as never, unknownProxy: false }),
     latestAttestation: async (subject) => registry.latest(subject),
-    attest: async (params) => registry.attest(params),
+    attest: {
+      send: async (params, opts) => registry.send(params, opts),
+      wait: async (h) => registry.wait(h),
+      status: async (sent) => registry.status(sent),
+      hasPending: async () => registry.hasPending(),
+    },
     balance: async () => chain.balance,
     now: () => clock.now,
   };

@@ -470,7 +470,12 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             reportBaseUrl: base,
             registry,
             attest: opts.attest,
-            ...(issuer && net.clients ? { balance: () => net.clients.publicClient.getBalance({ address: issuer as Address }) } : {}),
+            ...(issuer && net.clients
+              ? {
+                  balance: () => net.clients.publicClient.getBalance({ address: issuer as Address }),
+                  issuerNonce: () => net.clients.publicClient.getTransactionCount({ address: issuer as Address, blockTag: 'latest' }),
+                }
+              : {}),
             ...(deps.runCheck ? { runCheck: deps.runCheck } : {}),
             onCheckEvent: (e) => emitEvent(ctx, e),
           });

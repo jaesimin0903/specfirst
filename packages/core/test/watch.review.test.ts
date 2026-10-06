@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { getAddress, type Address, type Hex } from 'viem';
+import { createPublicClient, getAddress, http, type Address, type Hex } from 'viem';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   acquireIssuerLock,
@@ -13,6 +13,7 @@ import {
   checkReportHash,
   liveWatchEffects,
   LogsNodeBehindError,
+  precheckErc4626,
   seedKnownVaults,
   sourcesFromFile,
   watchFuzzSeedOf,
@@ -23,6 +24,7 @@ import {
 } from '../src/index.js';
 import {
   addr,
+  attestParams,
   cleanupHarnesses,
   depositLog,
   ERC4626,
@@ -124,9 +126,12 @@ describe('the reviewer repros, as regressions', { timeout: 60_000 }, () => {
     h.store.state.cursor = '1991';
     h.chain.head = 2010n;
     let sends = 0;
-    h.effects.attest = async () => {
-      sends++;
-      throw Object.assign(new Error('attest failed: The total cost (gas * gas fee + value) of executing this transaction exceeds the balance of the account.'), { name: 'RegistryError' });
+    h.effects.attest = {
+      ...h.effects.attest!,
+      send: async () => {
+        sends++;
+        throw Object.assign(new Error('attest failed: The total cost (gas * gas fee + value) of executing this transaction exceeds the balance of the account.'), { name: 'RegistryError' });
+      },
     };
     const w = h.watcher();
     await w.pass({ drain: true });
@@ -141,32 +146,32 @@ describe('the reviewer repros, as regressions', { timeout: 60_000 }, () => {
     expect(h.store.state.deferred[V.toLowerCase()]).toMatchObject({ failures: 3, notBefore: '2026-10-06T12:07:00.000Z' });
   });
 
-  it('R4 (H3): a receipt lost while the transaction is still pending is not sent again; the registry decides once it lands', async () => {
+  it('R4 (H3, M1): a receipt that does not come is not sent again; the transaction is looked up, and counted once it is mined', async () => {
     const h = await harness();
     h.chain.logs.push(factoryLog(V, 1995n));
     h.store.state.cursor = '1991';
     h.chain.head = 2010n;
-    const real = h.effects.attest!;
-    let pending: Parameters<typeof real>[0] | null = null;
-    let calls = 0;
-    h.effects.attest = async (p) => {
-      calls++;
-      if (calls === 1) {
-        pending = p;
-        throw Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' });
-      }
-      return real(p);
-    };
+    h.registry.hold = true;
     const w = h.watcher();
     await w.pass({ drain: true });
+    const sent = h.registry.sends[0]!;
+    expect(h.store.state.attesting[V.toLowerCase()]).toMatchObject({ hash: sent.hash, nonce: 0, cls: 'factory', block: '2000', supersedes: null });
+    let feed = await h.feed();
+    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'error:factory', 'changed:factory']);
+    expect(feed[3]!.reason).toMatch(new RegExp(`^attest tx ${sent.hash} was sent, its receipt is looked up in the next pass: Timed out`));
     await w.pass();
-    expect(calls).toBe(1);
-    await real(pending!);
     later(h, 60_000);
     await w.pass();
-    expect(calls).toBe(1);
-    expect(h.registry.list.filter((x) => x.subject === V)).toHaveLength(1);
-    expect(h.store.state.deferred).toEqual({});
+    expect(h.registry.sends).toHaveLength(1);
+    expect(h.store.state.attestDay.used).toBe(0);
+    h.registry.mine(sent.hash);
+    await w.pass();
+    feed = await h.feed();
+    expect(feed.at(-1)).toMatchObject({ kind: 'attested', subject: V, reason: '[factory]; its receipt was found in a later pass', attestation: { id: '0', txHash: sent.hash, supersedes: null } });
+    expect(h.registry.sends).toHaveLength(1);
+    expect(h.store.state.attesting).toEqual({});
+    expect(h.store.state.attestDay).toMatchObject({ used: 1, unsolicited: 1 });
+    expect(h.store.state.gasCostWei).toBe('1');
   });
 
   it('R5 (L2): rejections older than the retry window are pruned', async () => {
@@ -608,5 +613,178 @@ describe('M3 to M6, L1 to L8', { timeout: 60_000 }, () => {
     await release();
     const again = await acquireIssuerLock(V, { dir: lockDirPath, pid: 222, isAlive: () => true });
     await again();
+  });
+});
+
+describe('M1, M2 and L1 on the shared primitives', { timeout: 60_000 }, () => {
+  it('M2: a probe the node answers with -32603 "Error getting block by number" is probed again, not rejected', async () => {
+    let served = false;
+    const server: Server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (c: Buffer) => (body += c.toString('utf8')));
+      req.on('end', () => {
+        const { id, method } = JSON.parse(body) as { id: number; method: string };
+        const answer =
+          method === 'eth_call' && !served
+            ? { error: { code: -32603, message: 'Error getting block by number' } }
+            : { result: method === 'eth_getCode' ? '0x6001' : `0x${'0a55e7'.padStart(64, '0')}` };
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id, ...answer }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const h = await harness();
+      const client = createPublicClient({ transport: http(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { retryCount: 0 }) });
+      h.effects.precheck = (subject, block) => precheckErc4626(client, subject, block);
+      h.chain.logs.push(factoryLog(V, 1995n));
+      h.store.state.cursor = '1991';
+      h.chain.head = 2010n;
+      const w = h.watcher();
+      await w.pass();
+      const feed = await h.feed();
+      expect(kinds(feed)).toEqual(['detected:factory', 'error:factory']);
+      expect(feed[1]!.reason).toMatch(/^probe failed \(attempt 1\), not a verdict, probing again from 2026-10-06T12:05:00\.000Z: /);
+      expect(h.store.state.rejected).toEqual({});
+      expect(h.store.state.probing[V.toLowerCase()]).toMatchObject({ failures: 1 });
+      served = true;
+      later(h, 5 * 60_000);
+      await w.pass();
+      expect(h.store.state.probing).toEqual({});
+      expect(kinds((await h.feed()).slice(2, 4))).toEqual(['queued:factory', 'checked:factory']);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('L1: an attestation mined although its receipt errored is found in the next pass and counted against the budgets and the gas', async () => {
+    const h = await harness();
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    h.registry.loseReceipt = true;
+    const w = h.watcher();
+    await w.pass({ drain: true });
+    expect(h.registry.list).toHaveLength(1);
+    expect(h.store.state.attestDay.used).toBe(0);
+    await w.pass();
+    expect(h.registry.sends).toHaveLength(1);
+    expect(h.store.state.attestDay).toMatchObject({ used: 1, unsolicited: 1 });
+    expect(h.store.state.perSubject[V.toLowerCase()]).toMatchObject({ used: 1 });
+    expect(h.store.state.gasCostWei).toBe('1');
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastAttestationId).toBe('0');
+    expect((await h.feed()).filter((e) => e.kind === 'attested')).toHaveLength(1);
+  });
+
+  it('M1: a watcher stopped while it waited for the receipt finds the transaction in state.json at restart and sends nothing new', async () => {
+    const h = await harness();
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    h.registry.hold = true;
+    // The first watcher never gets its receipt: the process is gone while it waits.
+    const attester = h.effects.attest!;
+    let waiting!: () => void;
+    const waited = new Promise<void>((r) => (waiting = r));
+    h.effects.attest = {
+      ...attester,
+      wait: () => {
+        waiting();
+        return new Promise<never>(() => {});
+      },
+    };
+    void h.watcher().pass({ drain: true });
+    await waited;
+    const sent = h.registry.sends[0]!;
+    h.registry.mine(sent.hash);
+    await h.reload();
+    expect(h.store.state.attesting[V.toLowerCase()]).toMatchObject({ hash: sent.hash, nonce: 0 });
+    h.effects.attest = attester;
+    await h.watcher().pass({ drain: true });
+    expect(h.registry.sends).toHaveLength(1);
+    expect(h.registry.list).toHaveLength(1);
+    const attested = (await h.feed()).filter((e) => e.kind === 'attested');
+    expect(attested).toEqual([expect.objectContaining({ subject: V, attestation: { id: '0', txHash: sent.hash, supersedes: null } })]);
+    expect(h.store.state.attesting).toEqual({});
+  });
+
+  it('M1: a dropped transaction is sent again with its nonce while that nonce is unused, with a new one once another transaction used it', async () => {
+    const h = await harness();
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    h.registry.hold = true;
+    const w = h.watcher();
+    await w.pass({ drain: true });
+    h.registry.drop(h.registry.sends[0]!.hash);
+    await w.pass();
+    expect(h.registry.sends.map((x) => x.nonce)).toEqual([0, 0]);
+    expect(h.registry.list.map((a) => a.subject)).toEqual([V]);
+
+    h.chain.logs.push(factoryLog(W, 2005n));
+    h.chain.head = 2020n;
+    h.registry.hold = true;
+    await w.pass({ drain: true });
+    expect(h.registry.sends[2]!.nonce).toBe(1);
+    h.registry.drop(h.registry.sends[2]!.hash, true);
+    await w.pass();
+    expect(h.registry.sends.map((x) => x.nonce)).toEqual([0, 0, 1, 2]);
+    expect(h.registry.list.map((a) => a.subject)).toEqual([V, W]);
+    const attested = (await h.feed()).filter((e) => e.kind === 'attested');
+    expect(attested.map((e) => e.attestation!.txHash)).toEqual([h.registry.sends[1]!.hash, h.registry.sends[3]!.hash]);
+    expect(h.store.state.attestDay.used).toBe(2);
+  });
+
+  it('M1: nothing is sent while the issuer has pending transactions on the node or the watcher has one unresolved', async () => {
+    const h = await harness();
+    let pendingOnNode = true;
+    h.effects.attest = { ...h.effects.attest!, hasPending: async () => pendingOnNode || h.registry.hasPending() };
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    const w = h.watcher();
+    await w.pass({ drain: true });
+    expect(h.registry.sends).toHaveLength(0);
+    expect((await h.feed()).find((e) => e.kind === 'checked')!.reason).toMatch(/^attestation deferred \[factory\]: the issuer has transactions the node has not mined; /);
+    pendingOnNode = false;
+    later(h, 60_000);
+    h.registry.hold = true;
+    h.chain.logs.push(factoryLog(W, 2005n));
+    h.chain.head = 2020n;
+    await w.pass({ drain: true });
+    // V's deferred attestation went out and waits for its receipt; W's waits behind it.
+    expect(h.registry.sends).toHaveLength(1);
+    const v = h.registry.sends[0]!;
+    expect((await h.feed()).filter((e) => e.kind === 'checked' && e.subject === W)[0]!.reason).toMatch(
+      new RegExp(`^attestation deferred \\[factory\\]: attest tx ${v.hash} sent earlier is not mined yet; `),
+    );
+    h.registry.mine(v.hash);
+    later(h, 60_000);
+    await w.pass();
+    expect(h.registry.sends).toHaveLength(2);
+    expect(h.registry.list.map((a) => a.subject)).toEqual([V, W]);
+  });
+
+  it('M1: a transaction that reverts when mined counts its gas and is decided again; a later attestation of another issuer supersedes it', async () => {
+    const h = await harness();
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    h.registry.hold = true;
+    const w = h.watcher({ errorEveryMs: 0 });
+    await w.pass({ drain: true });
+    const sent = h.registry.sends[0]!;
+    h.registry.attest(attestParams(V, 2005n));
+    h.registry.mine(sent.hash);
+    await w.pass();
+    expect(h.store.state.gasCostWei).toBe('1');
+    expect(h.store.state.attestDay.used).toBe(0);
+    expect((await h.feed()).at(-1)!.reason).toBe(`attest tx ${sent.hash} reverted (1 of 3), decided again from 2026-10-06T12:01:00.000Z`);
+    expect(h.store.state.deferred[V.toLowerCase()]).toMatchObject({ failures: 1, notBefore: '2026-10-06T12:01:00.000Z' });
+    later(h, 60_000);
+    await w.pass();
+    expect(h.store.state.deferred).toEqual({});
+    expect(h.registry.sends).toHaveLength(1);
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastAttestationId).toBe('0');
+    expect(h.store.state.queue).toEqual([expect.objectContaining({ subject: V, attempts: 1 })]);
   });
 });

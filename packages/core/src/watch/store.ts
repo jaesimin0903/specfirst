@@ -73,6 +73,9 @@ export const queueEntrySchema = z
  * at a later block. perSubject: attestations per vault on one UTC day. errorsAt: when an error line was last
  * written per key, so a failing subject writes at most one an hour. checkedBlocks: the block of the last
  * `checked` event per vault, so a newer report found in certs/checks at start is told from the watcher's own.
+ * attesting: attest transactions sent whose receipt was not seen yet, recorded before it is awaited; each is
+ * looked up first in the next pass, and nothing else is sent while one is. A deferred entry's `nonce` resends
+ * with the nonce of a transaction the node dropped, so at most one of the two can be mined.
  */
 export const watchStateSchema = z
   .object({
@@ -113,6 +116,7 @@ export const watchStateSchema = z
           cls: z.enum(ATTEST_CLASSES).optional(),
           failures: count.default(0),
           notBefore: iso.optional(),
+          nonce: count.optional(),
         })
         .strict(),
     ),
@@ -145,6 +149,24 @@ export const watchStateSchema = z
     perSubject: z.record(lowerAddress, z.object({ day: z.string(), used: count }).strict()).default({}),
     errorsAt: z.record(z.string(), iso).default({}),
     checkedBlocks: z.record(lowerAddress, decimal).default({}),
+    attesting: z
+      .record(
+        lowerAddress,
+        z
+          .object({
+            hash: hex32,
+            nonce: count,
+            at: iso,
+            reportPath: z.string().min(1),
+            reportURI: z.string().min(1),
+            block: decimal,
+            source,
+            cls: z.enum(ATTEST_CLASSES),
+            supersedes: decimal.nullable(),
+          })
+          .strict(),
+      )
+      .default({}),
   })
   .strict();
 export type WatchState = z.output<typeof watchStateSchema>;
@@ -180,6 +202,7 @@ export function emptyWatchState(chainId: number): WatchState {
     perSubject: {},
     errorsAt: {},
     checkedBlocks: {},
+    attesting: {},
   };
 }
 

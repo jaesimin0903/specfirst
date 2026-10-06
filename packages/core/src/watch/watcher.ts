@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { concat, createPublicClient, getAddress, http, keccak256, toHex, type Address, type Hex, type PublicClient } from 'viem';
 import { attestationParamsFromReport, AttestationError, checkReportHash, standardIdOf, type AttestParams } from '../attest/params.js';
-import { ATTESTATION_STATUS, type Attestation, type AttestationRegistryClient } from '../attest/registry.js';
+import { ATTESTATION_STATUS, type Attestation, type AttestationRegistryClient, type AttestTxState } from '../attest/registry.js';
 import {
   checkBlockOf,
   countsAsFailure,
@@ -74,11 +74,29 @@ export interface WatchEffects {
   verifySubject(report: StandardCheckReport): Promise<SubjectCodeCheck>;
   /** The registry's latest attestation of the subject for erc4626, any status, any issuer; null when there is none or no registry. */
   latestAttestation(subject: Address): Promise<{ id: bigint; attestation: Attestation } | null>;
-  /** Sends the attestation; null when attesting is off (--no-attest). */
-  attest: ((params: AttestParams) => Promise<{ id: bigint; hash: Hex; gasCostWei: bigint }>) | null;
+  /** Sends attestations and looks them up; null when attesting is off (--no-attest). */
+  attest: WatchAttester | null;
   /** The issuer's balance on the attest chain, read before every send; absent, the floor is not checked. */
   balance?: (() => Promise<bigint>) | null;
   now(): Date;
+}
+
+/** Where an attest sent earlier stands; dropped: the node does not know it, and whether its nonce was used since. */
+export type WatchAttestTxStatus = Exclude<AttestTxState, { state: 'unknown' }> | { state: 'dropped'; nonceUsed: boolean };
+
+/**
+ * Attesting in steps, so the watcher records the transaction between sending it and awaiting its receipt and
+ * never sends a second attestation for a receipt it lost.
+ */
+export interface WatchAttester {
+  /** Simulates and sends attest without waiting; `nonce` resends with the nonce of a transaction the node dropped. */
+  send(params: AttestParams, opts: { nonce?: number }): Promise<{ hash: Hex; nonce: number }>;
+  /** Waits for the receipt of a sent attest and reads the id from it; a revert or a lost receipt throws. */
+  wait(hash: Hex): Promise<{ id: bigint; gasCostWei: bigint }>;
+  /** Looks a sent attest up without waiting. */
+  status(sent: { hash: Hex; nonce: number }): Promise<WatchAttestTxStatus>;
+  /** Whether the issuer has transactions the node holds but has not mined. */
+  hasPending(): Promise<boolean>;
 }
 
 export interface WatchConfig {
@@ -232,7 +250,8 @@ type AttestResult =
   | { kind: 'attested'; attestation: FeedAttestation }
   | { kind: 'newer'; newer: { id: bigint; block: bigint } }
   | { kind: 'retry'; error: string }
-  | { kind: 'refused'; why: 'identity' | 'unknown-proxy' | 'report' | 'revert'; error: string };
+  | { kind: 'refused'; why: 'identity' | 'unknown-proxy' | 'report' | 'revert'; error: string }
+  | { kind: 'sent'; hash: Hex };
 
 function nextUtcDay(now: Date): string {
   const d = new Date(now.getTime());
@@ -425,6 +444,7 @@ export class Watcher {
     this.probesLeft = this.config.maxProbesPerPass;
     this.pruneRejected();
     this.startSubscriptionRefresh();
+    await this.resolveAttesting();
     let head: bigint;
     try {
       head = await this.effects.latestBlock();
@@ -894,34 +914,44 @@ export class Watcher {
 
   /**
    * Whether an attestation of class `cls` for `lower` may be sent now: the per-subject cap, the daily total,
-   * the smaller daily budget of the unsolicited classes, and the issuer's balance against the floor (read
-   * now). When not, why and when to try again.
+   * the smaller daily budget of the unsolicited classes, no attest transaction of the watcher's unresolved and
+   * none of the issuer's pending on the node, and the issuer's balance against the floor (read now). When
+   * not, why and when to try again; `stopsAll` when nothing else can be sent either.
    */
-  private async budgetFor(cls: AttestClass, lower: string): Promise<{ ok: true } | { ok: false; why: string; retryAt: string; floor: boolean }> {
+  private async budgetFor(cls: AttestClass, lower: string): Promise<{ ok: true } | { ok: false; why: string; retryAt: string; stopsAll: boolean }> {
     this.rollDay();
     const day = this.today();
     const tomorrow = nextUtcDay(this.effects.now());
     const subj = this.state.perSubject[lower];
     const usedBySubject = subj && subj.day === day ? subj.used : 0;
     if (usedBySubject >= this.config.maxAttestPerSubjectPerDay) {
-      return { ok: false, why: `${usedBySubject} of ${this.config.maxAttestPerSubjectPerDay} attestations of this subject made today`, retryAt: tomorrow, floor: false };
+      return { ok: false, why: `${usedBySubject} of ${this.config.maxAttestPerSubjectPerDay} attestations of this subject made today`, retryAt: tomorrow, stopsAll: false };
     }
     if (this.state.attestDay.used >= this.config.maxAttestPerDay) {
-      return { ok: false, why: `${this.state.attestDay.used} of ${this.config.maxAttestPerDay} attestations made today`, retryAt: tomorrow, floor: false };
+      return { ok: false, why: `${this.state.attestDay.used} of ${this.config.maxAttestPerDay} attestations made today`, retryAt: tomorrow, stopsAll: false };
     }
     if (cls !== 'subscribed' && this.state.attestDay.unsolicited >= this.config.maxUnsolicitedPerDay) {
-      return { ok: false, why: `${this.state.attestDay.unsolicited} of ${this.config.maxUnsolicitedPerDay} unsolicited attestations made today`, retryAt: tomorrow, floor: false };
+      return { ok: false, why: `${this.state.attestDay.unsolicited} of ${this.config.maxUnsolicitedPerDay} unsolicited attestations made today`, retryAt: tomorrow, stopsAll: false };
+    }
+    const retryAt = new Date(this.effects.now().getTime() + this.config.deferredRetryMs).toISOString();
+    const [sent] = Object.values(this.state.attesting);
+    if (sent) return { ok: false, why: `attest tx ${sent.hash} sent earlier is not mined yet`, retryAt, stopsAll: true };
+    if (this.effects.attest) {
+      try {
+        if (await this.effects.attest.hasPending()) return { ok: false, why: 'the issuer has transactions the node has not mined', retryAt, stopsAll: true };
+      } catch (err) {
+        return { ok: false, why: `the issuer's pending transactions could not be read: ${errorText(err)}`, retryAt, stopsAll: true };
+      }
     }
     if (this.effects.balance) {
-      const retryAt = new Date(this.effects.now().getTime() + this.config.deferredRetryMs).toISOString();
       try {
         this.balanceWei = await this.effects.balance();
       } catch (err) {
-        return { ok: false, why: `the issuer balance could not be read: ${errorText(err)}`, retryAt, floor: true };
+        return { ok: false, why: `the issuer balance could not be read: ${errorText(err)}`, retryAt, stopsAll: true };
       }
       if (this.balanceWei < this.config.minBalanceWei) {
         this.paused = `issuer balance ${mon(this.balanceWei)} is below the floor of ${mon(this.config.minBalanceWei)}: nothing is sent`;
-        return { ok: false, why: this.paused, retryAt: new Date(this.effects.now().getTime() + HOUR_MS).toISOString(), floor: true };
+        return { ok: false, why: this.paused, retryAt: new Date(this.effects.now().getTime() + HOUR_MS).toISOString(), stopsAll: true };
       }
       this.paused = null;
     }
@@ -936,6 +966,10 @@ export class Watcher {
     const subj = this.state.perSubject[lower];
     this.state.perSubject[lower] = { day, used: subj && subj.day === day ? subj.used + 1 : 1 };
     for (const [k, v] of Object.entries(this.state.perSubject)) if (v.day !== day) delete this.state.perSubject[k];
+    this.addGas(gasCostWei);
+  }
+
+  private addGas(gasCostWei: bigint): void {
     this.state.gasCostWei = (BigInt(this.state.gasCostWei) + gasCostWei).toString();
   }
 
@@ -1223,11 +1257,12 @@ export class Watcher {
 
   /**
    * Checks the subject's identity on its chain at the report's block and attests, counting the attestation
-   * against the budgets. An RPC failure or a send that did not go through without a revert is `retry` (the
-   * next try decides again from the registry, so a mined transaction whose receipt was lost is not sent
-   * twice); OlderThanLatest means another issuer attested a later block meanwhile (`newer`, read again from
-   * the registry); an identity mismatch, an unknown proxy, a report the registry would refuse and any other
-   * revert are `refused`.
+   * against the budgets once it is mined. The transaction goes into state.attesting before its receipt is
+   * awaited: a receipt that does not come is `sent`, and the next pass looks the transaction up instead of
+   * sending again. An RPC failure or a send that did not go through without a revert is `retry` (the next try
+   * decides again from the registry); OlderThanLatest means another issuer attested a later block meanwhile
+   * (`newer`, read again from the registry); an identity mismatch, an unknown proxy, a report the registry
+   * would refuse and any other revert are `refused`. `nonce` resends with the nonce of a dropped transaction.
    */
   private async attestReport(
     subject: Address,
@@ -1238,6 +1273,7 @@ export class Watcher {
     cls: AttestClass,
     base: Omit<FeedEventInput, 'at' | 'kind'>,
     check: FeedCheck,
+    nonce?: number,
   ): Promise<AttestResult> {
     const lower = subject.toLowerCase();
     this.setRunning(subject, source, 'attesting');
@@ -1265,10 +1301,32 @@ export class Watcher {
         }
         throw err;
       }
-      const out = await this.effects.attest!(params);
-      this.countAttestation(cls, lower, out.gasCostWei);
-      const attestation: FeedAttestation = { id: out.id.toString(), txHash: out.hash, supersedes: supersedes === null ? null : supersedes.toString() };
-      await this.feed([{ ...base, at: this.nowIso(), kind: 'attested', check, attestation, reason: `[${cls}]` }]);
+      const attester = this.effects.attest!;
+      const sent = await attester.send(params, nonce !== undefined ? { nonce } : {});
+      // Recorded before the receipt is awaited: a crash or a lost receipt from here on is resolved by looking
+      // this transaction up, never by sending a second attestation.
+      this.state.attesting[lower] = {
+        hash: sent.hash,
+        nonce: sent.nonce,
+        at: this.nowIso(),
+        reportPath: saved.reportPath,
+        reportURI: saved.reportURI,
+        block: report.blockNumber,
+        source,
+        cls,
+        supersedes: supersedes === null ? null : supersedes.toString(),
+      };
+      await this.save();
+      let mined: { id: bigint; gasCostWei: bigint };
+      try {
+        mined = await attester.wait(sent.hash);
+      } catch (err) {
+        await this.errorLine(lower, { ...base, check, reason: `attest tx ${sent.hash} was sent, its receipt is looked up in the next pass: ${errorText(err)}` });
+        return { kind: 'sent', hash: sent.hash };
+      }
+      delete this.state.attesting[lower];
+      const attestation = await this.recordAttested(lower, cls, { id: mined.id, hash: sent.hash, gasCostWei: mined.gasCostWei, supersedes }, base, check);
+      await this.save();
       return { kind: 'attested', attestation };
     } catch (err) {
       if (errorNameOf(err) === 'OlderThanLatest') {
@@ -1287,6 +1345,75 @@ export class Watcher {
     } finally {
       this.running = null;
     }
+  }
+
+  /** Counts a mined attestation against the budgets, adds its gas and writes the `attested` event. */
+  private async recordAttested(
+    lower: string,
+    cls: AttestClass,
+    tx: { id: bigint; hash: Hex; gasCostWei: bigint; supersedes: bigint | null },
+    base: Omit<FeedEventInput, 'at' | 'kind'>,
+    check: FeedCheck | undefined,
+    note = '',
+  ): Promise<FeedAttestation> {
+    this.countAttestation(cls, lower, tx.gasCostWei);
+    const attestation: FeedAttestation = { id: tx.id.toString(), txHash: tx.hash, supersedes: tx.supersedes === null ? null : tx.supersedes.toString() };
+    await this.feed([{ ...base, at: this.nowIso(), kind: 'attested', ...(check ? { check } : {}), attestation, reason: `[${cls}]${note}` }]);
+    return attestation;
+  }
+
+  /**
+   * Attest transactions whose receipt an earlier pass did not see (lost, or the watcher stopped while it
+   * waited) are looked up before anything else. mined: recorded and counted as if the receipt had come.
+   * reverted: its gas is counted and the attestation is decided again after a wait, at most maxCheckAttempts
+   * reverts in a row. pending: it waits, and nothing else is sent meanwhile. dropped: decided again now, sent
+   * with the same nonce when that nonce is still unused (so at most one of the two can be mined); when another
+   * transaction used it, the registry read of the new decision finds any attestation of this report that landed.
+   */
+  private async resolveAttesting(): Promise<void> {
+    const st = this.state;
+    if (!this.effects.attest || Object.keys(st.attesting).length === 0) return;
+    for (const [lower, a] of Object.entries(st.attesting)) {
+      const subject = getAddress(lower);
+      let tx: WatchAttestTxStatus;
+      try {
+        tx = await this.effects.attest.status({ hash: a.hash as Hex, nonce: a.nonce });
+      } catch (err) {
+        this.emit({ type: 'watch-error', step: 'deferred', error: `${subject}: attest tx ${a.hash} could not be looked up: ${errorText(err)}` });
+        continue;
+      }
+      if (tx.state === 'pending') continue;
+      delete st.attesting[lower];
+      const base = { chainId: this.chainId, subject, source: a.source };
+      const check = await this.effects.loadReport(a.reportPath).then(
+        (r) => feedCheckOf(r, a.reportPath),
+        () => undefined,
+      );
+      const d = st.deferred[lower];
+      if (tx.state === 'mined') {
+        const supersedes = a.supersedes === null ? null : BigInt(a.supersedes);
+        const attestation = await this.recordAttested(lower, a.cls, { id: tx.id, hash: a.hash as Hex, gasCostWei: tx.gasCostWei, supersedes }, base, check, '; its receipt was found in a later pass');
+        const vault = this.store.vaults.vaults[lower];
+        if (vault) vault.lastAttestationId = attestation.id;
+        if (d?.reportPath === a.reportPath) delete st.deferred[lower];
+        continue;
+      }
+      const failures = (d?.reportPath === a.reportPath ? d.failures : 0) + (tx.state === 'reverted' ? 1 : 0);
+      let notBefore = this.nowIso();
+      if (tx.state === 'reverted') {
+        this.addGas(tx.gasCostWei);
+        if (failures >= this.config.maxCheckAttempts) {
+          delete st.deferred[lower];
+          await this.errorLine(lower, { ...base, ...(check ? { check } : {}), reason: `attest tx ${a.hash} reverted, ${failures} times in a row: not attested` });
+          continue;
+        }
+        notBefore = new Date(this.effects.now().getTime() + Math.min(this.config.deferredRetryMs * 2 ** Math.min(failures - 1, 20), HOUR_MS)).toISOString();
+        await this.errorLine(lower, { ...base, ...(check ? { check } : {}), reason: `attest tx ${a.hash} reverted (${failures} of ${this.config.maxCheckAttempts}), decided again from ${notBefore}` });
+      }
+      const resend = tx.state === 'dropped' && !tx.nonceUsed ? { nonce: a.nonce } : {};
+      st.deferred[lower] = { reportPath: a.reportPath, reportURI: a.reportURI, source: a.source, at: this.nowIso(), cls: a.cls, failures, notBefore, ...resend };
+    }
+    await this.save();
   }
 
   /**
@@ -1330,11 +1457,11 @@ export class Watcher {
       const budget = await this.budgetFor(d.cls, lower);
       if (!budget.ok) {
         st.deferred[lower] = { ...d, notBefore: budget.retryAt };
-        if (budget.floor) return;
+        if (budget.stopsAll) return;
         continue;
       }
       const base = { chainId: this.chainId, subject, source: d.source };
-      const out = await this.attestReport(subject, d.source, report, d, decision.supersedes, d.cls, base, feedCheckOf(report, d.reportPath));
+      const out = await this.attestReport(subject, d.source, report, d, decision.supersedes, d.cls, base, feedCheckOf(report, d.reportPath), d.nonce);
       if (out.kind === 'retry') {
         backoff(out.error);
         continue;
@@ -1470,11 +1597,16 @@ export interface LiveWatchEffectsInput extends SubjectCheckInput {
   /** reportURI = <reportBaseUrl>/<chainId>/<address>/<block>-<hash8>.json. No trailing slash. */
   reportBaseUrl: string;
   /** Registry on the attest chain, read for every decision; null when there is none (only with attest false). */
-  registry: Pick<AttestationRegistryClient, 'latest' | 'attest'> | null;
+  registry: Pick<AttestationRegistryClient, 'latest' | 'sendAttest' | 'waitAttest' | 'attestTx' | 'hasPendingTransactions'> | null;
   /** False with --no-attest: decisions are recorded, nothing is sent. */
   attest: boolean;
   /** The issuer's balance on the attest chain. */
   balance?: () => Promise<bigint>;
+  /**
+   * The issuer's transaction count at the latest block of the attest chain, to tell whether a dropped
+   * transaction's nonce was used since; without it a dropped transaction is never resent with its nonce.
+   */
+  issuerNonce?: () => Promise<number>;
   now?: () => Date;
 }
 
@@ -1482,7 +1614,8 @@ export interface LiveWatchEffectsInput extends SubjectCheckInput {
  * The effects of a real watcher: reads the subject chain through `subjectClient` (getLogs through the batched
  * reader, per topic), runs the suite as the desk worker does but with a seed per subject and that subject's
  * forge failures kept under .specfirst/watch/<chainId>/forge-failures, copies reports to certs/checks and
- * attests through the registry client (whose wallet is the watcher's issuer key).
+ * attests through the registry client (whose wallet is the watcher's issuer key), sending and waiting apart
+ * (the nonce fixed before sending, so the watcher can record it with the hash) and looking transactions up.
  */
 export function liveWatchEffects(i: LiveWatchEffectsInput): WatchEffects {
   const registry = i.registry;
@@ -1506,9 +1639,19 @@ export function liveWatchEffects(i: LiveWatchEffectsInput): WatchEffects {
     latestAttestation: async (subject) => (registry ? registry.latest(BigInt(i.subjectChainId), subject, ERC4626_ID) : null),
     attest:
       i.attest && registry
-        ? async (params) => {
-            const out = await registry.attest(params);
-            return { id: out.id, hash: out.hash, gasCostWei: out.gasUsed * out.effectiveGasPrice };
+        ? {
+            send: (params, opts) => registry.sendAttest(params, opts),
+            wait: async (hash) => {
+              const out = await registry.waitAttest(hash);
+              return { id: out.id, gasCostWei: out.gasUsed * out.effectiveGasPrice };
+            },
+            status: async (sent) => {
+              const tx = await registry.attestTx(sent.hash);
+              if (tx.state !== 'unknown') return tx;
+              const used = i.issuerNonce ? await i.issuerNonce() : null;
+              return { state: 'dropped', nonceUsed: used === null || used > sent.nonce };
+            },
+            hasPending: () => registry.hasPendingTransactions(),
           }
         : null,
     balance: i.attest && i.balance ? i.balance : null,

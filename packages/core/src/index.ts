@@ -589,6 +589,8 @@ export {
   DEFAULT_WATCH_RUNS,
   DEFAULT_WATCH_POLL_SEC,
   type WatchEffects,
+  type WatchAttester,
+  type WatchAttestTxStatus,
   type WatchConfig,
   type WatchHooks,
   type WatchEvent,

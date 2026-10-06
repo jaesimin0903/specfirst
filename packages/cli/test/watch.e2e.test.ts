@@ -5,7 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   anvilChain,
+  attestationParamsFromReport,
   AttestationRegistryClient,
+  checkAttestationRegistryAbi,
   checkReportHash,
   createChainClients,
   DEMO_FACTORY_ADDRESS,
@@ -19,6 +21,7 @@ import {
   summarize,
   watchStatusSchema,
   watchVaultsSchema,
+  WatchStore,
   type ActiveSubscription,
   type AlertSink,
   type ChainClients,
@@ -26,7 +29,7 @@ import {
   type RunStandardCheckInput,
   type StandardCheckReport,
 } from '@specfirst/core';
-import { parseEther, type Address, type Hex } from 'viem';
+import { encodeFunctionData, parseEther, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { registerAttestRegistryCommand } from '../src/commands/attest.js';
@@ -66,6 +69,8 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
   let registry: Address;
   let token: Address;
   let vault: Address;
+  /** The broken vault --no-attest checked: its last check is a report nobody attested. */
+  let unattested: Address;
   const checks: Array<{ address: Address; block: bigint }> = [];
   const subscriptions: ActiveSubscription[] = [];
   const delivered: Array<{ event: FeedEvent; subs: string[] }> = [];
@@ -285,6 +290,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
       check: { failed: ['previewDeposit'] },
     });
     expect(await reg.attestationCount()).toBe(count);
+    unattested = second;
     process.env.WATCH_ISSUER_PRIVATE_KEY = WATCH_KEY;
   });
 
@@ -357,5 +363,48 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     expect(out).toMatch(/detected {2}0x\S+ {2}factory Specfirst DemoVaultFactory {2}block \d+/);
     expect(out).toMatch(/checked {2}0x\S+ {2}factory {2}block \d+ {2}30 pass {2}attesting \[factory\]: first check of a vault a factory announced; no attestation of the subject yet/);
     expect(out).toMatch(/attested {2}0x\S+ {2}attestation \d+/);
+  });
+
+  it('an attest recorded in state.json is looked up first: pending, nothing is sent; dropped, it goes out again with its nonce, once', async () => {
+    const rpc = (method: string, params: unknown[]) => clients.publicClient.request({ method: method as never, params: params as never });
+    const third = (await deployDemoVault({ client: clients.publicClient, wallet: clients.wallet(OPERATOR_KEY), asset: token, broken: false })).vault;
+    await mine();
+    // What a watcher that stopped right after sending leaves behind: the journal of an attest of the unattested vault's last check.
+    const lower = unattested.toLowerCase();
+    const store = await WatchStore.load(dir, 31337);
+    const last = store.vaults.vaults[lower]!.lastCheck!;
+    const report = parseCheckReport(await readFile(path.join(dir, last.reportPath), 'utf8'));
+    const reportURI = `${BASE}/${last.reportPath.replace(/^certs\/checks\//, '')}`;
+    const data = encodeFunctionData({ abi: checkAttestationRegistryAbi, functionName: 'attest', args: [attestationParamsFromReport(report, { reportURI })] as never });
+    const nonce = await clients.publicClient.getTransactionCount({ address: WATCH_ISSUER, blockTag: 'pending' });
+    const reg = new AttestationRegistryClient(registry, clients.publicClient);
+    const before = await reg.attestationCount();
+    await rpc('evm_setAutomine', [false]);
+    let first: Hex;
+    try {
+      first = await clients.wallet(WATCH_KEY).sendTransaction({ to: registry, data, nonce, gas: 2_000_000n });
+      store.state.attesting[lower] = { hash: first, nonce, at: new Date().toISOString(), reportPath: last.reportPath, reportURI, block: report.blockNumber, source: 'factory', cls: 'factory', supersedes: null };
+      await store.save();
+      // Pending in the mempool: the new vault is checked, its attestation waits behind the transaction.
+      const waiting = await watch();
+      expect(waiting.code).toBe(0);
+      expect(kinds(fed(waiting))).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'changed:factory']);
+      expect(fed(waiting)[2]).toMatchObject({ subject: third, reason: expect.stringMatching(new RegExp(`^attestation deferred \\[factory\\]: attest tx ${first} sent earlier is not mined yet; `)) });
+      expect(await clients.publicClient.getTransactionCount({ address: WATCH_ISSUER, blockTag: 'pending' })).toBe(nonce + 1);
+      // Dropped before it was mined, nonce unused: sent again with that nonce.
+      await rpc('anvil_dropTransaction', [first]);
+    } finally {
+      await rpc('evm_setAutomine', [true]);
+    }
+    const resumed = await watch();
+    expect(resumed.code).toBe(0);
+    const attested = fed(resumed).filter((e) => e.kind === 'attested');
+    expect(attested).toEqual([expect.objectContaining({ subject: unattested, reason: '[factory]' })]);
+    expect(await reg.attestationCount()).toBe(before + 1n);
+    const again = attested[0]!.attestation!.txHash as Hex;
+    expect(again).not.toBe(first!);
+    expect((await clients.publicClient.getTransaction({ hash: again })).nonce).toBe(nonce);
+    expect((await reg.attestationOf(BigInt(attested[0]!.attestation!.id))).subject).toBe(unattested);
+    expect(JSON.parse(await readFile(path.join(watchDir(), 'state.json'), 'utf8')).attesting).toEqual({});
   });
 });
