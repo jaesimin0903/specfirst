@@ -53,7 +53,7 @@ The worker keeps its cursor in `.specfirst/worker/state.json` and writes each re
 `CheckSubscriptions` sells delivery and freshness, not results: a subscriber prepays a fee per day in testnet MON for one vault and gets a webhook POST when its check result changes, plus a faster re-check cadence from the watcher. A day that has started counts as used; `settle` moves the fee of started days to earned, `cancel` refunds the days not started, and extending an expired subscription starts it again from now, so days without service are never charged. See `docs/adr/0006-chain-as-entry-point.md` (CheckSubscriptions, Alerts) for the accounting and the webhook rules.
 
 ```
-# owner = DEPLOYER_PRIVATE_KEY, 0.05 MON per day unless --fee-per-day
+# owner = DEPLOYER_PRIVATE_KEY, 0.05 MON per day unless --fee-per-day (above 0)
 node --env-file=.env packages/cli/dist/index.js subs deploy --network monad-testnet
 export SPECFIRST_SUBS_10143=0x...                       # printed by subs deploy
 
@@ -67,7 +67,7 @@ node --env-file=.env packages/cli/dist/index.js subs settle                     
 node --env-file=.env packages/cli/dist/index.js subs withdraw                   # owner: earned fees only, to the owner
 ```
 
-A webhook is registered off chain: the subscriber signs `Specfirst alerts webhook\nsubscriber: <address>\nurl: <https url>\nissued: <unix seconds>` and the web API stores it in the watch directory's `webhooks.json` with `registerWebhook` from `@specfirst/core`. The watcher's sink (`createWebhookAlertSink`) POSTs `{ v: 1, subscriptionId, subject, chainId, change, check, attestation, reportURL }` to every active subscriber of a vault whose result changed, up to 3 attempts. The ABI, the day accounting, the client, `listActive` and the webhook message and verification are browser-safe in `@specfirst/core/subs`.
+A webhook is registered off chain: the subscriber signs `Specfirst alerts webhook\nsubscriber: <address>\nurl: <https url>\nissued: <unix seconds>` (the URL in canonical form) and the web API verifies and stores it in the watch directory's `webhooks.json` with `registerWebhook` from `@specfirst/core`. The watcher's sink (`createWebhookAlertSink`) POSTs `{ v: 1, subscriptionId, subscriptionIds, subject, chainId, change, check, attestation, reportURL }` once to every subscriber with an active subscription on a vault whose result changed: up to 3 attempts, at most 25 subscribers and 20 s per event, and never to a host that resolves to an internal address. For a local demo receiver pass its exact origin in `allowedLocalOrigins`. The ABI, the day accounting, the client, `listActive` and the webhook message and verification are browser-safe in `@specfirst/core/subs`.
 
 ## Board
 

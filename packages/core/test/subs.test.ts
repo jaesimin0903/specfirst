@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -15,13 +15,15 @@ import {
   createSubscriptionSource,
   createWebhookAlertSink,
   deliverWebhookAlerts,
+  deploySubscriptions,
   dueAt,
   isActiveAt,
+  isPrivateAddress,
+  lookupWebhookHost,
   readWebhooks,
   refundAt,
   registerWebhook,
   reportUrlOf,
-  saveWebhookRegistration,
   settleableAt,
   standardIdOf,
   startedDaysAt,
@@ -259,6 +261,7 @@ describe('SubscriptionsClient (mocks, no RPC)', () => {
     await expect(failing.cancel(1n)).rejects.toMatchObject({ name: 'SubscriptionsError', errorName: 'NotSubscriber', message: 'cancel failed (NotSubscriber): reverted' });
     await expect(failing.subscriptionOf(9n)).rejects.toThrow(/no subscription with id 9 \(UnknownSubscription\)/);
     await expect(new SubscriptionsClient(SUBS, {} as never).withdraw(alice.address)).rejects.toThrow(/withdraw needs a wallet client/);
+    await expect(deploySubscriptions({ client: {} as never, wallet: {} as never, owner: alice.address, feePerDay: 0n })).rejects.toMatchObject({ errorName: 'ZeroFee' });
   });
 });
 
@@ -359,23 +362,73 @@ describe('webhook registration', () => {
     expect((await verifyWebhookRegistration(await register(), { now: NOW + 86_400, ignoreAge: true })).ok).toBe(true);
   });
 
-  it('only https to a public host; http and https to localhost and 127.0.0.1 only with allowLocalHttp', async () => {
+  it('https to a public host only; http only for an exact allowed local origin', async () => {
     expect(await verifyWebhookRegistration(await register({ url: 'http://hooks.example.org/x' }), { now: NOW })).toMatchObject({ ok: false, reason: 'url', message: 'url not https' });
     expect(webhookUrlProblem('ftp://hooks.example.org/')).toBe('not https');
-    expect(webhookUrlProblem('http://localhost:8080/hook')).toBe('not https');
-    expect(webhookUrlProblem('http://localhost:8080/hook', { allowLocalHttp: true })).toBeNull();
-    expect(webhookUrlProblem('http://127.0.0.1:8080/hook', { allowLocalHttp: true })).toBeNull();
-    expect(webhookUrlProblem('http://10.0.0.1/hook', { allowLocalHttp: true })).toBe('not https');
-    for (const u of ['https://127.0.0.1/', 'https://localhost/', 'https://10.1.2.3/', 'https://192.168.1.1/', 'https://172.20.0.1/', 'https://169.254.169.254/', 'https://[::1]/', 'https://[fd00::1]/', 'https://2130706433/', 'https://a.localhost/']) {
-      expect(webhookUrlProblem(u), u).toBe('points at a private or loopback address');
+    const local = { allowedLocalOrigins: ['http://localhost:3418'] };
+    expect(webhookUrlProblem('http://localhost:3418/hook')).toBe('not https');
+    expect(webhookUrlProblem('http://localhost:3418/hook', local)).toBeNull();
+    expect(webhookUrlProblem('http://localhost:3418/', local)).toBeNull();
+    expect(webhookUrlProblem('http://localhost:3419/hook', local)).toBe('not https');
+    expect(webhookUrlProblem('http://127.0.0.1:3418/hook', local)).toBe('not https');
+    expect(webhookUrlProblem('https://localhost:3418/hook', local)).toBe('points at a private or loopback address');
+    expect((await verifyWebhookRegistration(await register({ url: 'http://localhost:3418/hook' }), { now: NOW, ...local })).ok).toBe(true);
+  });
+
+  it('refuses private, loopback, link-local and internal hosts, a trailing dot included', () => {
+    for (const u of [
+      'https://127.0.0.1/',
+      'https://localhost/',
+      'https://localhost./',
+      'https://a.localhost/',
+      'https://a.localhost./',
+      'https://10.1.2.3/',
+      'https://192.168.1.1/',
+      'https://172.20.0.1/',
+      'https://169.254.169.254/',
+      'https://100.64.0.1/',
+      'https://198.18.0.1/',
+      'https://198.19.255.255/',
+      'https://224.0.0.1/',
+      'https://2130706433/',
+      'https://[::1]/',
+      'https://[::]/',
+      'https://[::7f00:1]/',
+      'https://[::ffff:7f00:1]/',
+      'https://[64:ff9b::7f00:1]/',
+      'https://[fd00::1]/',
+      'https://[fe80::1]/',
+      'https://[fec0::1]/',
+      'https://[ff02::1]/',
+    ]) {
+      // 2130706433 is 127.0.0.1 written as one number: its canonical form differs, so it fails that rule first.
+      expect(webhookUrlProblem(u), u).toMatch(u.includes('2130706433') ? /not in canonical form/ : /points at a private or loopback address/);
     }
-    expect(webhookUrlProblem('https://172.32.0.1/')).toBeNull();
+    for (const u of ['https://172.32.0.1/', 'https://198.20.0.1/', 'https://100.128.0.1/', 'https://[2606:4700::1111]/', 'https://hooks.example.org./']) {
+      expect(webhookUrlProblem(u), u).toBeNull();
+    }
+  });
+
+  it('refuses anything but printable ASCII in canonical form, credentials and long URLs', () => {
     expect(webhookUrlProblem('https://user:pw@hooks.example.org/')).toBe('carries credentials');
-    expect(webhookUrlProblem('https://hooks.example.org/\nissued: 1')).toBe('contains whitespace or control characters');
-    expect(webhookUrlProblem('https://hooks.example.org/a b')).toBe('contains whitespace or control characters');
+    for (const c of ['\n', ' ', '\u0085', '‮', '​', 'é']) {
+      expect(webhookUrlProblem(`https://hooks.example.org/a${c}b`), JSON.stringify(c)).toBe('contains characters other than printable ASCII');
+    }
+    expect(webhookUrlProblem('https://hooks.example.org')).toBe('not in canonical form (send new URL(url).href)');
+    expect(webhookUrlProblem('https://Hooks.example.org/')).toBe('not in canonical form (send new URL(url).href)');
+    expect(webhookUrlProblem('https://hooks.example.org:443/')).toBe('not in canonical form (send new URL(url).href)');
+    expect(webhookUrlProblem('https://hooks.example.org/a%20b?x=1#f')).toBeNull();
     expect(webhookUrlProblem(`https://hooks.example.org/${'a'.repeat(2048)}`)).toBe('longer than 2048 characters');
-    expect(webhookUrlProblem('not a url')).toBe('contains whitespace or control characters');
     expect(webhookUrlProblem('hooks.example.org')).toBe('not a URL');
+  });
+
+  it('isPrivateAddress reads the addresses DNS returns, dotted IPv4 tails included, and refuses what it cannot parse', () => {
+    for (const a of ['127.0.0.1', '10.0.0.5', '::1', '::ffff:127.0.0.1', '::ffff:93.184.216.34', '64:ff9b::1.2.3.4', 'fe80::1%en0', 'fec0::1', 'fd12:3456::1', 'nonsense', '1::2::3', '256.1.1.1']) {
+      expect(isPrivateAddress(a), a).toBe(true);
+    }
+    for (const a of ['93.184.216.34', '1.1.1.1', '2606:4700:4700::1111', '2001:db8:1:2:3:4:5:6', '1:2:3:4:5:6:1.2.3.4']) {
+      expect(isPrivateAddress(a), a).toBe(false);
+    }
   });
 });
 
@@ -397,38 +450,51 @@ describe('webhooks.json store', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('a missing file is empty; register verifies and stores, keyed by the lowercase subscriber', async () => {
+  it('a missing file is empty; register verifies and stores, owner-only, keyed by the lowercase subscriber', async () => {
     expect(await readWebhooks(file)).toEqual({ v: 1, webhooks: {} });
     const r = await reg(alice, NOW);
     expect(await registerWebhook(file, { ...r, subscriber: alice.address.toLowerCase() }, { now: NOW })).toEqual({ ok: true, registration: r, stored: true, previous: null });
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ v: 1, webhooks: { [alice.address.toLowerCase()]: r } });
-    expect(await registerWebhook(file, await reg(mallory, NOW).then((m) => ({ ...m, subscriber: alice.address })), { now: NOW })).toMatchObject({ ok: false, reason: 'signature' });
-    expect(await registerWebhook(file, r, { now: NOW + 601 })).toMatchObject({ ok: false, reason: 'stale' });
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
     expect(await readdir(path.dirname(file))).toEqual(['webhooks.json']);
   });
 
-  it('the latest registration per subscriber wins; an older one replayed is not stored', async () => {
+  it('nothing unverified gets in: a wrong signer, a stale registration and a refused URL are not stored', async () => {
+    const forged = { ...(await reg(mallory, NOW)), subscriber: alice.address };
+    expect(await registerWebhook(file, forged, { now: NOW })).toMatchObject({ ok: false, reason: 'signature' });
+    expect(await registerWebhook(file, await reg(alice, NOW), { now: NOW + 601 })).toMatchObject({ ok: false, reason: 'stale' });
+    expect(await registerWebhook(file, await reg(alice, NOW, 'https://10.0.0.1/'), { now: NOW })).toMatchObject({ ok: false, reason: 'url' });
+    expect(await readWebhooks(file)).toEqual({ v: 1, webhooks: {} });
+  });
+
+  it('the latest registration per subscriber wins; an older one replayed within its window is not stored', async () => {
     const first = await reg(alice, NOW, 'https://hooks.example.org/first');
     const second = await reg(alice, NOW + 30, 'https://hooks.example.org/second');
-    await saveWebhookRegistration(file, first);
-    expect(await saveWebhookRegistration(file, second)).toEqual({ stored: true, previous: first });
-    expect(await saveWebhookRegistration(file, first)).toEqual({ stored: false, current: second });
+    await registerWebhook(file, first, { now: NOW });
+    expect(await registerWebhook(file, second, { now: NOW + 30 })).toEqual({ ok: true, registration: second, stored: true, previous: first });
+    expect(await registerWebhook(file, first, { now: NOW + 40 })).toEqual({ ok: true, registration: first, stored: false, current: second });
     expect((await readWebhooks(file)).webhooks[alice.address.toLowerCase()]).toEqual(second);
   });
 
   it('concurrent registrations of two subscribers are both kept', async () => {
     const [a, m] = await Promise.all([reg(alice, NOW), reg(mallory, NOW)]);
-    await Promise.all([saveWebhookRegistration(file, a), saveWebhookRegistration(file, m)]);
+    await Promise.all([registerWebhook(file, a, { now: NOW }), registerWebhook(file, m, { now: NOW })]);
     expect(Object.keys((await readWebhooks(file)).webhooks).sort()).toEqual([alice.address.toLowerCase(), mallory.address.toLowerCase()].sort());
   });
 
   it('refuses a broken file instead of overwriting it', async () => {
-    await saveWebhookRegistration(file, await reg(alice, NOW));
+    await registerWebhook(file, await reg(alice, NOW), { now: NOW });
     await writeFile(file, '{"v":1,"webhooks":{"0xabc":{}}}');
     await expect(readWebhooks(file)).rejects.toBeInstanceOf(WebhookStoreError);
-    await expect(saveWebhookRegistration(file, await reg(mallory, NOW))).rejects.toThrow(/webhooks .* is invalid/);
+    await expect(registerWebhook(file, await reg(mallory, NOW), { now: NOW })).rejects.toThrow(/webhooks .* is invalid/);
     await writeFile(file, 'nope');
     await expect(readWebhooks(file)).rejects.toThrow(/is not readable JSON/);
+  });
+
+  it('lookupWebhookHost returns every address of a name; localhost resolves to loopback only', async () => {
+    const addresses = await lookupWebhookHost('localhost');
+    expect(addresses.length).toBeGreaterThan(0);
+    expect(addresses.every(isPrivateAddress)).toBe(true);
   });
 });
 
@@ -472,14 +538,14 @@ describe('webhook delivery against a local HTTP server', () => {
     startsAt: T0,
     endsAt: T0 + 30n * DAY,
   });
-  const reg = async (signer: typeof alice, url: string): Promise<WebhookRegistration> => ({
+  const reg = async (signer: { address: Address; signMessage: typeof alice.signMessage }, url: string): Promise<WebhookRegistration> => ({
     subscriber: signer.address,
     url,
     issued: NOW,
     signature: await signer.signMessage({ message: webhookMessage({ subscriber: signer.address, url, issued: NOW }) }),
   });
   const delays: number[] = [];
-  const opts = { fetch: globalThis.fetch as never, allowLocalHttp: true, reportBaseUrl: 'https://raw.example.org/certs/checks/', sleep: async (ms: number) => void delays.push(ms), now: () => new Date('2026-10-06T10:00:05.000Z') };
+  let opts: Parameters<typeof deliverWebhookAlerts>[3];
 
   beforeAll(async () => {
     server = createServer((req, res) => {
@@ -493,6 +559,13 @@ describe('webhook delivery against a local HTTP server', () => {
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     dir = await mkdtemp(path.join(tmpdir(), 'specfirst-alerts-'));
+    opts = {
+      fetch: globalThis.fetch as never,
+      allowedLocalOrigins: [base],
+      reportBaseUrl: 'https://raw.example.org/certs/checks/',
+      sleep: async (ms: number) => void delays.push(ms),
+      now: () => new Date('2026-10-06T10:00:05.000Z'),
+    };
   });
   afterAll(async () => {
     server.closeAllConnections();
@@ -505,15 +578,22 @@ describe('webhook delivery against a local HTTP server', () => {
     handler = (_req, res) => res.writeHead(204).end();
   });
 
-  it('POSTs the ADR payload as JSON to each registered subscriber of the subject and returns alerted events', async () => {
+  it('POSTs the payload once per subscriber, with all its subscription ids, and returns one alerted event each', async () => {
     const regs = { [alice.address.toLowerCase()]: await reg(alice, `${base}/alice`), [mallory.address.toLowerCase()]: await reg(mallory, `${base}/mallory`) };
-    const subs = [active(3n, alice.address), active(5n, mallory.address), active(6n, alice.address, OTHER), active(7n, getAddress('0x00000000000000000000000000000000000000e1'))];
+    const subs = [
+      active(8n, alice.address),
+      active(5n, mallory.address),
+      active(3n, alice.address),
+      active(6n, alice.address, OTHER),
+      active(7n, getAddress('0x00000000000000000000000000000000000000e1')),
+    ];
     const out = await deliverWebhookAlerts(changed, subs, regs, opts);
     expect(hits.map((h) => h.path).sort()).toEqual(['/alice', '/mallory']);
     const body = JSON.parse(hits.find((h) => h.path === '/alice')!.body);
     expect(body).toEqual({
       v: 1,
       subscriptionId: '3',
+      subscriptionIds: ['3', '8'],
       subject: VAULT,
       chainId: 143,
       change: changed.change,
@@ -570,7 +650,73 @@ describe('webhook delivery against a local HTTP server', () => {
     expect(hits).toHaveLength(3);
   });
 
-  it('delivers only changed events, and not to a registration that no longer verifies or URL policy refuses', async () => {
+  it('caps the subscribers per event and records the rest as not delivered', async () => {
+    const signers = Array.from({ length: 4 }, (_, i) => privateKeyToAccount(hash(1000 + i)));
+    const regs = Object.fromEntries(await Promise.all(signers.map(async (s, i) => [s.address.toLowerCase(), await reg(s, `${base}/s${i}`)] as const)));
+    const out = await deliverWebhookAlerts(
+      changed,
+      signers.map((s, i) => active(BigInt(i), s.address)),
+      regs,
+      { ...opts, maxTargets: 2 },
+    );
+    expect(hits.map((h) => h.path).sort()).toEqual(['/s0', '/s1']);
+    expect(out.map((e) => [e.alert!.subscriptionId, e.alert!.ok, e.reason])).toEqual([
+      ['0', true, undefined],
+      ['1', true, undefined],
+      ['2', false, 'over the cap of 2 webhooks per event'],
+      ['3', false, 'over the cap of 2 webhooks per event'],
+    ]);
+  });
+
+  it('one event never takes longer than its deadline: POSTs in flight are aborted, the rest are recorded as failed', async () => {
+    const signers = Array.from({ length: 5 }, (_, i) => privateKeyToAccount(hash(2000 + i)));
+    const regs = Object.fromEntries(await Promise.all(signers.map(async (s, i) => [s.address.toLowerCase(), await reg(s, `${base}/hang${i}`)] as const)));
+    handler = () => {};
+    const t = Date.now();
+    const out = await deliverWebhookAlerts(
+      changed,
+      signers.map((s, i) => active(BigInt(i), s.address)),
+      regs,
+      { ...opts, concurrency: 2, timeoutMs: 10_000, deadlineMs: 300, sleep: (ms) => new Promise((r) => setTimeout(r, ms)) },
+    );
+    expect(Date.now() - t).toBeLessThan(2_000);
+    expect(hits).toHaveLength(2);
+    expect(out.map((e) => [e.alert!.ok, e.reason])).toEqual([
+      [false, 'delivery deadline of 300 ms passed after 1 attempt'],
+      [false, 'delivery deadline of 300 ms passed after 1 attempt'],
+      [false, 'delivery deadline of 300 ms passed before delivery'],
+      [false, 'delivery deadline of 300 ms passed before delivery'],
+      [false, 'delivery deadline of 300 ms passed before delivery'],
+    ]);
+  });
+
+  it('checks the host by DNS before the POST: private answers, no answer and a failed lookup are refused', async () => {
+    const url = 'https://hooks.example.org/a';
+    const regs = { [alice.address.toLowerCase()]: await reg(alice, url) };
+    const calls: string[] = [];
+    const fake = vi.fn(async (u: string) => {
+      calls.push(u);
+      return { status: 200 };
+    });
+    const deliver = (resolveHost: (h: string) => Promise<readonly string[]>) =>
+      deliverWebhookAlerts(changed, [active(3n, alice.address)], regs, { ...opts, fetch: fake, resolveHost });
+    expect((await deliver(async () => ['93.184.216.34', '10.0.0.5']))[0]).toMatchObject({ alert: { ok: false }, reason: 'webhook host resolves to a private address' });
+    expect((await deliver(async () => ['::ffff:127.0.0.1']))[0]).toMatchObject({ reason: 'webhook host resolves to a private address' });
+    expect((await deliver(async () => []))[0]).toMatchObject({ reason: 'webhook host does not resolve' });
+    expect((await deliver(async () => Promise.reject(new Error('ENOTFOUND'))))[0]).toMatchObject({ reason: 'webhook host lookup failed' });
+    expect(calls).toEqual([]);
+    const seen: string[] = [];
+    expect((await deliver(async (h) => (seen.push(h), ['93.184.216.34'])))[0]).toMatchObject({ alert: { ok: true, status: 200 } });
+    expect(seen).toEqual(['hooks.example.org']);
+    expect(calls).toEqual([url]);
+    // An allowed local origin is not looked up.
+    const local = { [alice.address.toLowerCase()]: await reg(alice, `${base}/alice`) };
+    const never = vi.fn(async () => ['10.0.0.1']);
+    expect((await deliverWebhookAlerts(changed, [active(3n, alice.address)], local, { ...opts, resolveHost: never }))[0]!.alert!.ok).toBe(true);
+    expect(never).not.toHaveBeenCalled();
+  });
+
+  it('delivers only changed events, and not to a registration that no longer verifies or whose origin is not allowed', async () => {
     const tampered = { ...(await reg(alice, `${base}/alice`)), url: `${base}/other` };
     const regs = { [alice.address.toLowerCase()]: tampered, [mallory.address.toLowerCase()]: await reg(mallory, `${base}/mallory`) };
     expect(await deliverWebhookAlerts({ ...changed, kind: 'checked' }, [active(3n, alice.address)], regs, opts)).toEqual([]);
@@ -580,21 +726,24 @@ describe('webhook delivery against a local HTTP server', () => {
       ['3', false, 'webhook registration refused: signature'],
       ['5', true, undefined],
     ]);
-    // The same http://127.0.0.1 registration is refused once local http is not allowed.
-    const strict = await deliverWebhookAlerts(changed, both, regs, { ...opts, allowLocalHttp: false });
+    // The same http://127.0.0.1 registration is refused once its origin is not allowed.
+    const strict = await deliverWebhookAlerts(changed, both, regs, { ...opts, allowedLocalOrigins: [] });
     expect(strict[1]).toMatchObject({ alert: { subscriptionId: '5', ok: false }, reason: 'webhook registration refused: url' });
     expect(hits.map((h) => h.path)).toEqual(['/mallory']);
   });
 
-  it('createWebhookAlertSink reads webhooks.json for every event; no file, no alerts', async () => {
+  it('createWebhookAlertSink reads webhooks.json for every event; no file, no alerts; a bad allowed origin throws', async () => {
     const file = path.join(dir, 'webhooks.json');
-    const sink = createWebhookAlertSink({ webhooksFile: file, allowLocalHttp: true, reportBaseUrl: 'https://raw.example.org/certs/checks', sleep: async () => {} });
+    const sink = createWebhookAlertSink({ webhooksFile: file, allowedLocalOrigins: [base], reportBaseUrl: 'https://raw.example.org/certs/checks', sleep: async () => {} });
     expect(await sink.deliver(changed, [active(3n, alice.address)])).toEqual([]);
-    await saveWebhookRegistration(file, await reg(alice, `${base}/alice`));
+    await registerWebhook(file, await reg(alice, `${base}/alice`), { allowedLocalOrigins: [base] });
     const out = await sink.deliver(changed, [active(3n, alice.address)]);
     expect(out).toHaveLength(1);
     expect(out[0]!.alert).toMatchObject({ subscriptionId: '3', ok: true, status: 204 });
     expect(hits.map((h) => h.path)).toEqual(['/alice']);
+    for (const bad of ['localhost:3418:x', 'http://localhost:3418/', 'HTTP://localhost:3418', 'ftp://localhost:3418']) {
+      expect(() => createWebhookAlertSink({ webhooksFile: file, allowedLocalOrigins: [bad] }), bad).toThrow(/is not an exact http\(s\) origin/);
+    }
   });
 
   it('reportUrlOf maps certs/checks paths under the base and nothing else', () => {
