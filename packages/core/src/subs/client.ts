@@ -4,7 +4,7 @@ import { TX_GAS_CAP, withMargin } from '../chain/gas.js';
 import { TokenBucket } from '../chain/transport.js';
 import type { TxOutcome } from '../cert/registry.js';
 import { checkSubscriptionsAbi, checkSubscriptionsBytecode } from './artifact.js';
-import type { ActiveSubscription, SubscriptionSource } from './hooks.js';
+import type { ActiveSubscription, SubscriptionSource } from '../watch/hooks.js';
 import { isActiveAt, MAX_SUBSCRIPTION_DAYS, type Subscription } from './subscription.js';
 
 /** Exit code of the subs commands when a subscriptions action fails or is refused. */

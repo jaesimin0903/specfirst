@@ -18,7 +18,7 @@ import {
   type WebhookVerification,
   type WebhooksFile,
 } from './alerts.js';
-import type { AlertSink } from './hooks.js';
+import type { AlertSink } from '../watch/hooks.js';
 
 export const WEBHOOKS_JSON = 'webhooks.json';
 

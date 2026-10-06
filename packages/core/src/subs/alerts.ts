@@ -4,7 +4,8 @@
 // the DNS check and the watcher's sink are in webhooks.ts (Node).
 import { getAddress, isAddress, verifyMessage, type Address, type Hex } from 'viem';
 import { z } from 'zod';
-import type { ActiveSubscription, FeedAttestation, FeedChange, FeedCheck, FeedEvent } from './hooks.js';
+import type { ActiveSubscription } from '../watch/hooks.js';
+import type { FeedAttestation, FeedChange, FeedCheck, FeedEvent } from '../watch/schema.js';
 
 /** A registration older than this (seconds between issued and now) is refused. */
 export const WEBHOOK_MAX_AGE_SEC = 600;

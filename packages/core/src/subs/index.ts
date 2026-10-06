@@ -15,19 +15,6 @@ export {
   refundAt,
   type Subscription,
 } from './subscription.js';
-export type {
-  ActiveSubscription,
-  SubscriptionSource,
-  AlertSink,
-  FeedEvent,
-  FeedKind,
-  FeedSource,
-  FeedSummary,
-  FeedCheck,
-  FeedChange,
-  FeedAttestation,
-  FeedAlert,
-} from './hooks.js';
 export {
   SubscriptionsClient,
   SubscriptionsError,

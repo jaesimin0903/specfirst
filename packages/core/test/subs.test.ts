@@ -17,6 +17,7 @@ import {
   deliverWebhookAlerts,
   deploySubscriptions,
   dueAt,
+  feedEventSchema,
   isActiveAt,
   isPrivateAddress,
   lookupWebhookHost,
@@ -666,6 +667,8 @@ describe('webhook delivery against a local HTTP server', () => {
       ['2', false, 'over the cap of 2 webhooks per event'],
       ['3', false, 'over the cap of 2 webhooks per event'],
     ]);
+    // The alerted events are feed lines as @specfirst/core/watch defines them (the watcher renumbers seq on append).
+    for (const e of out) expect(feedEventSchema.parse(e)).toEqual(e);
   });
 
   it('one event never takes longer than its deadline: POSTs in flight are aborted, the rest are recorded as failed', async () => {
@@ -688,6 +691,7 @@ describe('webhook delivery against a local HTTP server', () => {
       [false, 'delivery deadline of 300 ms passed before delivery'],
       [false, 'delivery deadline of 300 ms passed before delivery'],
     ]);
+    for (const e of out) expect(feedEventSchema.parse(e)).toEqual(e);
   });
 
   it('checks the host by DNS before the POST: private answers, no answer and a failed lookup are refused', async () => {

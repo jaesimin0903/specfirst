@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodeAbiParameters, encodeEventTopics, getAddress, toEventSelector, type Address, type Hex } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   acquireWatchLock,
@@ -12,6 +13,7 @@ import {
   builtinSources,
   changeOf,
   checkReportHash,
+  createWebhookAlertSink,
   decodeSignal,
   DEMO_FACTORY_ADDRESS,
   demoTokenAbi,
@@ -36,6 +38,7 @@ import {
   QUEUE_PRIORITY,
   rangeLimitOf,
   readLogWindows,
+  registerWebhook,
   seedKnownVaults,
   signalTopics,
   sourcesFromFile,
@@ -45,6 +48,8 @@ import {
   verifySourceFixture,
   WATCH_DIR,
   Watcher,
+  webhookMessage,
+  WEBHOOKS_JSON,
   WatchError,
   watchStateSchema,
   watchStatusSchema,
@@ -895,6 +900,82 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass();
     expect(h.checks).toHaveLength(2);
     expect(delivered).toHaveLength(1);
+  });
+
+  it("the webhook sink of @specfirst/core/subs plugs in: one POST per registered subscriber, alerted events numbered after the change", async () => {
+    const h = await harness();
+    // anvil account 1 registers a webhook; the other subscriber has none.
+    const alice = privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d');
+    const bob = { address: addr(0xb0b) };
+    const webhooksFile = path.join(h.dir, WATCH_DIR, WEBHOOKS_JSON);
+    const url = 'https://hooks.example.org/specfirst';
+    const issued = Math.floor(T0.getTime() / 1000);
+    const signature = await alice.signMessage({ message: webhookMessage({ subscriber: alice.address, url, issued }) });
+    expect(await registerWebhook(webhooksFile, { subscriber: alice.address, url, issued, signature }, { now: issued })).toMatchObject({ ok: true, stored: true });
+    const posts: Array<{ url: string; body: unknown }> = [];
+    const sink = createWebhookAlertSink({
+      webhooksFile,
+      fetch: async (to, init) => {
+        posts.push({ url: to, body: JSON.parse(init.body) });
+        return { status: 204 };
+      },
+      resolveHost: async () => ['93.184.216.34'],
+      reportBaseUrl: 'https://raw.example.org/certs/checks',
+      now: () => h.clock.now,
+    });
+    const sub = (id: bigint, subscriber: Address): ActiveSubscription => ({ id, subscriber, subjectChainId: 143n, subject: V, standardId: ERC4626, startsAt: 0n, endsAt: 10n ** 12n });
+    const w = h.watcher({ subscribedMinutes: 600 }, { subscriptions: { active: async () => [sub(3n, alice.address), sub(4n, bob.address), sub(7n, alice.address)] }, alerts: sink });
+    h.chain.logs.push(factoryLog(V, 1500n));
+    h.store.state.cursor = '1400';
+    await w.pass();
+
+    const feed = await h.feed();
+    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'queued:subscribed', 'checked:subscribed', 'attested:subscribed', 'changed:subscribed', 'alerted:']);
+    expect(feed.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    const changed = feed[5]!;
+    expect(feed[6]).toEqual({
+      v: 1,
+      seq: 7,
+      at: T0.toISOString(),
+      kind: 'alerted',
+      chainId: 143,
+      subject: V,
+      alert: { subscriptionId: '3', subscriber: alice.address, channel: 'webhook', ok: true, status: 204 },
+    });
+    expect(posts).toEqual([
+      {
+        url,
+        body: {
+          v: 1,
+          subscriptionId: '3',
+          subscriptionIds: ['3', '7'],
+          subject: V,
+          chainId: 143,
+          change: changed.change,
+          check: changed.check,
+          attestation: changed.attestation,
+          reportURL: `https://raw.example.org/certs/checks/${changed.check!.reportPath.slice('certs/checks/'.length)}`,
+        },
+      },
+    ]);
+
+    // An unchanged re-check sends nothing: the webhook sink delivers changes only, the inbox shows first checks.
+    h.chain.head = 2100n;
+    h.chain.logs.push(depositLog(V, 2005n));
+    await w.pass();
+    expect(kinds((await h.feed()).slice(7))).toEqual(['queued:first-deposit', 'checked:first-deposit']);
+    expect(posts).toHaveLength(1);
+
+    // A failed delivery is an alerted event with a reason, never the URL, and a valid feed line.
+    const failing = createWebhookAlertSink({ webhooksFile, fetch: async () => ({ status: 410 }), resolveHost: async () => ['93.184.216.34'], now: () => h.clock.now });
+    const w2 = h.watcher({ subscribedMinutes: 600 }, { subscriptions: { active: async () => [sub(3n, alice.address)] }, alerts: failing });
+    h.chain.head = 2200n;
+    h.chain.failing.set(V.toLowerCase(), ['previewDeposit']);
+    h.chain.logs.push(upgradedLog(V, 2150n));
+    await w2.pass();
+    const last = (await h.feed()).at(-1)!;
+    expect(last).toMatchObject({ kind: 'alerted', alert: { subscriptionId: '3', ok: false, status: 410 }, reason: 'HTTP 410 after 1 attempt' });
+    expect(JSON.stringify(last)).not.toContain('hooks.example.org');
   });
 
   it('a subscribed subject the watcher does not know is detected, probed and checked first', async () => {
