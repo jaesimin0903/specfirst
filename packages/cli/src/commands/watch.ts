@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  acquireIssuerLock,
   acquireWatchLock,
   badChecksum,
   DEMO_FACTORY_ADDRESS,
@@ -47,6 +48,7 @@ import {
   WatchStore,
   WEBHOOKS_JSON,
   type FeedEvent,
+  type FeedSource,
   type RunStandardCheckInput,
   type SourceFixture,
   type StandardCheckClient,
@@ -59,7 +61,7 @@ import {
 } from '@specfirst/core';
 import type { Command } from 'commander';
 import pc from 'picocolors';
-import { createPublicClient, getAddress, parseEther, type Address, type PublicClient } from 'viem';
+import { createPublicClient, formatEther, getAddress, parseEther, type Address, type PublicClient } from 'viem';
 import { contextFrom, emitEvent, printLine, type CliContext } from '../lib/context.js';
 import {
   ANVIL_RPC_ENV,
@@ -110,6 +112,10 @@ interface WatchOptions {
   sweepPerHour: string;
   subscribedMinutes: string;
   maxAttestPerDay: string;
+  maxUnsolicitedPerDay: string;
+  maxAttestPerSubject: string;
+  minBalance: string;
+  issuerKeyEnv?: string;
   attest: boolean;
   shareIssuerKey?: boolean;
   network: string;
@@ -215,6 +221,36 @@ async function loadSources(file: string | undefined, chainId: number, projectDir
   }
 }
 
+/**
+ * The fixtures of a --sources file that carry no log are read from the subject chain before the watcher starts:
+ * a factory source that does not decode its own fixture would watch for nothing, so the start is refused.
+ */
+async function verifyFixturesOnChain(
+  file: string | undefined,
+  chainId: number,
+  projectDir: string,
+  client: Pick<PublicClient, 'request'>,
+  sleep?: (ms: number) => Promise<void>,
+): Promise<void> {
+  if (!file) return;
+  const { sources, fixtures } = await loadSources(file, chainId, projectDir);
+  const read = fixtureLogReader(client);
+  const wait = sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (const f of fixtures.filter((x) => !x.log)) {
+    let out: { ok: boolean; decoded: string[] } = { ok: false, decoded: [] };
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        out = await verifySourceFixture(f, sources, read);
+        break;
+      } catch (err) {
+        out = { ok: false, decoded: [`error: ${errorText(err)}`] };
+        if (attempt < 3) await wait(2_000);
+      }
+    }
+    if (!out.ok) throw new ConfigError(`--sources ${file}: "${f.source}" does not decode its fixture at block ${f.block} (${f.vault}); decoded [${out.decoded.join(' ')}]`);
+  }
+}
+
 /** A read-only client over `urls` that also fails over on node errors, and refuses an RPC of another chain. */
 async function subjectClientFor(urls: string[], chainId: number): Promise<StandardCheckClient & SubjectClient & Pick<PublicClient, 'request'>> {
   const chain = Object.values(NETWORKS).find((c) => c.id === chainId);
@@ -227,6 +263,15 @@ async function subjectClientFor(urls: string[], chainId: number): Promise<Standa
   }
   if (reported !== chainId) throw new ConfigError(`the subject RPC ${urls[0]} serves chain ${reported}, not --subject-chain ${chainId}`);
   return client as unknown as StandardCheckClient & SubjectClient & Pick<PublicClient, 'request'>;
+}
+
+/** The host of an RPC URL, for logs: the path and query of a provider URL often carry an API key. */
+export function rpcHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return '(not a URL)';
+  }
 }
 
 function short(a: string): string {
@@ -310,7 +355,11 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
     .option('--sweep-hours <h>', 're-check every known vault at most once per this many hours', String(DEFAULT_WATCH_CONFIG.sweepHours))
     .option('--sweep-per-hour <n>', 'start at most this many sweep checks per hour (0: no sweep)', String(DEFAULT_WATCH_CONFIG.sweepPerHour))
     .option('--subscribed-minutes <m>', 're-check subscribed subjects this often', String(DEFAULT_WATCH_CONFIG.subscribedMinutes))
-    .option('--max-attest-per-day <n>', 'attestations per UTC day; more wait for the next day', String(DEFAULT_WATCH_CONFIG.maxAttestPerDay))
+    .option('--max-attest-per-day <n>', 'attestations per UTC day, every class; more wait for the next day', String(DEFAULT_WATCH_CONFIG.maxAttestPerDay))
+    .option('--max-unsolicited-per-day <n>', 'of those, attestations nobody subscribed to (factory, fail, attested-change)', String(DEFAULT_WATCH_CONFIG.maxUnsolicitedPerDay))
+    .option('--max-attest-per-subject <n>', 'attestations of one subject per UTC day', String(DEFAULT_WATCH_CONFIG.maxAttestPerSubjectPerDay))
+    .option('--min-balance <MON>', 'below this issuer balance nothing is sent (status.json says why)', formatEther(DEFAULT_WATCH_CONFIG.minBalanceWei))
+    .option('--issuer-key-env <NAME>', `environment variable holding the issuer key (default ${WATCH_ISSUER_KEY_ENV}); a second watcher, the testnet demo, signs with its own`)
     .option('--no-attest', 'decide and record, send nothing (no key needed)')
     .option('--share-issuer-key', `sign with ${ISSUER_KEY_ENV} when ${WATCH_ISSUER_KEY_ENV} is unset (the desk worker's key: do not run both at once)`)
     .option('--network <name>', 'network of the attestation registry: monad-testnet or anvil (monad-mainnet is refused)', 'monad-testnet')
@@ -336,6 +385,12 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         const sweepPerHour = Number(nonNegative(opts.sweepPerHour, '--sweep-per-hour', 10_000n));
         const subscribedMinutes = Number(positive(opts.subscribedMinutes, '--subscribed-minutes', 1_000_000n));
         const maxAttestPerDay = Number(nonNegative(opts.maxAttestPerDay, '--max-attest-per-day', 1_000_000n));
+        const maxUnsolicitedPerDay = Number(nonNegative(opts.maxUnsolicitedPerDay, '--max-unsolicited-per-day', 1_000_000n));
+        const maxAttestPerSubjectPerDay = Number(nonNegative(opts.maxAttestPerSubject, '--max-attest-per-subject', 1_000n));
+        if (!/^\d+(\.\d{1,18})?$/.test(opts.minBalance)) throw new ConfigError(`--min-balance must be a decimal amount of MON, got "${opts.minBalance}"`);
+        const minBalanceWei = parseEther(opts.minBalance);
+        const keyEnv = opts.issuerKeyEnv ?? WATCH_ISSUER_KEY_ENV;
+        if (!/^[A-Z_][A-Z0-9_]*$/.test(keyEnv)) throw new ConfigError(`--issuer-key-env must name an environment variable (A-Z, 0-9, _), got "${keyEnv}"`);
         const base = reportBase(opts.reportBaseUrl ?? process.env[REPORT_BASE_URL_ENV] ?? DEFAULT_REPORT_BASE_URL);
         const { sources, from: sourcesFrom } = await loadSources(opts.sources, subjectChainId, ctx.projectDir);
 
@@ -346,11 +401,11 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         let net: ResolvedNetwork;
         if (opts.attest) {
           net = resolveNetwork(opts);
-          let key = optionalKey(WATCH_ISSUER_KEY_ENV);
+          let key = optionalKey(keyEnv);
           if (!key && opts.shareIssuerKey) key = optionalKey(ISSUER_KEY_ENV);
           if (!key) {
             try {
-              key = resolveKey(net, WATCH_ISSUER_KEY_ENV);
+              key = resolveKey(net, keyEnv);
             } catch (err) {
               if (err instanceof ConfigError) throw new ConfigError(`${err.message}; --share-issuer-key signs with ${ISSUER_KEY_ENV} instead, or --no-attest sends nothing`);
               throw err;
@@ -382,15 +437,23 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
 
         const urls = watchSubjectRpcs(subjectChainId, opts.subjectRpc);
         const subjectClient = await subjectClientFor(urls, subjectChainId);
+        await verifyFixturesOnChain(opts.sources, subjectChainId, ctx.projectDir, subjectClient, deps.sleep);
+        // Locks first: the key (two watchers on one key collide on nonces wherever they run), then the directory;
+        // only the holder repairs the directory (a cut feed line, temp files) as it loads it.
+        const releases: Array<() => Promise<void>> = [];
         let store: WatchStore;
-        let release: () => Promise<void>;
         try {
-          store = await WatchStore.load(ctx.projectDir, subjectChainId);
-          release = await acquireWatchLock(ctx.projectDir, subjectChainId);
+          if (issuer) releases.push(await acquireIssuerLock(issuer));
+          releases.push(await acquireWatchLock(ctx.projectDir, subjectChainId));
+          store = await WatchStore.load(ctx.projectDir, subjectChainId, { repair: true });
         } catch (err) {
+          for (const r of releases.reverse()) await r();
           if (err instanceof WatchError) throw new ConfigError(err.message);
           throw err;
         }
+        const release = async () => {
+          for (const r of releases.reverse()) await r();
+        };
         try {
           const seeded = await seedKnownVaults(ctx.projectDir, store);
           for (const s of seeded.skipped) console.error(pc.yellow(`specfirst watch: warning: skipped ${s}`));
@@ -399,6 +462,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             subjectClient,
             subjectChainId,
             subjectRpcUrl: urls[0]!,
+            subjectRpcUrls: urls,
             projectDir: ctx.projectDir,
             runs,
             timeoutSec: checkTimeoutSec,
@@ -406,6 +470,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             reportBaseUrl: base,
             registry,
             attest: opts.attest,
+            ...(issuer && net.clients ? { balance: () => net.clients.publicClient.getBalance({ address: issuer as Address }) } : {}),
             ...(deps.runCheck ? { runCheck: deps.runCheck } : {}),
             onCheckEvent: (e) => emitEvent(ctx, e),
           });
@@ -415,6 +480,9 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             sweepPerHour,
             subscribedMinutes,
             maxAttestPerDay,
+            maxUnsolicitedPerDay,
+            maxAttestPerSubjectPerDay,
+            minBalanceWei,
             allowUnknownProxy: Boolean(opts.allowUnknownProxy),
             toBlock,
             ...deps.config,
@@ -425,6 +493,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             sources,
             config,
             window: new LogWindow(logWindow),
+            adopt: seeded.adopt,
             ...(hooks ? { hooks } : {}),
             onEvent: (e) => {
               emitEvent(ctx, e);
@@ -434,11 +503,29 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           const rel = (p: string) => path.relative(ctx.projectDir, p);
           const known = Object.keys(store.vaults.vaults).length;
           printLine(ctx, stage('watch', `chain ${subjectChainId}  ${sources.length} sources (${sourcesFrom})  ${known} known vault${known === 1 ? '' : 's'}  ${pc.dim(rel(store.dir))}`));
-          printLine(ctx, cont(pc.dim(`subject RPC ${urls.length > 1 ? `${urls[0]} (+${urls.length - 1} fallback)` : urls[0]}  lag ${blockLag}  window ${logWindow}  runs ${runs}  check timeout ${checkTimeoutSec}s  ${opts.once ? 'one pass' : `poll ${poll}s`}`)));
           printLine(
             ctx,
-            cont(pc.dim(registry ? `registry ${registry.address} on ${attestOn}${issuer ? `  issuer ${issuer}` : ''}  ${opts.attest ? `max ${maxAttestPerDay} attestations a day` : 'no attest'}` : 'no attest, no registry: decisions assume no attestation')),
+            cont(
+              pc.dim(
+                `subject RPC ${rpcHost(urls[0]!)}${urls.length > 1 ? ` (+${urls.length - 1} fallback)` : ''}  lag ${blockLag}  window ${logWindow}  runs ${runs}  check timeout ${checkTimeoutSec}s  ${opts.once ? 'one pass' : `poll ${poll}s`}`,
+              ),
+            ),
           );
+          printLine(
+            ctx,
+            cont(
+              pc.dim(
+                registry
+                  ? `registry ${registry.address} on ${attestOn}${issuer ? `  issuer ${issuer} (${keyEnv})` : ''}  ${
+                      opts.attest
+                        ? `${maxAttestPerDay} attestations a day, ${maxUnsolicitedPerDay} unsolicited, ${maxAttestPerSubjectPerDay} per subject, none below ${formatEther(minBalanceWei)} MON`
+                        : 'no attest'
+                    }`
+                  : 'no attest, no registry: decisions assume no attestation',
+              ),
+            ),
+          );
+          if (seeded.adopt.length) printLine(ctx, cont(pc.dim(`${seeded.adopt.length} report${seeded.adopt.length === 1 ? '' : 's'} in certs/checks newer than the last check, taken through the change decision`)));
           printLine(
             ctx,
             cont(
@@ -458,7 +545,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             sources: sources.map((s) => s.name),
             sourcesFrom,
             known,
-            seeded: { added: seeded.added, updated: seeded.updated, skipped: seeded.skipped.length },
+            seeded: { added: seeded.added, adopted: seeded.adopt.length, skipped: seeded.skipped.length },
             cursor: store.state.cursor,
             toBlock: toBlock?.toString() ?? null,
             lagBlocks: blockLag.toString(),
@@ -469,7 +556,11 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             attest: opts.attest,
             registry: registry?.address ?? null,
             issuer,
+            issuerKeyEnv: issuer ? keyEnv : null,
             maxAttestPerDay,
+            maxUnsolicitedPerDay,
+            maxAttestPerSubjectPerDay,
+            minBalanceWei: minBalanceWei.toString(),
             reportBaseUrl: base,
             subs: alerting?.subs ?? null,
             webhooks: alerting ? rel(alerting.webhooksFile) : null,
@@ -479,6 +570,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
 
           const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
           for (;;) {
+            // pass() records its own failures; nothing it meets may end an unattended watcher.
             const r = await watcher.pass({ drain: Boolean(opts.once) });
             if (opts.once) {
               // A one-shot run that could not read the chain must not look like a quiet one.

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,7 +87,8 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
   };
   const register = (p: import('commander').Command) => {
     registerAttestRegistryCommand(p);
-    registerWatchCommand(p, { runCheck, hooks: { subscriptions: { active: async () => subscriptions }, alerts }, sleep: async () => {} });
+    // A subscribed subject is due at every pass and a confirmation at the next one, so the test needs no clock.
+    registerWatchCommand(p, { runCheck, hooks: { subscriptions: { active: async () => subscriptions }, alerts }, config: { subscribedMinutes: 0, confirmDelayMs: 0 }, sleep: async () => {} });
   };
   const cli = async (...args: string[]) => {
     process.exitCode = undefined;
@@ -110,7 +111,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     const demo = JSON.parse(await readFile(DEMO_SOURCES, 'utf8')) as { chainId: number };
     sourcesFile = path.join(dir, 'sources-anvil.json');
     await writeFile(sourcesFile, JSON.stringify({ ...demo, chainId: 31337 }));
-    Object.assign(process.env, { ANVIL_RPC: anvil.url, DEPLOYER_PRIVATE_KEY: DEPLOYER_KEY, ISSUER_PRIVATE_KEY: ISSUER_KEY, WATCH_ISSUER_PRIVATE_KEY: WATCH_KEY });
+    Object.assign(process.env, { ANVIL_RPC: anvil.url, DEPLOYER_PRIVATE_KEY: DEPLOYER_KEY, ISSUER_PRIVATE_KEY: ISSUER_KEY, WATCH_ISSUER_PRIVATE_KEY: WATCH_KEY, SPECFIRST_LOCK_DIR: path.join(dir, 'locks') });
     for (const k of ['SPECFIRST_ATTEST_REGISTRY_31337', 'SPECFIRST_REPORT_BASE_URL']) delete process.env[k];
   }, 60_000);
 
@@ -163,7 +164,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     const first = await watch();
     expect(first.err).toBe('');
     expect(first.code).toBe(0);
-    expect(event(first, 'watch-start')).toMatchObject({ subjectChainId: 31337, sources: ['Specfirst DemoVaultFactory', 'ERC-4626 Deposit', 'EIP-1967 Upgraded', 'EIP-1967 BeaconUpgraded', 'DemoVault BrokenSet'], known: 0, attest: true, registry, issuer: WATCH_ISSUER });
+    expect(event(first, 'watch-start')).toMatchObject({ subjectChainId: 31337, sources: ['Specfirst DemoVaultFactory', 'ERC-4626 Deposit', 'EIP-1967 Upgraded', 'EIP-1967 BeaconUpgraded'], known: 0, attest: true, registry, issuer: WATCH_ISSUER });
     expect(fed(first)).toEqual([]);
 
     const v = await cli('watch', 'demo', 'vault', '--asset', token, '--network', 'anvil');
@@ -191,7 +192,16 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     expect(onDisk.invalid).toBe(0);
     expect(onDisk.events).toEqual(feed);
     const status = watchStatusSchema.parse(JSON.parse(await readFile(path.join(watchDir(), 'status.json'), 'utf8')));
-    expect(status).toMatchObject({ chainId: 31337, lagBlocks: 0, running: null, queue: [], counts: { known: 1, detected24h: 1, checked24h: 1, attested24h: 1, changed24h: 1 }, attestBudget: { perDay: 40, usedToday: 1 } });
+    expect(status).toMatchObject({
+      chainId: 31337,
+      lagBlocks: 0,
+      running: null,
+      queue: [],
+      counts: { known: 1, detected24h: 1, checked24h: 1, attested24h: 1, changed24h: 1 },
+      attestBudget: { perDay: 15, usedToday: 1, unsolicitedPerDay: 10, unsolicitedUsedToday: 1, perSubjectPerDay: 2, minBalanceWei: '300000000000000000', paused: null },
+    });
+    expect(BigInt(status.attestBudget.balanceWei!)).toBeGreaterThan(10n ** 18n);
+    expect(BigInt(status.gasCostWei!)).toBeGreaterThan(0n);
     expect(status.sources[0]).toMatchObject({ name: 'Specfirst DemoVaultFactory', address: DEMO_FACTORY_ADDRESS, seen: 1 });
     const vaults = watchVaultsSchema.parse(JSON.parse(await readFile(path.join(watchDir(), 'vaults.json'), 'utf8')));
     expect(vaults.vaults[vault.toLowerCase()]).toMatchObject({ firstSeen: { source: 'factory' }, lastAttestationId: latest.id.toString(), firstDepositBlock: null });
@@ -207,16 +217,18 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     expect(r.code).toBe(0);
     const feed = fed(r);
     expect(kinds(feed)).toEqual(['queued:first-deposit', 'checked:first-deposit']);
-    expect(feed[1]!.reason).toMatch(/^unchanged since attestation \d+$/);
+    expect(feed[1]!.reason).toMatch(/^not attested \[unchanged\]: unchanged since attestation \d+$/);
     expect(await reg.attestationCount()).toBe(count);
     expect(checks).toHaveLength(2);
   });
 
-  it('the operator switching the bug on (BrokenSet) re-checks at once: the change is attested and alerted to the subscription', async () => {
+  it("a subscription gets its first check; the bug switched on is a change confirmed at the next block, then attested and alerted", async () => {
     const now = BigInt(Math.floor(Date.now() / 1000));
     subscriptions.push({ id: 4n, subscriber: privateKeyToAccount(ANVIL_KEYS[3] as Hex).address, subjectChainId: 31337n, subject: vault, standardId: ERC4626, startsAt: now - 60n, endsAt: now + 86_400n });
-    // Checked a moment ago: not due for the subscribed cadence (--subscribed-minutes 60).
-    expect(fed(await watch())).toEqual([]);
+    const first = await watch();
+    expect(kinds(fed(first))).toEqual(['queued:subscribed', 'checked:subscribed', 'alerted:subscribed']);
+    expect(fed(first)[1]!.reason).toMatch(/^not attested \[unchanged\]: unchanged since attestation \d+$/);
+    expect(delivered.map((d) => [d.event.kind, d.subs])).toEqual([['checked', ['4']]]);
 
     const reg = new AttestationRegistryClient(registry, clients.publicClient);
     const before = (await reg.latest(31337n, vault, ERC4626))!;
@@ -225,17 +237,27 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     expect(String(notOperator)).toMatch(/NotOperator|reverted/);
     expect(event(await cli('watch', 'demo', 'set-broken', vault, 'on', '--network', 'anvil'), 'watch-demo-set-broken')).toMatchObject({ vault, broken: true });
     await mine();
+    const pending = await watch();
+    expect(kinds(fed(pending))).toEqual(['queued:subscribed', 'checked:subscribed', 'queued:subscribed']);
+    expect(fed(pending)[1]!.reason).toBe('pending confirmation [confirm]: regressed against the last check; nothing follows until a second check at a later block agrees');
+    expect((await reg.latest(31337n, vault, ERC4626))!.id).toBe(before.id);
+    expect(delivered).toHaveLength(1);
+
+    await mine();
     const r = await watch();
     expect(r.code).toBe(0);
     const feed = fed(r);
-    expect(kinds(feed)).toEqual(['queued:upgrade', 'checked:upgrade', 'attested:upgrade', 'changed:upgrade', 'alerted:upgrade']);
-    expect(feed[1]!.reason).toBe(`attesting: counts, failed differ from attestation ${before.id}`);
+    expect(kinds(feed)).toEqual(['checked:subscribed', 'attested:subscribed', 'changed:subscribed', 'alerted:subscribed']);
+    expect(feed[0]!.reason).toMatch(new RegExp(`^confirmed by a second check at block \\d+ after block \\d+; attesting \\[subscribed\\]: confirmed change of a subscribed subject; counts, failed differ from attestation ${before.id}$`));
     const after = (await reg.latest(31337n, vault, ERC4626))!;
     expect(after.attestation).toMatchObject({ failCount: 1, passCount: 29, issuer: WATCH_ISSUER });
-    expect(feed[2]!.attestation).toMatchObject({ id: after.id.toString(), supersedes: before.id.toString() });
-    expect(feed[3]).toMatchObject({ change: { kind: 'regressed', from: { failed: [] }, to: { failed: ['previewDeposit'] } }, attestation: { id: after.id.toString() } });
-    expect(feed[4]).toMatchObject({ subject: vault, alert: { subscriptionId: '4', channel: 'inbox', ok: true } });
-    expect(delivered.map((d) => [d.event.kind, d.subs])).toEqual([['changed', ['4']]]);
+    expect(feed[1]!.attestation).toMatchObject({ id: after.id.toString(), supersedes: before.id.toString() });
+    expect(feed[2]).toMatchObject({ change: { kind: 'regressed', from: { failed: [] }, to: { failed: ['previewDeposit'] } }, attestation: { id: after.id.toString() } });
+    expect(feed[3]).toMatchObject({ subject: vault, alert: { subscriptionId: '4', channel: 'inbox', ok: true } });
+    expect(delivered.map((d) => [d.event.kind, d.subs])).toEqual([
+      ['checked', ['4']],
+      ['changed', ['4']],
+    ]);
     expect((await reg.attestationOf(before.id)).status).toBe(2);
     subscriptions.splice(0);
   });
@@ -251,19 +273,51 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
     expect(event(r, 'watch-start')).toMatchObject({ attest: false, registry, issuer: null });
-    expect(kinds(fed(r))).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'changed:factory']);
-    expect(fed(r)[2]).toMatchObject({ subject: second, reason: 'not attested (--no-attest): no attestation of the subject yet', check: { failed: ['previewDeposit'] } });
+    // A first check with a failed property waits for a second check at a later block.
+    expect(kinds(fed(r))).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'queued:factory']);
+    expect(fed(r)[2]).toMatchObject({ subject: second, reason: 'pending confirmation [confirm]: a failed property in a first check; nothing follows until a second check at a later block agrees' });
+    await mine();
+    const confirmed = await watch('--no-attest');
+    expect(kinds(fed(confirmed))).toEqual(['checked:factory', 'changed:factory']);
+    expect(fed(confirmed)[0]).toMatchObject({
+      subject: second,
+      reason: expect.stringMatching(/; not attested \[no-attest\]: would attest as factory \(first check of a vault a factory announced\); no attestation of the subject yet$/),
+      check: { failed: ['previewDeposit'] },
+    });
     expect(await reg.attestationCount()).toBe(count);
     process.env.WATCH_ISSUER_PRIVATE_KEY = WATCH_KEY;
   });
 
-  it('a second watcher on the same chain directory is refused while the first is alive', async () => {
+  it('a second watcher on the same chain directory, or on the same key anywhere, is refused while the first is alive; --issuer-key-env picks another key', async () => {
     const lock = path.join(watchDir(), 'watch.lock');
     await writeFile(lock, `${process.ppid}\n`);
     const r = await watch();
     expect(r.code).toBe(19);
     expect(r.err).toMatch(new RegExp(`another watcher \\(pid ${process.ppid}\\) is running`));
     await rm(lock);
+
+    // The key is locked for the user, not for the project: another project directory on the same key is refused.
+    const keyLock = path.join(dir, 'locks', `issuer-${WATCH_ISSUER.toLowerCase()}.lock`);
+    await mkdir(path.dirname(keyLock), { recursive: true });
+    await writeFile(keyLock, `${process.ppid}\n`);
+    const elsewhere = await mkdtemp(path.join(tmpdir(), 'specfirst-watch-other-'));
+    process.exitCode = undefined;
+    const other = await capture(() =>
+      buildProgram(register).parseAsync(['node', 'specfirst', '--json', '--project', elsewhere, 'watch', '--network', 'anvil', '--subject-chain', '31337', '--subject-rpc', anvil.url, '--once']),
+    );
+    expect(process.exitCode).toBe(19);
+    expect(other.err.join('\n')).toMatch(new RegExp(`another watcher signing as ${WATCH_ISSUER} \\(pid ${process.ppid}\\) is running`));
+    await rm(keyLock);
+    await rm(elsewhere, { recursive: true, force: true });
+
+    // A demo watcher signs with its own key, named by --issuer-key-env; it must be an issuer like any other.
+    const demoKey = ANVIL_KEYS[5] as Hex;
+    process.env.WATCH_DEMO_ISSUER_PRIVATE_KEY = demoKey;
+    const demo = await watch('--issuer-key-env', 'WATCH_DEMO_ISSUER_PRIVATE_KEY');
+    expect(demo.code).toBe(19);
+    expect(demo.err).toMatch(new RegExp(`${privateKeyToAccount(demoKey).address} is not an issuer of ${registry}`));
+    expect((await watch('--issuer-key-env', 'not a name')).err).toMatch(/--issuer-key-env must name an environment variable/);
+    delete process.env.WATCH_DEMO_ISSUER_PRIVATE_KEY;
   });
 
   it('human output names each step', async () => {
@@ -296,9 +350,12 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     );
     expect(process.exitCode ?? 0).toBe(0);
     const out = r.out.join('\n');
-    expect(out).toMatch(/^watch +chain 31337 {2}5 sources \(.*sources-anvil\.json\) {2}2 known vaults/m);
+    expect(out).toMatch(/^watch +chain 31337 {2}4 sources \(.*sources-anvil\.json\) {2}2 known vaults/m);
+    // The banner names the RPC host only: a provider URL's path often carries an API key.
+    expect(out).toContain(`subject RPC 127.0.0.1:${anvil.port}  lag 0`);
+    expect(out).not.toContain(anvil.url);
     expect(out).toMatch(/detected {2}0x\S+ {2}factory Specfirst DemoVaultFactory {2}block \d+/);
-    expect(out).toMatch(/checked {2}0x\S+ {2}factory {2}block \d+ {2}30 pass {2}attesting: no attestation of the subject yet/);
+    expect(out).toMatch(/checked {2}0x\S+ {2}factory {2}block \d+ {2}30 pass {2}attesting \[factory\]: first check of a vault a factory announced; no attestation of the subject yet/);
     expect(out).toMatch(/attested {2}0x\S+ {2}attestation \d+/);
   });
 });

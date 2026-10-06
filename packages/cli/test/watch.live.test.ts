@@ -49,7 +49,7 @@ describe.skipIf(!LIVE)('specfirst watch on a fork of Monad testnet (SPECFIRST_LI
 
   const cli = async (...args: string[]) => {
     process.exitCode = undefined;
-    const r = await capture(() => buildProgram((p) => registerWatchCommand(p)).parseAsync(['node', 'specfirst', '--json', '--project', dir, ...args]));
+    const r = await capture(() => buildProgram((p) => registerWatchCommand(p, { config: { confirmDelayMs: 0 } })).parseAsync(['node', 'specfirst', '--json', '--project', dir, ...args]));
     const events = r.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
     return { code: process.exitCode ?? 0, events, err: r.err.join('\n') };
   };
@@ -61,6 +61,7 @@ describe.skipIf(!LIVE)('specfirst watch on a fork of Monad testnet (SPECFIRST_LI
     attest = createChainClients({ chain: anvilChain, rpcUrls: [plain.url], rps: 1000 });
     dir = await mkdtemp(path.join(tmpdir(), 'specfirst-watch-live-'));
     process.env.WATCH_ISSUER_PRIVATE_KEY = WATCH_KEY;
+    process.env.SPECFIRST_LOCK_DIR = path.join(dir, 'locks');
     delete process.env.SPECFIRST_ATTEST_REGISTRY_31337;
   }, 120_000);
 
@@ -83,30 +84,31 @@ describe.skipIf(!LIVE)('specfirst watch on a fork of Monad testnet (SPECFIRST_LI
     await subject.publicClient.request({ method: 'anvil_mine' as never, params: ['0x1'] as never });
     const reg = await deployAttestationRegistry({ client: attest.publicClient, wallet: attest.wallet(ANVIL_KEYS[0] as Hex), issuer: privateKeyToAccount(WATCH_KEY).address });
 
-    const r = await cli(
-      'watch',
-      '--subject-chain',
-      '10143',
-      '--subject-rpc',
-      fork.url,
-      '--sources',
-      DEMO_SOURCES,
-      '--network',
-      'anvil',
-      '--rpc',
-      plain.url,
-      '--registry-attest',
-      reg.address,
-      '--from-block',
-      from.toString(),
-      '--once',
-      '--block-lag',
-      '0',
-      '--sweep-per-hour',
-      '0',
-      '--runs',
-      '4',
-    );
+    const watch = (...extra: string[]) =>
+      cli(
+        'watch',
+        '--subject-chain',
+        '10143',
+        '--subject-rpc',
+        fork.url,
+        '--sources',
+        DEMO_SOURCES,
+        '--network',
+        'anvil',
+        '--rpc',
+        plain.url,
+        '--registry-attest',
+        reg.address,
+        '--once',
+        '--block-lag',
+        '0',
+        '--sweep-per-hour',
+        '0',
+        '--runs',
+        '4',
+        ...extra,
+      );
+    const r = await watch('--from-block', from.toString());
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
     const checked = r.events
@@ -117,6 +119,9 @@ describe.skipIf(!LIVE)('specfirst watch on a fork of Monad testnet (SPECFIRST_LI
       [sound, 30, []],
       [broken, 29, ['previewDeposit']],
     ]);
+    // The broken vault's failure is confirmed at the next block before it is attested.
+    await subject.publicClient.request({ method: 'anvil_mine' as never, params: ['0x1'] as never });
+    expect((await watch()).code).toBe(0);
     const registry = new AttestationRegistryClient(reg.address, attest.publicClient);
     for (const [vault, fail] of [
       [sound, 0],

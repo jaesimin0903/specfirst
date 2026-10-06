@@ -83,7 +83,8 @@ describe.skipIf(SKIP)('specfirst watch with forge (pinned cache present)', { tim
     });
   const register = (p: import('commander').Command) => {
     registerAttestRegistryCommand(p);
-    registerWatchCommand(p, { runCheck });
+    // A confirmation is due at the next pass, so the test needs no clock.
+    registerWatchCommand(p, { runCheck, config: { confirmDelayMs: 0 } });
   };
   const cli = async (...args: string[]) => {
     process.exitCode = undefined;
@@ -99,7 +100,7 @@ describe.skipIf(SKIP)('specfirst watch with forge (pinned cache present)', { tim
     await mkdir(dir, { recursive: true });
     anvil = await startAnvil();
     clients = createChainClients({ chain: anvilChain, rpcUrls: [anvil.url], rps: 1000 });
-    Object.assign(process.env, { ANVIL_RPC: anvil.url, DEPLOYER_PRIVATE_KEY: ANVIL_KEYS[0], ISSUER_PRIVATE_KEY: ANVIL_KEYS[1], WATCH_ISSUER_PRIVATE_KEY: WATCH_KEY });
+    Object.assign(process.env, { ANVIL_RPC: anvil.url, DEPLOYER_PRIVATE_KEY: ANVIL_KEYS[0], ISSUER_PRIVATE_KEY: ANVIL_KEYS[1], WATCH_ISSUER_PRIVATE_KEY: WATCH_KEY, SPECFIRST_LOCK_DIR: path.join(root, 'locks') });
     for (const k of ['SPECFIRST_ATTEST_REGISTRY_31337', 'SPECFIRST_REPORT_BASE_URL']) delete process.env[k];
   }, 300_000);
 
@@ -150,7 +151,7 @@ describe.skipIf(SKIP)('specfirst watch with forge (pinned cache present)', { tim
     expect(r.code).toBe(0);
     const feed = r.events.filter((e) => e.type === 'watch-feed').map((e) => e.event as FeedEvent);
     expect(feed.map((e) => `${e.kind}:${e.subject === vault ? 'burner' : e.subject}`)).toEqual(['detected:burner', 'queued:burner', 'error:burner']);
-    expect(feed[2]!.reason).toBe('check stopped, not attested and not retried until the next signal or sweep: forge timed out after 15s');
+    expect(feed[2]!.reason).toMatch(/^check stopped, not attested and not retried; no check of it before \S+ \(timeout 1\): forge timed out after 15s$/);
     expect(Date.now() - started).toBeLessThan(120_000);
     expect(await new AttestationRegistryClient(registryAddress, clients.publicClient).attestationCount()).toBe(0n);
     // forge ran with the capped gas limit in the workspace's foundry.toml.
@@ -177,7 +178,9 @@ describe.skipIf(SKIP)('specfirst watch with forge (pinned cache present)', { tim
     const broken = (await deployDemoVault({ client: clients.publicClient, wallet, asset: token, broken: true })).vault;
     await clients.publicClient.request({ method: 'anvil_mine' as never, params: ['0x1'] as never });
 
-    const r = await cli('watch', '--network', 'anvil', '--subject-chain', '31337', '--subject-rpc', anvil.url, '--sources', sources, '--from-block', from.toString(), '--once', '--block-lag', '0', '--sweep-per-hour', '0', '--runs', '8');
+    const watch = (...extra: string[]) =>
+      cli('watch', '--network', 'anvil', '--subject-chain', '31337', '--subject-rpc', anvil.url, '--sources', sources, '--once', '--block-lag', '0', '--sweep-per-hour', '0', '--runs', '8', ...extra);
+    const r = await watch('--from-block', from.toString());
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
     expect(r.events.map((e) => e.type)).toEqual(expect.arrayContaining(['check-start', 'check-identity', 'check-workspace', 'check-forge']));
@@ -187,6 +190,16 @@ describe.skipIf(SKIP)('specfirst watch with forge (pinned cache present)', { tim
       [sound, { pass: 30, fail: 0, inconclusive: 0, notApplicable: 0 }, []],
       [broken, { pass: 29, fail: 1, inconclusive: 0, notApplicable: 0 }, ['previewDeposit']],
     ]);
+    // The failed property is confirmed by forge again at the next block (the same seed: the same inputs).
+    expect(checked[1]!.reason).toMatch(/^pending confirmation \[confirm\]/);
+    await clients.publicClient.request({ method: 'anvil_mine' as never, params: ['0x1'] as never });
+    const second = await watch();
+    expect(second.code).toBe(0);
+    const confirmed = second.events.filter((e) => e.type === 'watch-feed').map((e) => e.event as FeedEvent).filter((e) => e.kind === 'checked');
+    expect(confirmed.map((e) => [e.subject, e.check!.failed])).toEqual([[broken, ['previewDeposit']]]);
+    expect(confirmed[0]!.reason).toMatch(/attesting \[factory\]: first check of a vault a factory announced/);
+    // The vault's forge failures are kept for its next check.
+    expect(existsSync(path.join(dir, '.specfirst/watch/31337/forge-failures', broken.toLowerCase()))).toBe(true);
     const registry = new AttestationRegistryClient(registryAddress, clients.publicClient);
     const erc4626 = standardIdOf('erc4626');
     expect(await registry.isCompliant(31337n, sound, erc4626)).toBe(true);

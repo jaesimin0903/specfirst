@@ -69,7 +69,8 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch with subscriptions and webhooks fro
   const register = (p: import('commander').Command) => {
     registerAttestRegistryCommand(p);
     registerSubsCommand(p);
-    registerWatchCommand(p, { runCheck, sleep: async () => {} });
+    // A subscribed subject is due at every pass and a confirmation at the next one, so the test needs no clock.
+    registerWatchCommand(p, { runCheck, config: { subscribedMinutes: 0, confirmDelayMs: 0 }, sleep: async () => {} });
   };
   const cli = async (...args: string[]) => {
     process.exitCode = undefined;
@@ -101,7 +102,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch with subscriptions and webhooks fro
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    Object.assign(process.env, { ANVIL_RPC: anvil.url, DEPLOYER_PRIVATE_KEY: DEPLOYER_KEY, REQUESTER_PRIVATE_KEY: REQUESTER_KEY, WATCH_ISSUER_PRIVATE_KEY: WATCH_KEY });
+    Object.assign(process.env, { ANVIL_RPC: anvil.url, DEPLOYER_PRIVATE_KEY: DEPLOYER_KEY, REQUESTER_PRIVATE_KEY: REQUESTER_KEY, WATCH_ISSUER_PRIVATE_KEY: WATCH_KEY, SPECFIRST_LOCK_DIR: path.join(dir, 'locks') });
     for (const k of ['SPECFIRST_ATTEST_REGISTRY_31337', 'SPECFIRST_SUBS_31337', 'SPECFIRST_REPORT_BASE_URL']) delete process.env[k];
 
     const reg = await cli('attest-registry', 'deploy', '--network', 'anvil');
@@ -162,8 +163,10 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch with subscriptions and webhooks fro
     expect(r.code).toBe(0);
     expect(event(r, 'watch-start')).toMatchObject({ subs, webhooks: '.specfirst/watch/webhooks.json', webhookLocalOrigins: [origin] });
     const feed = fed(r);
-    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'queued:subscribed', 'checked:subscribed', 'attested:subscribed', 'changed:subscribed', 'alerted:']);
-    expect(feed[6]).toMatchObject({ seq: feed[5]!.seq + 1, subject: vault, alert: { subscriptionId: '0', subscriber: SUBSCRIBER.address, channel: 'webhook', ok: true, status: 204 } });
+    // Known as subscribed when it is found: queued at the subscribed priority and attested as subscribed.
+    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'attested:factory', 'changed:factory', 'alerted:']);
+    expect(feed[2]!.reason).toBe('attesting [subscribed]: first check since a subscription started; no attestation of the subject yet');
+    expect(feed[5]).toMatchObject({ seq: feed[4]!.seq + 1, subject: vault, alert: { subscriptionId: '0', subscriber: SUBSCRIBER.address, channel: 'webhook', ok: true, status: 204 } });
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ path: '/hook', userAgent: 'specfirst-alerts/1' });
     expect(hits[0]!.body).toEqual({
@@ -173,19 +176,22 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch with subscriptions and webhooks fro
       subscriptionIds: ['0'],
       subject: vault,
       chainId: 31337,
-      change: feed[5]!.change,
-      check: feed[5]!.check,
-      attestation: feed[5]!.attestation,
-      reportURL: `${BASE}/${feed[5]!.check!.reportPath.slice('certs/checks/'.length)}`,
+      change: feed[4]!.change,
+      check: feed[4]!.check,
+      attestation: feed[4]!.attestation,
+      reportURL: `${BASE}/${feed[4]!.check!.reportPath.slice('certs/checks/'.length)}`,
     });
 
-    // The bug switched on: regressed, attested, and alerted again. Without the origin the local webhook is refused.
+    // The bug switched on: the subscribed re-check finds the regression, the next one at a later block confirms
+    // it; attested and alerted again. Without the origin the local webhook is refused.
     expect((await cli('watch', 'demo', 'set-broken', vault, 'on', '--network', 'anvil')).code).toBe(0);
     await mine();
+    expect(kinds(fed(await watch()))).toEqual(['queued:subscribed', 'checked:subscribed', 'queued:subscribed']);
+    await mine();
     const refused = fed(await watch());
-    expect(kinds(refused)).toEqual(['queued:upgrade', 'checked:upgrade', 'attested:upgrade', 'changed:upgrade', 'alerted:']);
-    expect(refused[3]!.change).toMatchObject({ kind: 'regressed', to: { failed: ['previewDeposit'] } });
-    expect(refused[4]).toMatchObject({ alert: { subscriptionId: '0', ok: false }, reason: 'webhook registration refused: url' });
+    expect(kinds(refused)).toEqual(['checked:subscribed', 'attested:subscribed', 'changed:subscribed', 'alerted:']);
+    expect(refused[2]!.change).toMatchObject({ kind: 'regressed', to: { failed: ['previewDeposit'] } });
+    expect(refused[3]).toMatchObject({ alert: { subscriptionId: '0', ok: false }, reason: 'webhook registration refused: url' });
     expect(hits).toHaveLength(1);
 
     const onDisk = parseFeed(await readFile(path.join(dir, '.specfirst/watch/31337/feed.ndjson'), 'utf8'));
