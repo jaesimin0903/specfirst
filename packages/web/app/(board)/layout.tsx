@@ -6,6 +6,7 @@ import { BoardFooter } from '../../components/board/BoardFooter';
 import { THEME_BOOT_SCRIPT } from '../../components/board/ThemeToggle';
 import './board.css';
 import './desk.css';
+import './watch.css';
 
 // Archivo's width axis carries the hierarchy: wide for claims and names, condensed for figures.
 const archivo = Archivo({ subsets: ['latin'], axes: ['wdth'], variable: '--font-archivo', display: 'swap' });

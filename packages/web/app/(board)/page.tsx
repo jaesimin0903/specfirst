@@ -3,7 +3,8 @@ import { loadBoard } from '../../lib/board/load';
 import { toExplorerRow } from '../../lib/board/view';
 import { PropertyMatrix } from '../../components/board/PropertyMatrix';
 import { RecentRequests } from '../../components/desk/RecentRequests';
-import { BoardExplorer } from '../../components/board/BoardExplorer';
+import { WatchBoardExplorer } from '../../components/watch/WatchBoardExplorer';
+import { WatchBand } from '../../components/watch/WatchBand';
 import { Figures, Findings, Hero, MatrixLegend, MethodSummary, ProtocolTable, ReasonBars } from '../../components/board/BoardSections';
 
 export const dynamic = 'force-static';
@@ -36,6 +37,7 @@ export default function BoardPage() {
   return (
     <>
       <RecentRequests />
+      <WatchBand />
       <main className="sb-wrap">
         <Hero board={board} />
         <PropertyMatrix board={board} />
@@ -52,9 +54,9 @@ export default function BoardPage() {
           </h2>
           <p className="sb-lede">
             Mismatches first. Each row links to the vault&apos;s page with every property, the reasons behind each result and the command that replays
-            the check.
+            the check. Vaults the watcher found after this board was built are added when the page opens, marked as found by the watcher.
           </p>
-          <BoardExplorer rows={board.vaults.map(toExplorerRow)} protocols={board.protocols.map((p) => p.protocol).sort()} split={split} />
+          <WatchBoardExplorer rows={board.vaults.map(toExplorerRow)} protocols={board.protocols.map((p) => p.protocol).sort()} split={split} />
         </section>
         <MethodSummary board={board} />
       </main>
