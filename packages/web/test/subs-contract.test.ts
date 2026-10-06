@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { encodeAbiParameters, encodeEventTopics, getAddress, toEventSignature, toFunctionSignature, type AbiEvent, type AbiFunction } from 'viem';
 import { checkSubscriptionsAbi, FIRST_SUBSCRIPTION_ID, subsAddress } from '../lib/subs/contract';
-import { combineRevenue, daysOf, refundEstimate, startedDays } from '../lib/subs/economics';
-import { isActiveAt, latestSubscriptionIds, normalizeSubscription, readSubsSummary } from '../lib/subs/read';
+import { isActiveAt, refundAt, runDaysOf, startedDaysAt } from '../lib/subs/core';
+import { combineRevenue, priceOf } from '../lib/subs/economics';
+import { latestSubscriptionIds, normalizeSubscription, readSubsSummary } from '../lib/subs/read';
 import { cancelledFromLogs, subscribedFromLogs } from '../lib/subs/wallet';
 
 /*
@@ -130,10 +131,10 @@ describe('reads', () => {
     const a = normalizeSubscription(1n, named);
     const b = normalizeSubscription(1n, Object.values(named));
     expect(a).toEqual(b);
-    expect(a).toMatchObject({ subjectChainId: 143, feePerDayWei: 10n, paidWei: 70n, settledWei: 10n, cancelled: false });
-    expect(isActiveAt(a, 100)).toBe(true);
-    expect(isActiveAt(a, 100 + 7 * 86_400)).toBe(false);
-    expect(isActiveAt({ ...a, cancelled: true }, 100)).toBe(false);
+    expect(a).toMatchObject({ id: 1n, subjectChainId: 143n, feePerDay: 10n, paid: 70n, settled: 10n, cancelled: false });
+    expect(isActiveAt(a, 100n)).toBe(true);
+    expect(isActiveAt(a, 100n + 7n * 86_400n)).toBe(false);
+    expect(isActiveAt({ ...a, cancelled: true }, 100n)).toBe(false);
     expect(latestSubscriptionIds(3n, 10)).toEqual([2n, 1n, 0n]);
     expect(latestSubscriptionIds(3000n, 2)).toEqual([2999n, 2998n]);
   });
@@ -150,22 +151,24 @@ describe('reads', () => {
 });
 
 describe('money', () => {
-  const sub = { feePerDayWei: 10n, startsAt: 1000n, endsAt: 1000n + 7n * BigInt(DAY), paidWei: 70n, cancelled: false };
+  const sub = { feePerDay: 10n, startsAt: 1000n, endsAt: 1000n + 7n * BigInt(DAY), paid: 70n, settled: 0n, cancelled: false };
+  const at = (n: number) => BigInt(n);
 
-  it('a started day counts; cancel refunds the days not started', () => {
-    expect(daysOf(sub)).toBe(7);
-    expect(startedDays(sub, 999)).toBe(0);
-    expect(startedDays(sub, 1000)).toBe(1);
-    expect(startedDays(sub, 1000 + DAY)).toBe(2);
-    expect(startedDays(sub, 1000 + 30 * DAY)).toBe(7);
-    expect(refundEstimate(sub, 1000)).toBe(60n);
-    expect(refundEstimate(sub, 1000 + DAY - 1)).toBe(60n);
-    expect(refundEstimate(sub, 1000 + 6 * DAY)).toBe(0n);
-    expect(refundEstimate(sub, 1000 + 7 * DAY)).toBe(0n);
-    expect(refundEstimate({ ...sub, cancelled: true }, 1000)).toBe(0n);
-    // Extended after it expired: a new 3-day run, the 10 paid for the first run already used.
-    const rerun = { ...sub, startsAt: 900_000n, endsAt: 900_000n + 3n * BigInt(DAY), paidWei: 100n };
-    expect(refundEstimate(rerun, 900_000)).toBe(20n);
+  it('a started day counts; cancel refunds the days not started (core rules, as CheckSubscriptions.sol)', () => {
+    expect(runDaysOf(sub)).toBe(7n);
+    expect(startedDaysAt(sub, at(999))).toBe(0n);
+    expect(startedDaysAt(sub, at(1000))).toBe(1n);
+    expect(startedDaysAt(sub, at(1000 + DAY))).toBe(2n);
+    expect(startedDaysAt(sub, at(1000 + 30 * DAY))).toBe(7n);
+    expect(refundAt(sub, at(1000))).toBe(60n);
+    expect(refundAt(sub, at(1000 + DAY - 1))).toBe(60n);
+    expect(refundAt(sub, at(1000 + 6 * DAY))).toBe(0n);
+    expect(refundAt(sub, at(1000 + 7 * DAY))).toBe(0n);
+    expect(refundAt({ ...sub, cancelled: true }, at(1000))).toBe(0n);
+    // Extended after it expired: a new 3-day run; the 70 paid for the first run is used.
+    const rerun = { ...sub, startsAt: 900_000n, endsAt: 900_000n + 3n * BigInt(DAY), paid: 100n };
+    expect(refundAt(rerun, at(900_000))).toBe(20n);
+    expect(priceOf(10n, 7)).toBe(70n);
   });
 
   it('combines both contracts against both processes, and says what it could not count', () => {

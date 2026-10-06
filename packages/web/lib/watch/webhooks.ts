@@ -1,106 +1,110 @@
-import { getAddress } from 'viem';
-import { z } from 'zod';
-import { verifyWebhookRegistration, type WebhookRegistration } from './core';
-import { readJsonOrNull, serialized, writeJsonAtomic } from './atomic';
+import { randomBytes } from 'node:crypto';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import {
+  emptyWebhooksFile,
+  verifyWebhookRegistration,
+  webhookRegistrationSchema,
+  webhooksFileSchema,
+  type VerifyWebhookOptions,
+  type WebhookRegistration,
+  type WebhookVerification,
+  type WebhooksFile,
+} from '../subs/core';
+import { serialized } from './atomic';
 import { watchFile } from './paths';
 
 /*
- * Webhook registrations (ADR 0006, "Alerts"): verified here, stored in <watch dir>/webhooks.json for the watcher,
- * latest per subscriber. File shape: { v: 1, webhooks: { <lowercase subscriber>: { subscriber, url, issued,
- * signature } } }. A webhook URL can be a secret (chat webhooks are), so the file is never served and the API
- * shows only the URL's origin. Server only.
+ * <watch dir>/webhooks.json, where the web stores webhook registrations and the watcher reads them (ADR 0006,
+ * "Alerts"). The first part stands in for the Node helpers @specfirst/core exports from its root on
+ * feat/subscriptions (subs/webhooks.ts: readWebhooks, saveWebhookRegistration, registerWebhook), same names and
+ * behavior, so the swap is an import change. A webhook URL can be a secret (chat webhooks are), so the file is
+ * never served and the API shows only a URL's origin. Server only.
  */
 
-const entrySchema = z.object({
-  subscriber: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
-  url: z.string(),
-  issued: z.number().int().positive(),
-  signature: z.string().regex(/^0x[0-9a-fA-F]{130}$/),
-});
-export type StoredWebhook = z.infer<typeof entrySchema>;
+export class WebhookStoreError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WebhookStoreError';
+  }
+}
 
-export const MAX_WEBHOOK_URL = 2048;
-/** Registrations kept; past it the oldest by issued are dropped, so the file cannot grow without bound. */
-export const MAX_WEBHOOKS = 1000;
+/** Reads and validates webhooks.json; a missing file is an empty store, a broken one throws. */
+export async function readWebhooks(file: string): Promise<WebhooksFile> {
+  let text: string;
+  try {
+    text = await readFile(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return emptyWebhooksFile();
+    throw err;
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (err) {
+    throw new WebhookStoreError(`webhooks ${file} is not readable JSON: ${(err as Error).message}`);
+  }
+  const parsed = webhooksFileSchema.safeParse(json);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`);
+    throw new WebhookStoreError(`webhooks ${file} is invalid: ${issues.join('; ')}`);
+  }
+  return parsed.data;
+}
 
-/** SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1 lets http://localhost URLs register, for the demo receiver on a dev machine. */
+async function writeAtomic(file: string, content: string): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
+  await writeFile(tmp, content);
+  await rename(tmp, file);
+}
+
+export type SaveWebhookResult = { stored: true; previous: WebhookRegistration | null } | { stored: false; current: WebhookRegistration };
+
+/**
+ * Stores a verified registration, replacing the subscriber's previous one only when it was issued at the same
+ * time or later, so an older registration replayed within its window cannot undo a newer one.
+ */
+export async function saveWebhookRegistration(file: string, registration: WebhookRegistration): Promise<SaveWebhookResult> {
+  const r = webhookRegistrationSchema.parse(registration);
+  return serialized(path.resolve(file), async () => {
+    const store = await readWebhooks(file);
+    const key = r.subscriber.toLowerCase();
+    const previous = store.webhooks[key] ?? null;
+    if (previous && previous.issued > r.issued) return { stored: false, current: previous } as SaveWebhookResult;
+    store.webhooks[key] = r;
+    await writeAtomic(file, `${JSON.stringify(webhooksFileSchema.parse(store), null, 2)}\n`);
+    return { stored: true, previous } as SaveWebhookResult;
+  });
+}
+
+export type RegisterWebhookResult = Exclude<WebhookVerification, { ok: true }> | ({ ok: true; registration: WebhookRegistration } & SaveWebhookResult);
+
+/** Verifies a registration and stores it when it passes: what the web API calls. */
+export async function registerWebhook(file: string, input: unknown, opts: VerifyWebhookOptions = {}): Promise<RegisterWebhookResult> {
+  const v = await verifyWebhookRegistration(input, { ...opts, ignoreAge: false });
+  if (!v.ok) return v;
+  return { ok: true, registration: v.registration, ...(await saveWebhookRegistration(file, v.registration)) };
+}
+
+/* Web-only helpers, kept when the part above becomes an import from @specfirst/core. */
+
+/** SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1 lets http and https to localhost and 127.0.0.1 register, for demos on one machine. */
 export function allowLocalHttp(env: Record<string, string | undefined> = process.env): boolean {
   return env.SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS?.trim() === '1';
 }
 
-/** The hosts SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS opens, over http or https. */
-const LOCAL_DEMO_HOSTS = ['localhost', '127.0.0.1'];
-
-function isPrivateIpv4(h: string): boolean {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127)
-  );
-}
-
-function isLocalHost(hostname: string): boolean {
-  const h = hostname.toLowerCase().replace(/\.$/, '');
-  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true;
-  if (isPrivateIpv4(h)) return true;
-  if (h.startsWith('[')) {
-    const v6 = h.slice(1, -1);
-    return v6 === '::1' || v6 === '::' || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6) || v6.startsWith('::ffff:');
-  }
-  return false;
-}
-
-/**
- * The URL rules before a signature is checked: https, a bounded length, no whitespace or control characters (they
- * would change the signed text), no credentials, and no loopback, private or link-local host; local http opens
- * localhost and 127.0.0.1 only. A public name that resolves to a private address is not caught here (no DNS).
- */
-export function urlProblem(raw: string, localHttp: boolean): string | null {
-  if (typeof raw !== 'string' || raw.length === 0) return 'url is required';
-  if (raw.length > MAX_WEBHOOK_URL) return `url is longer than ${MAX_WEBHOOK_URL} characters`;
-  if (/[\s\u0000-\u001f\u007f]/.test(raw)) return 'url must not contain whitespace or control characters';
-  let u: URL;
+/** The subscriber's registration, or null when there is none or the file cannot be read. */
+export async function webhookOf(subscriber: string, file: string = watchFile.webhooks()): Promise<WebhookRegistration | null> {
   try {
-    u = new URL(raw);
+    return (await readWebhooks(file)).webhooks[subscriber.toLowerCase()] ?? null;
   } catch {
-    return 'url is not a URL';
+    return null;
   }
-  if (u.username || u.password) return 'url must not carry a user name or password';
-  if (u.protocol === 'http:')
-    return localHttp && LOCAL_DEMO_HOSTS.includes(u.hostname) ? null : localHttp ? 'http is allowed for localhost only' : 'url must be https';
-  if (u.protocol !== 'https:') return 'url must be https';
-  if (isLocalHost(u.hostname) && !(localHttp && LOCAL_DEMO_HOSTS.includes(u.hostname))) return 'url points at a local or private host';
-  return null;
-}
-
-export function parseWebhooksFile(raw: unknown): Record<string, StoredWebhook> {
-  const r = raw as { v?: unknown; webhooks?: unknown } | null;
-  if (!r || r.v !== 1 || !r.webhooks || typeof r.webhooks !== 'object' || Array.isArray(r.webhooks)) return {};
-  const out: Record<string, StoredWebhook> = {};
-  for (const [k, v] of Object.entries(r.webhooks as Record<string, unknown>)) {
-    const e = entrySchema.safeParse(v);
-    if (e.success && k.toLowerCase() === e.data.subscriber.toLowerCase()) out[k.toLowerCase()] = e.data;
-  }
-  return out;
-}
-
-export async function readWebhooks(file: string = watchFile.webhooks()): Promise<Record<string, StoredWebhook>> {
-  return parseWebhooksFile(await readJsonOrNull(file));
-}
-
-export async function webhookOf(subscriber: string, file: string = watchFile.webhooks()): Promise<StoredWebhook | null> {
-  return (await readWebhooks(file))[subscriber.toLowerCase()] ?? null;
 }
 
 /** What the API may show of a registration: the URL's origin and when it was signed, never the full URL. */
-export function publicWebhook(w: StoredWebhook | null): { origin: string; issued: number } | null {
+export function publicWebhook(w: Pick<WebhookRegistration, 'url' | 'issued'> | null): { origin: string; issued: number } | null {
   if (!w) return null;
   try {
     return { origin: new URL(w.url).origin, issued: w.issued };
@@ -109,39 +113,8 @@ export function publicWebhook(w: StoredWebhook | null): { origin: string; issued
   }
 }
 
-/** Adds or replaces one entry; keeps the newest MAX_WEBHOOKS by issued. Pure. */
-export function withWebhook(all: Record<string, StoredWebhook>, entry: StoredWebhook, max: number = MAX_WEBHOOKS): Record<string, StoredWebhook> {
-  const next = { ...all, [entry.subscriber.toLowerCase()]: entry };
-  const keys = Object.keys(next);
-  if (keys.length <= max) return next;
-  const keep = keys.sort((a, b) => next[b]!.issued - next[a]!.issued).slice(0, max);
-  return Object.fromEntries(keep.sort().map((k) => [k, next[k]!]));
-}
-
-export type RegisterResult = { ok: true; webhook: StoredWebhook } | { ok: false; status: number; reason: string };
-
-export async function registerWebhook(input: unknown, o: { file?: string; now?: number; localHttp?: boolean } = {}): Promise<RegisterResult> {
-  const body = input as Partial<WebhookRegistration> | null;
-  if (!body || typeof body !== 'object') return { ok: false, status: 400, reason: 'expected a JSON object { subscriber, url, issued, signature }' };
-  const localHttp = o.localHttp ?? allowLocalHttp();
-  const bad = urlProblem(body.url as string, localHttp);
-  if (bad) return { ok: false, status: 400, reason: bad };
-  const reg = {
-    subscriber: String(body.subscriber ?? ''),
-    url: body.url as string,
-    issued: Number(body.issued),
-    signature: String(body.signature ?? '') as `0x${string}`,
-  };
-  const v = await verifyWebhookRegistration(reg, { now: o.now, allowLocalHttp: localHttp });
-  if (!v.ok) return { ok: false, status: v.reason.startsWith('signature is not') || v.reason.startsWith('signature does not') ? 401 : 400, reason: v.reason };
-  const file = o.file ?? watchFile.webhooks();
-  const entry: StoredWebhook = { subscriber: getAddress(v.subscriber), url: reg.url, issued: reg.issued, signature: reg.signature };
-  return serialized(file, async () => {
-    const all = parseWebhooksFile(await readJsonOrNull(file));
-    const current = all[entry.subscriber.toLowerCase()];
-    if (current && current.issued > entry.issued)
-      return { ok: false, status: 409, reason: 'a newer registration for this subscriber is already stored' } as RegisterResult;
-    await writeJsonAtomic(file, { v: 1, webhooks: withWebhook(all, entry) });
-    return { ok: true, webhook: entry } as RegisterResult;
-  });
+/** HTTP status for a refused registration: 401 for a wrong signature, 409 when a newer one is stored, else 400. */
+export function registerStatus(r: RegisterWebhookResult): number {
+  if (!r.ok) return r.reason === 'signature' ? 401 : 400;
+  return r.stored ? 200 : 409;
 }

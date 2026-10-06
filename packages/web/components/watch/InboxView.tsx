@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { InboxJson, SubscriptionJson } from '../../lib/subs/types';
 import { sendCancel, signText, waitForCancelled } from '../../lib/subs/wallet';
-import { webhookMessage } from '../../lib/watch/core';
+import { webhookMessage } from '../../lib/subs/core';
 import { formatMon, toWei } from '../../lib/desk/format';
 import { testnetTxUrl } from '../../lib/desk/config';
 import { walletErrorMessage } from '../../lib/desk/wallet';

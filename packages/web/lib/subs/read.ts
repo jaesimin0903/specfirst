@@ -1,26 +1,15 @@
 import { describeReadError } from '../board/attestations';
 import type { ContractReader } from '../desk/read';
 import { checkSubscriptionsAbi, FIRST_SUBSCRIPTION_ID } from './contract';
+import type { Subscription } from './core';
 
 /*
  * View calls against CheckSubscriptions. Takes any reader with viem's readContract; with the server client,
  * calls made together travel as one multicall, which keeps a scan under the testnet RPC's 15 requests a second.
  */
 
-export interface Subscription {
-  id: bigint;
-  subscriber: `0x${string}`;
-  subjectChainId: number;
-  subject: `0x${string}`;
-  standardId: `0x${string}`;
-  feePerDayWei: bigint;
-  /** unix seconds */
-  startsAt: bigint;
-  endsAt: bigint;
-  paidWei: bigint;
-  settledWei: bigint;
-  cancelled: boolean;
-}
+/** core's Subscription (the struct as viem decodes it) with its id. */
+export type SubscriptionWithId = Subscription & { id: bigint };
 
 export interface SubsSummary {
   address: `0x${string}`;
@@ -33,21 +22,10 @@ export interface SubsSummary {
   errors: string[];
 }
 
-interface RawSubscription {
-  subscriber: `0x${string}`;
-  subjectChainId: bigint | number;
-  subject: `0x${string}`;
-  standardId: `0x${string}`;
-  feePerDay: bigint | number;
-  startsAt: bigint | number;
-  endsAt: bigint | number;
-  paid: bigint | number;
-  settled: bigint | number;
-  cancelled: boolean;
-}
+type RawSubscription = Record<keyof Subscription, unknown>;
 
 /** subscriptionOf's struct as viem decodes it, named fields or a positional tuple. */
-export function normalizeSubscription(id: bigint, raw: unknown): Subscription {
+export function normalizeSubscription(id: bigint, raw: unknown): SubscriptionWithId {
   const r = (
     Array.isArray(raw)
       ? {
@@ -66,22 +44,17 @@ export function normalizeSubscription(id: bigint, raw: unknown): Subscription {
   ) as RawSubscription;
   return {
     id,
-    subscriber: r.subscriber,
-    subjectChainId: Number(r.subjectChainId),
-    subject: r.subject,
-    standardId: r.standardId,
-    feePerDayWei: BigInt(r.feePerDay),
-    startsAt: BigInt(r.startsAt),
-    endsAt: BigInt(r.endsAt),
-    paidWei: BigInt(r.paid),
-    settledWei: BigInt(r.settled),
+    subscriber: r.subscriber as `0x${string}`,
+    subjectChainId: BigInt(r.subjectChainId as bigint),
+    subject: r.subject as `0x${string}`,
+    standardId: r.standardId as `0x${string}`,
+    feePerDay: BigInt(r.feePerDay as bigint),
+    startsAt: BigInt(r.startsAt as bigint),
+    endsAt: BigInt(r.endsAt as bigint),
+    paid: BigInt(r.paid as bigint),
+    settled: BigInt(r.settled as bigint),
     cancelled: Boolean(r.cancelled),
   };
-}
-
-/** The ADR's isActive: not cancelled and before endsAt. */
-export function isActiveAt(s: Pick<Subscription, 'cancelled' | 'endsAt'>, nowSec: number): boolean {
-  return !s.cancelled && BigInt(nowSec) < s.endsAt;
 }
 
 const SUMMARY_FIELDS = ['feePerDay', 'subscriptionCount', 'earned', 'withdrawn', 'escrowed', 'owner'] as const;
@@ -122,11 +95,11 @@ export async function readSubscriptions(
   reader: ContractReader,
   address: `0x${string}`,
   ids: readonly bigint[],
-): Promise<{ subscriptions: Subscription[]; failed: number }> {
+): Promise<{ subscriptions: SubscriptionWithId[]; failed: number }> {
   const settled = await Promise.allSettled(
     ids.map((id) => reader.readContract({ address, abi: checkSubscriptionsAbi, functionName: 'subscriptionOf', args: [id] })),
   );
-  const subscriptions: Subscription[] = [];
+  const subscriptions: SubscriptionWithId[] = [];
   let failed = 0;
   settled.forEach((s, i) => {
     if (s.status === 'fulfilled') subscriptions.push(normalizeSubscription(ids[i]!, s.value));

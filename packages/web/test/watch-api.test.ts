@@ -19,7 +19,7 @@ vi.mock('../lib/desk/clients', () => ({ testnetClient: () => reader.current, mai
 import { clearMemo } from '../lib/desk/cache';
 import { clearWatchCaches } from '../lib/watch/read';
 import { clearReportCache } from '../lib/watch/reports';
-import { webhookMessage } from '../lib/watch/core';
+import { webhookMessage } from '../lib/subs/core';
 import type { FeedPageJson, VaultWatchJson, WatchStatusJson } from '../lib/watch/types';
 import type { InboxJson, SubscriberJson, SubsSummaryJson } from '../lib/subs/types';
 import type { ExplorerRow } from '../lib/board/view';
@@ -320,7 +320,7 @@ describe('webhooks', () => {
     const signature = await burner.signMessage({ message: webhookMessage({ subscriber: burner.address, url, issued }) });
     const stale = await webhookPost(post({ subscriber: burner.address, url, issued, signature }));
     expect(stale.status).toBe(400);
-    expect((await json<{ error: string }>(stale)).error).toMatch(/older than 10 minutes/);
+    expect(await json<{ reason: string; error: string }>(stale)).toMatchObject({ reason: 'stale', error: expect.stringMatching(/more than 600 s/) });
     const now = Math.floor(Date.now() / 1000);
     const wrong = await burner.signMessage({ message: webhookMessage({ subscriber: OTHER, url, issued: now }) });
     expect((await webhookPost(post({ subscriber: OTHER, url, issued: now, signature: wrong }))).status).toBe(401);

@@ -4,8 +4,8 @@ import { DESK_CHAIN_ID } from '../desk/config';
 import type { ContractReader } from '../desk/read';
 import { checksum, labelFor, vaultPathOf, type LabelContext } from '../watch/view';
 import { subsAddress } from './contract';
-import { daysOf, refundEstimate } from './economics';
-import { isActiveAt, latestSubscriptionIds, readSubsSummary, readSubscriptions, type Subscription, type SubsSummary } from './read';
+import { isActiveAt, refundAt, runDaysOf } from './core';
+import { latestSubscriptionIds, readSubsSummary, readSubscriptions, type SubscriptionWithId, type SubsSummary } from './read';
 import type { SubscriptionJson, SubsSummaryJson } from './types';
 
 /*
@@ -55,7 +55,7 @@ export function subsSummaryJson(address: string | null, sm: SubsSummary | null, 
 /** The newest SCAN_LIMIT subscriptions, newest first. */
 export async function scanSubscriptions(
   reader: ContractReader = testnetClient(),
-): Promise<{ deployed: boolean; subscriptions: Subscription[]; truncated: boolean; error: string | null }> {
+): Promise<{ deployed: boolean; subscriptions: SubscriptionWithId[]; truncated: boolean; error: string | null }> {
   const { address, summary, error } = await subsSummary(reader);
   if (!address) return { deployed: false, subscriptions: [], truncated: false, error: null };
   if (!summary || summary.count === null) return { deployed: true, subscriptions: [], truncated: false, error: error ?? 'subscriptionCount could not be read' };
@@ -71,33 +71,34 @@ export async function scanSubscriptions(
   };
 }
 
-export function subscriptionJson(x: Subscription, ctx: LabelContext, now: number = nowSec()): SubscriptionJson {
+export function subscriptionJson(x: SubscriptionWithId, ctx: LabelContext, now: number = nowSec()): SubscriptionJson {
+  const chainId = Number(x.subjectChainId);
   return {
     id: x.id.toString(),
     subscriber: checksum(x.subscriber),
-    subjectChainId: x.subjectChainId,
+    subjectChainId: chainId,
     subject: checksum(x.subject),
-    vaultPath: vaultPathOf(x.subjectChainId, x.subject),
-    label: labelFor(x.subjectChainId, x.subject, ctx),
+    vaultPath: vaultPathOf(chainId, x.subject),
+    label: labelFor(chainId, x.subject, ctx),
     standardId: x.standardId,
-    feePerDayWei: x.feePerDayWei.toString(),
+    feePerDayWei: x.feePerDay.toString(),
     startsAt: new Date(Number(x.startsAt) * 1000).toISOString(),
     endsAt: new Date(Number(x.endsAt) * 1000).toISOString(),
     startsAtSec: Number(x.startsAt),
     endsAtSec: Number(x.endsAt),
-    days: daysOf(x),
-    paidWei: x.paidWei.toString(),
-    settledWei: x.settledWei.toString(),
+    days: Number(runDaysOf(x)),
+    paidWei: x.paid.toString(),
+    settledWei: x.settled.toString(),
     cancelled: x.cancelled,
-    active: isActiveAt(x, now),
-    refundEstimateWei: refundEstimate(x, now).toString(),
+    active: isActiveAt(x, BigInt(now)),
+    refundEstimateWei: refundAt(x, BigInt(now)).toString(),
   };
 }
 
 export async function subscriptionsOf(
   subscriber: string,
   reader?: ContractReader,
-): Promise<{ deployed: boolean; subscriptions: Subscription[]; scanned: number; truncated: boolean; error: string | null }> {
+): Promise<{ deployed: boolean; subscriptions: SubscriptionWithId[]; scanned: number; truncated: boolean; error: string | null }> {
   const scan = await scanSubscriptions(reader);
   const mine = scan.subscriptions.filter((x) => x.subscriber.toLowerCase() === subscriber.toLowerCase());
   return { deployed: scan.deployed, subscriptions: mine, scanned: scan.subscriptions.length, truncated: scan.truncated, error: scan.error };

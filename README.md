@@ -93,7 +93,7 @@ JSON: `GET /api/v1/watch/status`, `/api/v1/watch/feed?after=<seq>|before=<seq>`,
 | `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS` | unset | `1` lets `http://localhost` and `http://127.0.0.1` webhooks register, for demos on one machine. |
 | `SPECFIRST_DEMO_HOOK` | on | `off` turns the demo receiver off. |
 
-The watch file schemas and the webhook message live in `packages/web/lib/watch/core.ts` and the subscriptions ABI in `packages/web/lib/subs/contract.ts` until `@specfirst/core/watch` and `@specfirst/core/subs` export them.
+Until the watcher and subscriptions branches are merged, the web carries stand-ins with core's names and behavior: `packages/web/lib/watch/core.ts` for `@specfirst/core/watch` (file schemas), `packages/web/lib/subs/core.ts` for `@specfirst/core/subs` (ABI, day accounting, webhook message, URL rules, verification) and the first part of `packages/web/lib/watch/webhooks.ts` for the root's `readWebhooks`, `saveWebhookRegistration` and `registerWebhook`. Each becomes an import.
 
 ## License
 

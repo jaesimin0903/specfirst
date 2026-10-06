@@ -1,15 +1,16 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { keccak256, toHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { verifyWebhookRegistration, webhookMessage, WEBHOOK_MAX_AGE_SEC } from '../lib/watch/core';
-import { parseWebhooksFile, registerWebhook, urlProblem, withWebhook } from '../lib/watch/webhooks';
+import { verifyWebhookRegistration, webhookMessage, webhookUrlProblem, WEBHOOK_MAX_AGE_SEC } from '../lib/subs/core';
+import { publicWebhook, readWebhooks, registerStatus, registerWebhook, webhookOf } from '../lib/watch/webhooks';
 
 /*
- * Webhook registration (ADR 0006, "Alerts"): the exact EIP-191 text, the checks the API makes before storing a
- * URL, and the file the watcher reads. The keys are derived from fixed strings, test only.
+ * Webhook registration (ADR 0006, "Alerts"), with the stand-ins for @specfirst/core/subs and the core root's
+ * webhooks.json helpers: the exact EIP-191 text, the URL rules, freshness, and the file the watcher reads. The keys
+ * are derived from fixed strings, test only.
  */
 
 const account = privateKeyToAccount(keccak256(toHex('watch-web test key A')));
@@ -38,35 +39,33 @@ describe('webhookMessage', () => {
     expect(webhookMessage({ subscriber: account.address.toLowerCase(), url: URL_OK, issued: NOW })).toBe(
       `Specfirst alerts webhook\nsubscriber: ${account.address}\nurl: ${URL_OK}\nissued: ${NOW}`,
     );
+    expect(() => webhookMessage({ subscriber: account.address, url: URL_OK, issued: 1.5 })).toThrow(/unix seconds/);
   });
 });
 
 describe('verifyWebhookRegistration', () => {
-  it('accepts a fresh signature by the subscriber, also with a lowercase address', async () => {
-    expect(await verifyWebhookRegistration(await signed(), { now: NOW + 30 })).toEqual({ ok: true, subscriber: account.address });
-    expect((await verifyWebhookRegistration({ ...(await signed()), subscriber: account.address.toLowerCase() }, { now: NOW })).ok).toBe(true);
+  it('accepts a fresh signature by the subscriber, also with a lowercase address, and returns it checksummed', async () => {
+    const ok = await verifyWebhookRegistration(await signed(), { now: NOW + 30 });
+    expect(ok).toMatchObject({ ok: true, registration: { subscriber: account.address, url: URL_OK, issued: NOW } });
+    const lower = await verifyWebhookRegistration({ ...(await signed()), subscriber: account.address.toLowerCase() }, { now: NOW });
+    expect(lower).toMatchObject({ ok: true, registration: { subscriber: account.address } });
   });
 
-  it('rejects another signer, a changed URL, a stale or future time, and http', async () => {
-    expect(await verifyWebhookRegistration(await signed({ by: other }), { now: NOW })).toMatchObject({
+  it('names why it refuses: signature, url, stale, future, invalid', async () => {
+    expect(await verifyWebhookRegistration(await signed({ by: other }), { now: NOW })).toMatchObject({ ok: false, reason: 'signature' });
+    expect(await verifyWebhookRegistration({ ...(await signed()), url: 'https://evil.example.com/' }, { now: NOW })).toMatchObject({
       ok: false,
-      reason: 'signature is not by the subscriber',
+      reason: 'signature',
     });
-    expect(await verifyWebhookRegistration({ ...(await signed()), url: 'https://evil.example.com/' }, { now: NOW })).toMatchObject({ ok: false });
-    expect(await verifyWebhookRegistration(await signed(), { now: NOW + WEBHOOK_MAX_AGE_SEC + 1 })).toMatchObject({
-      ok: false,
-      reason: expect.stringMatching(/older than 10 minutes/),
-    });
+    expect(await verifyWebhookRegistration(await signed(), { now: NOW + WEBHOOK_MAX_AGE_SEC + 1 })).toMatchObject({ ok: false, reason: 'stale' });
     expect(await verifyWebhookRegistration(await signed(), { now: NOW + WEBHOOK_MAX_AGE_SEC })).toMatchObject({ ok: true });
-    expect(await verifyWebhookRegistration(await signed({ issued: NOW + 600 }), { now: NOW })).toMatchObject({ ok: false, reason: 'issued is in the future' });
-    expect(await verifyWebhookRegistration(await signed({ url: 'http://hooks.example.com/' }), { now: NOW })).toMatchObject({
-      ok: false,
-      reason: 'url must be https',
-    });
-    expect(await verifyWebhookRegistration({ ...(await signed()), signature: '0x1234' as `0x${string}` }, { now: NOW })).toMatchObject({ ok: false });
+    expect(await verifyWebhookRegistration(await signed({ issued: NOW + 61 }), { now: NOW })).toMatchObject({ ok: false, reason: 'future' });
+    expect(await verifyWebhookRegistration(await signed({ url: 'http://hooks.example.com/' }), { now: NOW })).toMatchObject({ ok: false, reason: 'url' });
+    expect(await verifyWebhookRegistration({ ...(await signed()), extra: 1 }, { now: NOW })).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(await verifyWebhookRegistration(null, { now: NOW })).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
-  it('http is allowed for localhost only, and only when the flag is on', async () => {
+  it('local http opens localhost and 127.0.0.1 only, and only with the flag', async () => {
     const local = await signed({ url: 'http://localhost:3418/api/v1/watch/demo-hook' });
     expect((await verifyWebhookRegistration(local, { now: NOW })).ok).toBe(false);
     expect((await verifyWebhookRegistration(local, { now: NOW, allowLocalHttp: true })).ok).toBe(true);
@@ -75,69 +74,69 @@ describe('verifyWebhookRegistration', () => {
   });
 });
 
-describe('the web URL rules', () => {
-  it('refuses credentials, private hosts and very long URLs', () => {
-    expect(urlProblem(URL_OK, false)).toBeNull();
-    expect(urlProblem('https://user:pw@hooks.example.com/', false)).toMatch(/user name or password/);
+describe('the URL rules', () => {
+  it('https to a public host only; no credentials, whitespace, private or CGNAT hosts, or very long URLs', () => {
+    expect(webhookUrlProblem(URL_OK)).toBeNull();
+    expect(webhookUrlProblem('https://user:pw@hooks.example.com/')).toBe('carries credentials');
     for (const h of [
       'https://localhost/x',
+      'https://a.localhost/x',
       'https://127.0.0.1/x',
       'https://10.1.2.3/x',
       'https://192.168.0.2/x',
       'https://172.20.0.1/x',
       'https://169.254.169.254/x',
+      'https://100.64.0.1/x',
       'https://[::1]/x',
-      'https://box.internal/x',
+      'https://0.0.0.0/x',
     ]) {
-      expect(urlProblem(h, false), h).toMatch(/local or private/);
+      expect(webhookUrlProblem(h), h).toBe('points at a private or loopback address');
     }
-    expect(urlProblem('https://172.32.0.1/x', false)).toBeNull();
-    expect(urlProblem(`https://hooks.example.com/${'a'.repeat(2100)}`, false)).toMatch(/longer than/);
-    expect(urlProblem('ftp://hooks.example.com/', false)).toBe('url must be https');
-    expect(urlProblem('http://localhost:3418/x', true)).toBeNull();
-    expect(urlProblem('http://hooks.example.com/', true)).toBe('http is allowed for localhost only');
-    expect(urlProblem('http://[::1]:3418/x', true)).toBe('http is allowed for localhost only');
-    expect(urlProblem('https://10.0.0.1/x', true)).toMatch(/local or private/);
-    expect(urlProblem('https://hooks.example.com/a b', false)).toMatch(/whitespace/);
-    expect(urlProblem('https://hooks.example.com/a\nissued: 1', false)).toMatch(/whitespace/);
+    expect(webhookUrlProblem('https://172.32.0.1/x')).toBeNull();
+    expect(webhookUrlProblem(`https://hooks.example.com/${'a'.repeat(2100)}`)).toMatch(/longer than 2048/);
+    expect(webhookUrlProblem('https://hooks.example.com/a b')).toMatch(/whitespace/);
+    expect(webhookUrlProblem('https://hooks.example.com/a\nissued: 1')).toMatch(/whitespace/);
+    expect(webhookUrlProblem('ftp://hooks.example.com/')).toBe('not https');
+    expect(webhookUrlProblem('http://localhost:3418/x', { allowLocalHttp: true })).toBeNull();
+    expect(webhookUrlProblem('https://127.0.0.1/x', { allowLocalHttp: true })).toBeNull();
+    expect(webhookUrlProblem('http://hooks.example.com/', { allowLocalHttp: true })).toBe('not https');
   });
 });
 
 describe('webhooks.json', () => {
-  it('stores the latest registration per subscriber, atomically, and refuses an older one', async () => {
+  it('stores the latest registration per subscriber, atomically; an older one is not stored', async () => {
     const file = path.join(dir, 'webhooks.json');
-    const first = await registerWebhook(await signed({ issued: NOW }), { file, now: NOW, localHttp: false });
-    expect(first).toMatchObject({ ok: true });
-    const newer = await registerWebhook(await signed({ issued: NOW + 60, url: 'https://hooks.example.com/v2' }), { file, now: NOW + 60, localHttp: false });
-    expect(newer).toMatchObject({ ok: true });
-    const older = await registerWebhook(await signed({ issued: NOW + 30 }), { file, now: NOW + 60, localHttp: false });
-    expect(older).toMatchObject({ ok: false, status: 409 });
+    const first = await registerWebhook(file, await signed({ issued: NOW }), { now: NOW });
+    expect(first).toMatchObject({ ok: true, stored: true, previous: null });
+    const newer = await registerWebhook(file, await signed({ issued: NOW + 60, url: 'https://hooks.example.com/v2' }), { now: NOW + 60 });
+    expect(newer).toMatchObject({ ok: true, stored: true, previous: { issued: NOW } });
+    const older = await registerWebhook(file, await signed({ issued: NOW + 30 }), { now: NOW + 60 });
+    expect(older).toMatchObject({ ok: true, stored: false, current: { issued: NOW + 60 } });
+    expect(registerStatus(older)).toBe(409);
     const raw = JSON.parse(await readFile(file, 'utf8'));
     expect(raw.v).toBe(1);
     expect(Object.keys(raw.webhooks)).toEqual([account.address.toLowerCase()]);
     expect(raw.webhooks[account.address.toLowerCase()]).toMatchObject({ subscriber: account.address, url: 'https://hooks.example.com/v2', issued: NOW + 60 });
-    expect(parseWebhooksFile(raw)[account.address.toLowerCase()]!.signature).toMatch(/^0x[0-9a-f]{130}$/);
+    expect((await readWebhooks(file)).webhooks[account.address.toLowerCase()]!.signature).toMatch(/^0x[0-9a-f]{130}$/);
+    expect(publicWebhook(await webhookOf(account.address, file))).toEqual({ origin: 'https://hooks.example.com', issued: NOW + 60 });
   });
 
-  it('answers 400 for bad input and 401 for a wrong signer, and writes nothing', async () => {
+  it('a refused registration writes nothing and maps to 400 or 401', async () => {
     const file = path.join(dir, 'w2.json');
-    expect(await registerWebhook(null, { file, now: NOW })).toMatchObject({ ok: false, status: 400 });
-    expect(await registerWebhook({ ...(await signed()), url: 'https://127.0.0.1/' }, { file, now: NOW, localHttp: false })).toMatchObject({
-      ok: false,
-      status: 400,
-    });
-    expect(await registerWebhook(await signed({ by: other }), { file, now: NOW, localHttp: false })).toMatchObject({ ok: false, status: 401 });
+    const bad = await registerWebhook(file, { ...(await signed()), url: 'https://127.0.0.1/' }, { now: NOW });
+    expect(bad).toMatchObject({ ok: false, reason: 'url' });
+    expect(registerStatus(bad)).toBe(400);
+    const wrong = await registerWebhook(file, await signed({ by: other }), { now: NOW });
+    expect(registerStatus(wrong)).toBe(401);
     await expect(readFile(file, 'utf8')).rejects.toThrow();
   });
 
-  it('keeps the newest entries when the file is full', () => {
-    const e = (n: number) => ({ subscriber: `0x${n.toString(16).padStart(40, '0')}`, url: URL_OK, issued: NOW + n, signature: `0x${'1'.repeat(130)}` });
-    let all = {};
-    for (let n = 1; n <= 5; n++) all = withWebhook(all, e(n), 3);
-    expect(
-      Object.values(all)
-        .map((x) => (x as { issued: number }).issued)
-        .sort(),
-    ).toEqual([NOW + 3, NOW + 4, NOW + 5]);
+  it('a missing file is an empty store; a broken one throws, and webhookOf reads it as none', async () => {
+    expect(await readWebhooks(path.join(dir, 'none.json'))).toEqual({ v: 1, webhooks: {} });
+    const broken = path.join(dir, 'broken.json');
+    await writeFile(broken, '{"v":1,"webhooks":');
+    await expect(readWebhooks(broken)).rejects.toThrow(/not readable JSON/);
+    expect(await webhookOf(account.address, broken)).toBeNull();
+    await expect(registerWebhook(broken, await signed(), { now: NOW })).rejects.toThrow(/not readable JSON/);
   });
 });

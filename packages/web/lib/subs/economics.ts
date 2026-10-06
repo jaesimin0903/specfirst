@@ -1,36 +1,8 @@
-import { SECONDS_PER_DAY } from './contract';
-import type { Subscription } from './read';
-
 /*
- * Money arithmetic of CheckSubscriptions as ADR 0006 states it, for the pages: a started day counts as elapsed,
- * cancel settles and refunds the days not started. Pure; bigint wei, unix seconds.
+ * Money arithmetic for the subscription pages that core does not cover: the price of a choice, and desk and
+ * subscription fees together against both gas bills. The day accounting itself (runDaysOf, startedDaysAt,
+ * refundAt) is core's, in lib/subs/core.ts. Pure; bigint wei.
  */
-
-type Sub = Pick<Subscription, 'feePerDayWei' | 'startsAt' | 'endsAt' | 'paidWei' | 'cancelled'>;
-
-/** Whole days paid for: (endsAt - startsAt) / 1 day. */
-export function daysOf(s: Pick<Subscription, 'startsAt' | 'endsAt'>): number {
-  return s.endsAt > s.startsAt ? Number((s.endsAt - s.startsAt) / SECONDS_PER_DAY) : 0;
-}
-
-/** Days that have started by `nowSec`, the current one included, at most the days paid for. */
-export function startedDays(s: Pick<Subscription, 'startsAt' | 'endsAt'>, nowSec: number): number {
-  const now = BigInt(nowSec);
-  if (now < s.startsAt) return 0;
-  const started = Number((now - s.startsAt) / SECONDS_PER_DAY) + 1;
-  return Math.min(started, daysOf(s));
-}
-
-/**
- * What cancel would return at `nowSec`: the fee of the days of the current run not started yet, never more than
- * was paid. Zero once cancelled or ended. (An extend after expiry starts a new run, so earlier runs, all used,
- * are not in it.) An estimate for the button; the Cancelled event carries the real amount.
- */
-export function refundEstimate(s: Sub, nowSec: number): bigint {
-  if (s.cancelled || BigInt(nowSec) >= s.endsAt) return 0n;
-  const unstarted = s.feePerDayWei * BigInt(daysOf(s) - startedDays(s, nowSec));
-  return unstarted < s.paidWei ? unstarted : s.paidWei;
-}
 
 export function priceOf(feePerDayWei: bigint, days: number): bigint {
   return feePerDayWei * BigInt(days);

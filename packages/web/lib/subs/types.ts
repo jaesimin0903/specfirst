@@ -38,7 +38,7 @@ export interface SubscriptionJson {
   settledWei: string;
   cancelled: boolean;
   active: boolean;
-  /** What cancel would return now (ADR rule: the days not started). */
+  /** What cancel would return now: refundAt, the fee of the days not started. */
   refundEstimateWei: string;
 }
 

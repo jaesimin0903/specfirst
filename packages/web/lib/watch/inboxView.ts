@@ -1,4 +1,4 @@
-import { isActiveAt } from '../subs/read';
+import { isActiveAt } from '../subs/core';
 import { nowSec, subscriptionJson, subscriptionsOf } from '../subs/service';
 import type { InboxJson } from '../subs/types';
 import type { ContractReader } from '../desk/read';
@@ -24,7 +24,7 @@ export async function inboxView(subscriber: string, reader?: ContractReader): Pr
   const now = nowSec();
   const lite: InboxSubscription[] = subs.subscriptions.map((x) => ({
     id: x.id.toString(),
-    subjectChainId: x.subjectChainId,
+    subjectChainId: Number(x.subjectChainId),
     subject: x.subject,
     startsAtSec: Number(x.startsAt),
     endsAtSec: Number(x.endsAt),
@@ -49,7 +49,7 @@ export async function inboxView(subscriber: string, reader?: ContractReader): Pr
   return {
     deployed: true,
     subscriber,
-    active: subs.subscriptions.filter((x) => isActiveAt(x, now)).map((x) => subscriptionJson(x, ctx, now)),
+    active: subs.subscriptions.filter((x) => isActiveAt(x, BigInt(now))).map((x) => subscriptionJson(x, ctx, now)),
     ended: subs.subscriptions.length - active.length,
     items: entries
       .map((e) => ({ subscriptionId: e.subscriptionId, kind: e.kind, event: json.get(`${e.event.chainId}:${e.event.seq}`)! }))
