@@ -47,6 +47,41 @@ library SfForkGaps {
         return address(0);
     }
 
+    /// The listed precompiles this EVM lacks. Read before any tripwire is armed.
+    function missingPrecompiles() internal view returns (address[] memory gaps) {
+        address[3] memory listed = [address(0x0100), address(0x1000), address(0x1001)];
+        uint256 n;
+        gaps = new address[](listed.length);
+        for (uint256 i = 0; i < listed.length; i++) {
+            if (_missing(listed[i])) gaps[n++] = listed[i];
+        }
+        assembly {
+            mstore(gaps, n)
+        }
+    }
+
+    /// For setUp, where state diff recording must not be used: forge 1.5.1 keeps recording after
+    /// stopAndReturnStateDiff (it resets the list instead of ending it), and every fuzz run of every property
+    /// then pays for it (half again the CPU of a property that rejects 4096 inputs). Instead each missing
+    /// precompile gets a tripwire, code that reads one storage slot and stops, so a call to it still succeeds
+    /// with no data as the empty account does, and vm.record notes the read even inside a frame that reverted.
+    /// Arm inside a state snapshot that is reverted afterwards, run the call, then read `tripped`.
+    function armTripwires(address[] memory gaps) internal {
+        for (uint256 i = 0; i < gaps.length; i++) {
+            VM.etch(gaps[i], hex"6000545000");
+        }
+        VM.record();
+    }
+
+    /// The first armed precompile whose tripwire was reached since armTripwires; 0 when none. Stops recording.
+    function tripped(address[] memory gaps) internal returns (address hit) {
+        for (uint256 i = 0; i < gaps.length && hit == address(0); i++) {
+            (bytes32[] memory reads,) = VM.accesses(gaps[i]);
+            if (reads.length != 0) hit = gaps[i];
+        }
+        VM.stopRecord();
+    }
+
     /// The revert text of a test or setUp stopped by `p`. The runner trusts it only with the matching event.
     function reason(address p) internal pure returns (string memory) {
         return string.concat(PREFIX, " (", VM.toString(p), ")");
@@ -54,7 +89,7 @@ library SfForkGaps {
 
     /// No code, and an input the real precompile answers with data (or refuses) succeeds with no data: the
     /// account is empty here. An EVM that has the precompile (a Monad build of forge, say) is not flagged.
-    function _missing(address p) private view returns (bool) {
+    function _missing(address p) internal view returns (bool) {
         if (p.code.length != 0) return false;
         (bool ok, bytes memory ret) = p.staticcall(_knownAnswer(p));
         return ok && ret.length == 0;
@@ -126,9 +161,10 @@ contract SpecfirstMaxHonored is Test {
         }
     }
 
-    /// Same probe as the upstream harness: pool member 0 deposits one whole token with state diffs recorded,
-    /// and the state is restored. A revert that reached a precompile this fork lacks ends setUp with
-    /// SfForkGaps' prefix and an event; any other outcome leaves the properties to judge the vault.
+    /// Same probe as the upstream harness: pool member 0 deposits one whole token, and the state is restored.
+    /// When the deposit reverts, it runs again with tripwires on the missing precompiles (SfForkGaps); one that
+    /// was reached ends setUp with SfForkGaps' prefix and an event. Any other outcome leaves the properties to
+    /// judge the vault.
     function _probeDepositPrecompiles() internal {
         address from = _poolMember(0);
         uint256 amount = cap / 1_000_000;
@@ -137,12 +173,18 @@ contract SpecfirstMaxHonored is Test {
         if (_tryGive(from, amount)) {
             vm.prank(from);
             (bool approved,) = asset.call(abi.encodeWithSelector(0x095ea7b3, vault, amount));
+            bytes memory deposit = abi.encodeCall(ISfVault.deposit, (amount, from));
+            bool ok = true;
             if (approved) {
-                vm.startStateDiffRecording();
                 vm.prank(from);
-                (bool ok,) = vault.call(abi.encodeCall(ISfVault.deposit, (amount, from)));
-                Vm.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
-                if (!ok) missing = SfForkGaps.missingCalled(acc);
+                (ok,) = vault.call(deposit);
+            }
+            address[] memory gaps = ok ? new address[](0) : SfForkGaps.missingPrecompiles();
+            if (gaps.length != 0) {
+                SfForkGaps.armTripwires(gaps);
+                vm.prank(from);
+                (ok,) = vault.call(deposit);
+                missing = SfForkGaps.tripped(gaps);
             }
         }
         vm.revertToStateAndDelete(snap);

@@ -5,7 +5,6 @@ pragma solidity >=0.8.0 <0.9.0;
 // directory at run time and never copied into this repository. See docs/adr/0003.
 import {ERC4626Test, IERC4626} from "erc4626-tests/ERC4626.test.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
-import {Vm} from "forge-std/Vm.sol";
 // Specfirst's own file (MIT): the list of Monad precompiles the fork lacks, shared with the sf- properties.
 import {SfForkGaps} from "./SpecfirstMaxHonored.t.sol";
 
@@ -72,11 +71,13 @@ contract SpecfirstERC4626Test is ERC4626Test {
 
     /// Magma gMON on Monad deposits through the staking precompile at 0x1000, which forge's EVM does not have:
     /// on a fork every deposit reverts there, so every property would only reject inputs for a reason the real
-    /// chain does not have. Pool member 0 deposits one whole token with state diffs recorded, and the state is
-    /// restored either way. A revert that reached a precompile Monad has and this fork lacks (SfForkGaps) ends
-    /// setUp with SfForkGaps' prefix and an event (sf-events/<run>.missing-precompile.log); the runner reports
-    /// the suite inconclusive only when both are there, so revert text alone never decides it. Any other
-    /// outcome, a revert for another reason included, leaves the properties to judge the vault.
+    /// chain does not have. Pool member 0 deposits one whole token, and the state is restored either way. When
+    /// the deposit reverts, it runs again with tripwires on the precompiles Monad has and this fork lacks
+    /// (SfForkGaps.armTripwires, not state diff recording, which forge would keep on for every fuzz run). A
+    /// tripwire that was reached ends setUp with SfForkGaps' prefix and an event
+    /// (sf-events/<run>.missing-precompile.log); the runner reports the suite inconclusive only when both are
+    /// there, so revert text alone never decides it. Any other outcome, a revert for another reason included,
+    /// leaves the properties to judge the vault.
     function _probeDepositPrecompiles() internal {
         address from = _poolMember(0);
         uint256 amount = _cap / 1_000_000;
@@ -85,12 +86,18 @@ contract SpecfirstERC4626Test is ERC4626Test {
         if (_tryGive(_underlying_, from, amount)) {
             vm.prank(from);
             (bool approved,) = _underlying_.call(abi.encodeWithSelector(0x095ea7b3, _vault_, amount));
+            bytes memory deposit = abi.encodeCall(IERC4626.deposit, (amount, from));
+            bool ok = true;
             if (approved) {
-                vm.startStateDiffRecording();
                 vm.prank(from);
-                (bool ok,) = _vault_.call(abi.encodeCall(IERC4626.deposit, (amount, from)));
-                Vm.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
-                if (!ok) missing = SfForkGaps.missingCalled(acc);
+                (ok,) = _vault_.call(deposit);
+            }
+            address[] memory gaps = ok ? new address[](0) : SfForkGaps.missingPrecompiles();
+            if (gaps.length != 0) {
+                SfForkGaps.armTripwires(gaps);
+                vm.prank(from);
+                (ok,) = _vault_.call(deposit);
+                missing = SfForkGaps.tripped(gaps);
             }
         }
         vm.revertToStateAndDelete(snap);

@@ -114,6 +114,12 @@ contract CallThenRevert {
         revert();
     }
 
+    function staticThenRevert(address target, bytes calldata data) external view {
+        (bool ok,) = target.staticcall(data);
+        ok;
+        revert();
+    }
+
     function balanceThenRevert(address target) external view {
         if (target.balance == type(uint256).max) return;
         revert();

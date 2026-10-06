@@ -106,7 +106,9 @@ local anvil fork, no recorded JSON):
                                        The harness before 2026-10-07 failed both with BelowMinimum() 0x860b82a9.
 review/M.sol Vault mode 5 deposits through 0x1000; review/Exp.t.sol ForkGaps covers SfForkGaps on recorded
 state diffs (flags 0x0100, 0x1000 and 0x1001 in reverted frames, ignores other empty accounts, Ethereum
-precompiles, balance reads and a precompile the EVM has).
+precompiles, balance reads and a precompile the EVM has) and the tripwires the setUp probes use instead (a
+call or staticcall in a reverted frame trips them, a call elsewhere or a balance read does not, the snapshot
+removes them).
 
 Asynchronous exits and the async-redeem trait (mock-vaults.sol, full checks on a local anvil fork in
 standards.forge.test.ts, no recorded JSON):

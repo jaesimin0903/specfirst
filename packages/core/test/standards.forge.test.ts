@@ -130,6 +130,8 @@ describe.skipIf(SKIP)('ERC-4626 harness with forge, offline (pinned cache presen
       ['test_gapsIgnorePrecompileThisEvmHas', 'Success'],
       ['test_gapsIgnoreUnlistedEmptyAccountAndEthereumPrecompiles', 'Success'],
       ['test_gapsReason', 'Success'],
+      ['test_tripwiresIgnoreCallsThatNeverReachThem', 'Success'],
+      ['test_tripwiresSeeCallsInRevertedFrames', 'Success'],
     ]);
 
     const closed = await forge(['test', '--offline', '--match-contract', '^ModeDepositRevertsBelowMax$', '--match-test', 'test_deposit\\(', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '--json', '-vv']);

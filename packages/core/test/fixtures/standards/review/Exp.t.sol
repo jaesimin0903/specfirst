@@ -146,6 +146,37 @@ contract ForkGaps is Test {
         assertFalse(ok);
         assertEq(SfForkGaps.missingCalled(acc), address(0));
     }
+    function test_tripwiresSeeCallsInRevertedFrames() public {
+        address[] memory gaps = SfForkGaps.missingPrecompiles();
+        assertEq(gaps.length, 3);
+        assertEq(gaps[0], address(0x0100));
+        assertEq(gaps[1], address(0x1000));
+        assertEq(gaps[2], address(0x1001));
+        uint256 snap = vm.snapshotState();
+        SfForkGaps.armTripwires(gaps);
+        (bool ok,) = address(c).call(abi.encodeCall(CallThenRevert.callThenRevert, (address(0x1000), abi.encodeWithSelector(0x84994fec, uint64(78)))));
+        assertFalse(ok);
+        assertEq(SfForkGaps.tripped(gaps), address(0x1000));
+        SfForkGaps.armTripwires(gaps);
+        (ok,) = address(c).call(abi.encodeCall(CallThenRevert.staticThenRevert, (address(0x1001), hex"3a61584e")));
+        assertFalse(ok);
+        assertEq(SfForkGaps.tripped(gaps), address(0x1001));
+        vm.revertToStateAndDelete(snap);
+        // The snapshot takes the tripwires away again.
+        assertEq(address(0x1000).code.length, 0);
+        assertEq(address(0x1001).code.length, 0);
+    }
+    function test_tripwiresIgnoreCallsThatNeverReachThem() public {
+        address[] memory gaps = SfForkGaps.missingPrecompiles();
+        uint256 snap = vm.snapshotState();
+        SfForkGaps.armTripwires(gaps);
+        (bool ok,) = address(c).call(abi.encodeCall(CallThenRevert.callThenRevert, (address(0xdead), hex"")));
+        assertFalse(ok);
+        (ok,) = address(c).call(abi.encodeCall(CallThenRevert.balanceThenRevert, (address(0x1000))));
+        assertFalse(ok);
+        assertEq(SfForkGaps.tripped(gaps), address(0));
+        vm.revertToStateAndDelete(snap);
+    }
     function test_gapsReason() public pure {
         assertEq(SfForkGaps.reason(address(0x1000)), "specfirst: fork lacks a Monad precompile the vault calls (0x0000000000000000000000000000000000001000)");
     }
