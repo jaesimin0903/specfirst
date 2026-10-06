@@ -102,9 +102,15 @@ export interface SubjectCheckInput {
 
 /**
  * Runs the ERC-4626 suite on `subject` at `block` (runStandardCheck, delta 0), recording the report under
- * .specfirst/checks and forge's JSON next to it, as `specfirst check` does.
+ * .specfirst/checks and forge's JSON next to it, as `specfirst check` does. `run` sets the fuzz seed and a
+ * failure-persist directory for this run (the watcher's are per subject); without it both are fresh per run.
  */
-export function runSubjectCheck(i: SubjectCheckInput, subject: Address, block: bigint): Promise<StandardCheckReport> {
+export function runSubjectCheck(
+  i: SubjectCheckInput,
+  subject: Address,
+  block: bigint,
+  run: { seed?: bigint; failurePersistDir?: string } = {},
+): Promise<StandardCheckReport> {
   const recordPath = standardCheckPath(i.projectDir, i.subjectChainId, subject, block);
   return (i.runCheck ?? runStandardCheck)({
     standard: 'erc4626',
@@ -117,6 +123,8 @@ export function runSubjectCheck(i: SubjectCheckInput, subject: Address, block: b
     expectedChainId: i.subjectChainId,
     ...(i.cacheDir ? { cacheDir: i.cacheDir } : {}),
     ...(i.timeoutSec !== undefined ? { timeoutSec: i.timeoutSec } : {}),
+    ...(run.seed !== undefined ? { seed: run.seed } : {}),
+    ...(run.failurePersistDir ? { failurePersistDir: run.failurePersistDir } : {}),
     recordPath,
     rawPath: recordPath.replace(/\.json$/, '.forge.json'),
     ...(i.onCheckEvent ? { onEvent: i.onCheckEvent } : {}),

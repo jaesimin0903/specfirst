@@ -95,6 +95,11 @@ export interface RunStandardCheckInput {
   seed?: bigint;
   /** forge --sender. Default: a random EOA per run. Recorded either way. */
   sender?: Address;
+  /**
+   * Directory forge keeps fuzz failures in, so a counterexample it found once replays first on the next run of
+   * the same subject. Default: a fresh temporary directory per run, removed after it.
+   */
+  failurePersistDir?: string;
   /** Read client for chain id, block and identity. Default: a rate-limited client on rpcUrl. */
   client?: StandardCheckClient;
   /** Refuse to run when the RPC reports another chain. */
@@ -209,6 +214,7 @@ async function runForgeSuite(i: {
   runs: number;
   seed?: bigint;
   sender?: Address;
+  failurePersistDir?: string;
   env: Record<string, string>;
   forgeBin?: string;
   timeoutSec?: number;
@@ -222,7 +228,8 @@ async function runForgeSuite(i: {
   const mask = (t: string) => maskRpcUrl(t, i.rpcUrl);
   // forge replays persisted fuzz failures first; a fresh directory keeps one vault's counterexample
   // from shaping the next vault's run in the shared workspace.
-  const persist = await mkdtemp(path.join(tmpdir(), 'specfirst-standard-'));
+  const persist = i.failurePersistDir ?? (await mkdtemp(path.join(tmpdir(), 'specfirst-standard-')));
+  if (i.failurePersistDir) await mkdir(i.failurePersistDir, { recursive: true });
   const runId = `${Date.now()}-${process.pid}-${randomBytes(4).toString('hex')}`;
   const eventsFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.deposit-below-max.log`);
   const maxZeroFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.max-zero.log`);
@@ -276,7 +283,7 @@ async function runForgeSuite(i: {
     }
     return { results, raw: `${JSON.stringify(doc)}\n`, seed, sender, forgeVersion: version };
   } finally {
-    await rm(persist, { recursive: true, force: true });
+    if (!i.failurePersistDir) await rm(persist, { recursive: true, force: true });
     await rm(eventsFile, { force: true });
     await rm(maxZeroFile, { force: true });
   }
@@ -370,6 +377,7 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
       runs,
       seed: input.seed,
       sender: input.sender,
+      ...(input.failurePersistDir ? { failurePersistDir: input.failurePersistDir } : {}),
       env: { SF_VAULT: address, SF_DELTA: delta.toString() },
       forgeBin: input.forgeBin,
       timeoutSec: input.timeoutSec,
