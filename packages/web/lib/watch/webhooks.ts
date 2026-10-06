@@ -1,16 +1,16 @@
-import { readWebhooks, type RegisterWebhookResult } from '@specfirst/core';
+import { readWebhooks, type RegisterWebhookResult } from '@specfirst/core/webhooks';
 import type { WebhookRegistration } from '../subs/core';
 import { watchFile } from './paths';
 
 /*
  * <watch dir>/webhooks.json, where the web stores webhook registrations and the watcher's alert sink reads them
- * (ADR 0006, "Alerts"). The store is core's, from its package root because it is Node only: readWebhooks, and
- * registerWebhook, the only way in (verified in full, latest per subscriber wins, written 0600 through a temp file).
- * A webhook URL can be a secret (chat webhooks are), so the file is never served and the API shows only a URL's
- * origin. Server only.
+ * (ADR 0006, "Alerts"). The store is core's, from the Node-only @specfirst/core/webhooks (never the package root):
+ * readWebhooks, and registerWebhook, the only way in (verified in full, latest per subscriber wins, written 0600
+ * through a temp file). A webhook URL can be a secret (chat webhooks are), so the file is never served and the API
+ * shows only a URL's origin. Server only.
  */
 
-export { readWebhooks, registerWebhook, WEBHOOKS_JSON, WebhookStoreError, type RegisterWebhookResult } from '@specfirst/core';
+export { readWebhooks, registerWebhook, WEBHOOKS_JSON, WebhookStoreError, type RegisterWebhookResult } from '@specfirst/core/webhooks';
 
 /* Web-only helpers. */
 

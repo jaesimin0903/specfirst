@@ -1,6 +1,7 @@
 // webhooks.json in the watch directory, the delivery-time DNS check and the watcher's webhook AlertSink (docs/adr/0006,
-// Alerts). Node only: it reads and writes files and resolves host names. The message, verification and delivery it
-// builds on are in alerts.ts.
+// Alerts). Node only: it reads and writes files and resolves host names. Exported as `@specfirst/core/webhooks`
+// (this module alone, so a server such as the web can use it without the package root's forge and process code)
+// and from the root. The message, verification and delivery it builds on are in alerts.ts.
 import { randomBytes } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
@@ -9,6 +10,7 @@ import {
   checkAllowedLocalOrigins,
   deliverWebhookAlerts,
   emptyWebhooksFile,
+  isWebhookEvent,
   verifyWebhookRegistration,
   webhooksFileSchema,
   type DeliverWebhooksOptions,
@@ -130,8 +132,9 @@ export interface WebhookAlertSinkOptions extends Omit<DeliverWebhooksOptions, 'f
 }
 
 /**
- * The watcher's webhook AlertSink: for each `changed` event, POSTs the ADR payload once to the registered webhook of
- * every subscriber among the given subscriptions on that subject (deliverWebhookAlerts: at most 25 subscribers, 20 s
+ * The watcher's webhook AlertSink: for each `changed` event, and for the `checked` event of a first check after a
+ * subscription started (payload kind `first-check`), POSTs the ADR payload once to the registered webhook of every
+ * subscriber among the given subscriptions on that subject (deliverWebhookAlerts: at most 25 subscribers, 20 s
  * for the whole event, 3 attempts with backoff, no redirects, the DNS check) and returns the `alerted` events. A
  * missing webhooks.json means nobody registered: no alerts. A broken one throws, so the watcher logs an error
  * instead of silently dropping alerts. allowedLocalOrigins must be exact http(s) origins; a bad one throws here.
@@ -142,7 +145,7 @@ export function createWebhookAlertSink(opts: WebhookAlertSinkOptions): AlertSink
   const resolveHost = opts.resolveHost ?? lookupWebhookHost;
   return {
     async deliver(event, subs) {
-      if (event.kind !== 'changed' || subs.length === 0) return [];
+      if (!isWebhookEvent(event) || subs.length === 0) return [];
       const { webhooks } = await readWebhooks(opts.webhooksFile);
       return deliverWebhookAlerts(event, subs, webhooks, { ...opts, fetch: fetchFn, resolveHost });
     },

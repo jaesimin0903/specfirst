@@ -28,6 +28,7 @@ const entrySchema = z.object({ n: z.number().int(), receivedAt: z.string(), user
 /** The alert payload ADR 0006 has the watcher POST (core's WebhookPayload, from webhookPayload in @specfirst/core/subs). */
 export const alertPayloadSchema = z.object({
   v: z.literal(1),
+  kind: z.enum(['change', 'first-check']),
   subscriptionId: z.string(),
   subscriptionIds: z.array(z.string()).min(1),
   subject: z.string(),

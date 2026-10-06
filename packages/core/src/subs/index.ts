@@ -2,7 +2,7 @@
 // day accounting the contract uses, the client and listActive, and the webhook message, verification, payload and
 // delivery. Everything here imports only viem, zod and other modules of this kind, so a web page can use
 // `@specfirst/core/subs`; the webhooks.json store and the watcher's sink (webhooks.ts) are Node only and exported
-// from the package root.
+// as `@specfirst/core/webhooks` and from the package root.
 export { checkSubscriptionsAbi, checkSubscriptionsBytecode } from './artifact.js';
 export {
   SUBSCRIPTION_DAY_SECONDS,
@@ -46,6 +46,7 @@ export {
   reportUrlOf,
   postWebhook,
   deliverWebhookAlerts,
+  isWebhookEvent,
   WEBHOOK_MAX_AGE_SEC,
   WEBHOOK_MAX_FUTURE_SEC,
   WEBHOOK_MAX_URL_LENGTH,
@@ -64,6 +65,7 @@ export {
   type WebhookUrlOptions,
   type VerifyWebhookOptions,
   type WebhookPayload,
+  type WebhookAlertKind,
   type FetchLike,
   type PostWebhookOptions,
   type PostWebhookResult,

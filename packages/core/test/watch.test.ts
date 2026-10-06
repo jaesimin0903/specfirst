@@ -902,7 +902,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     expect(delivered).toHaveLength(1);
   });
 
-  it("the webhook sink of @specfirst/core/subs plugs in: one POST per registered subscriber, alerted events numbered after the change", async () => {
+  it("the webhook sink of @specfirst/core/subs plugs in: one POST per registered subscriber for a change and for a new subscription's first check, alerted events numbered after the event", async () => {
     const h = await harness();
     // anvil account 1 registers a webhook; the other subscriber has none.
     const alice = privateKeyToAccount('0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d');
@@ -924,7 +924,8 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
       now: () => h.clock.now,
     });
     const sub = (id: bigint, subscriber: Address): ActiveSubscription => ({ id, subscriber, subjectChainId: 143n, subject: V, standardId: ERC4626, startsAt: 0n, endsAt: 10n ** 12n });
-    const w = h.watcher({ subscribedMinutes: 600 }, { subscriptions: { active: async () => [sub(3n, alice.address), sub(4n, bob.address), sub(7n, alice.address)] }, alerts: sink });
+    const subs = [sub(3n, alice.address), sub(4n, bob.address), sub(7n, alice.address)];
+    const w = h.watcher({ subscribedMinutes: 600 }, { subscriptions: { active: async () => subs }, alerts: sink });
     h.chain.logs.push(factoryLog(V, 1500n));
     h.store.state.cursor = '1400';
     await w.pass();
@@ -947,6 +948,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
         url,
         body: {
           v: 1,
+          kind: 'change',
           subscriptionId: '3',
           subscriptionIds: ['3', '7'],
           subject: V,
@@ -959,19 +961,29 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
       },
     ]);
 
-    // An unchanged re-check sends nothing: the webhook sink delivers changes only, the inbox shows first checks.
+    // A subscription that starts later gets the next check, unchanged, as its first check; only that subscription.
+    subs.push(sub(9n, alice.address));
     h.chain.head = 2100n;
     h.chain.logs.push(depositLog(V, 2005n));
     await w.pass();
-    expect(kinds((await h.feed()).slice(7))).toEqual(['queued:first-deposit', 'checked:first-deposit']);
-    expect(posts).toHaveLength(1);
+    const first = (await h.feed()).slice(7);
+    expect(kinds(first)).toEqual(['queued:first-deposit', 'checked:first-deposit', 'alerted:']);
+    expect(first[2]).toMatchObject({ seq: first[1]!.seq + 1, alert: { subscriptionId: '9', subscriber: alice.address, ok: true, status: 204 } });
+    expect(posts[1]!.body).toMatchObject({ kind: 'first-check', subscriptionId: '9', subscriptionIds: ['9'], change: null, attestation: null, check: first[1]!.check });
+
+    // Another unchanged re-check sends nothing: no change, and no subscription without its first check.
+    h.chain.head = 2150n;
+    h.chain.logs.push(upgradedLog(V, 2120n));
+    await w.pass();
+    expect(kinds((await h.feed()).slice(10))).toEqual(['queued:upgrade', 'checked:upgrade']);
+    expect(posts).toHaveLength(2);
 
     // A failed delivery is an alerted event with a reason, never the URL, and a valid feed line.
     const failing = createWebhookAlertSink({ webhooksFile, fetch: async () => ({ status: 410 }), resolveHost: async () => ['93.184.216.34'], now: () => h.clock.now });
     const w2 = h.watcher({ subscribedMinutes: 600 }, { subscriptions: { active: async () => [sub(3n, alice.address)] }, alerts: failing });
     h.chain.head = 2200n;
     h.chain.failing.set(V.toLowerCase(), ['previewDeposit']);
-    h.chain.logs.push(upgradedLog(V, 2150n));
+    h.chain.logs.push(upgradedLog(V, 2170n));
     await w2.pass();
     const last = (await h.feed()).at(-1)!;
     expect(last).toMatchObject({ kind: 'alerted', alert: { subscriptionId: '3', ok: false, status: 410 }, reason: 'HTTP 410 after 1 attempt' });

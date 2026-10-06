@@ -317,7 +317,7 @@ describe('webhooks', () => {
       expect((await webhookPost(at('http://localhost:3418', own))).status).toBe(200);
       const elsewhere = await webhookPost(at('http://localhost:3418', await sign('http://localhost:9999/hook')));
       expect(elsewhere.status).toBe(400);
-      expect(await json<{ reason: string; error: string }>(elsewhere)).toMatchObject({ reason: 'url', error: 'url not https' });
+      expect(await json<{ reason: string; error: string }>(elsewhere)).toMatchObject({ reason: 'url', error: expect.stringMatching(/only at this site's own origin, http:\/\/localhost:3418/) });
     } finally {
       delete process.env.SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS;
     }
@@ -397,7 +397,7 @@ describe('demo webhook receiver', () => {
       { v: 1, seq: 9, at: '2026-10-06T09:00:00.000Z', kind: 'changed', chainId: 143, subject: getAddress(MORPHO), change: { kind: 'regressed', from: null, to: { summary, failed: ['previewDeposit'] } } },
       [5n, 2n],
     );
-    expect(alert).toMatchObject({ subscriptionId: '2', subscriptionIds: ['2', '5'], check: null, reportURL: null });
+    expect(alert).toMatchObject({ kind: 'change', subscriptionId: '2', subscriptionIds: ['2', '5'], check: null, reportURL: null });
     const post = (body: string) =>
       new Request('http://localhost/api/v1/watch/demo-hook', { method: 'POST', body, headers: { 'user-agent': 'specfirst-watch/test' } });
     expect((await demoPost(post(JSON.stringify(alert)))).status).toBe(200);

@@ -104,7 +104,7 @@ node --env-file=.env packages/cli/dist/index.js watch demo set-broken <vault> on
 
 ## Alert subscriptions
 
-`CheckSubscriptions` sells delivery and freshness, not results: a subscriber prepays a fee per day in testnet MON for one vault and gets a webhook POST when its check result changes, plus a faster re-check cadence from the watcher. A day that has started counts as used; `settle` moves the fee of started days to earned, `cancel` refunds the days not started, and extending an expired subscription starts it again from now, so days without service are never charged. See `docs/adr/0006-chain-as-entry-point.md` (CheckSubscriptions, Alerts) for the accounting and the webhook rules.
+`CheckSubscriptions` sells delivery and freshness, not results: a subscriber prepays a fee per day in testnet MON for one vault and gets a webhook POST when its check result changes (and one for the first check after it subscribes), plus a faster re-check cadence from the watcher. A day that has started counts as used; `settle` moves the fee of started days to earned, `cancel` refunds the days not started, and extending an expired subscription starts it again from now, so days without service are never charged. See `docs/adr/0006-chain-as-entry-point.md` (CheckSubscriptions, Alerts) for the accounting and the webhook rules.
 
 ```
 # owner = DEPLOYER_PRIVATE_KEY, 0.05 MON per day unless --fee-per-day (above 0)
@@ -121,7 +121,7 @@ node --env-file=.env packages/cli/dist/index.js subs settle                     
 node --env-file=.env packages/cli/dist/index.js subs withdraw                   # owner: earned fees only, to the owner
 ```
 
-A webhook is registered off chain: the subscriber signs `Specfirst alerts webhook\nsubscriber: <address>\nurl: <https url>\nissued: <unix seconds>` (the URL in canonical form, `new URL(url).href`) on `/watch/inbox`, and the web API verifies and stores it in `.specfirst/watch/webhooks.json` (the web's `SPECFIRST_WATCH_DIR`) with `registerWebhook` from `@specfirst/core`. `specfirst watch` with `SPECFIRST_SUBS_10143` set POSTs `{ v: 1, subscriptionId, subscriptionIds, subject, chainId, change, check, attestation, reportURL }` (`createWebhookAlertSink`) once to every subscriber with an active subscription on a vault whose result changed: up to 3 attempts, at most 25 subscribers and 20 s per event, and never to a host that resolves to an internal address. Each delivery is an `alerted` event in the feed. A local demo receiver needs its exact origin on both sides: `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1` on the web (its own origin) and `--webhook-local-origin` on the watcher:
+A webhook is registered off chain: the subscriber signs `Specfirst alerts webhook\nsubscriber: <address>\nurl: <https url>\nissued: <unix seconds>` (the URL in canonical form, `new URL(url).href`) on `/watch/inbox`, and the web API verifies and stores it in `.specfirst/watch/webhooks.json` (the web's `SPECFIRST_WATCH_DIR`) with `registerWebhook` from `@specfirst/core/webhooks` (Node only). `specfirst watch` with `SPECFIRST_SUBS_10143` set POSTs `{ v: 1, kind, subscriptionId, subscriptionIds, subject, chainId, change, check, attestation, reportURL }` (`createWebhookAlertSink`) once to every subscriber with an active subscription on a vault whose result changed (`kind: 'change'`), and once for the first check after a subscription started (`kind: 'first-check'`): up to 3 attempts, at most 25 subscribers and 20 s per event, and never to a host that resolves to an internal address. Each delivery is an `alerted` event in the feed. A local demo receiver needs its exact origin on both sides: `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1` on the web (its own origin) and `--webhook-local-origin` on the watcher:
 
 ```
 PORT=3418 SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1 NEXT_PUBLIC_SPECFIRST_SUBS_10143=$SPECFIRST_SUBS_10143 pnpm --filter @specfirst/web dev
@@ -175,7 +175,7 @@ JSON: `GET /api/v1/watch/status`, `/api/v1/watch/feed?after=<seq>|before=<seq>`,
 | `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS` | unset | `1` lets a webhook at this site's own origin register even when it is local (`http://localhost:3418/api/v1/watch/demo-hook`), for demos on one machine. Other local URLs stay refused. The watcher delivers to it only when started with `--webhook-local-origin` set to the same origin. |
 | `SPECFIRST_DEMO_HOOK` | on | `off` turns the demo receiver off. |
 
-The web takes the file schemas from `@specfirst/core/watch` and the CheckSubscriptions ABI, day accounting and webhook verification from `@specfirst/core/subs` (`packages/web/lib/watch/core.ts` and `lib/subs/core.ts` re-export them; both are browser-safe), and the `webhooks.json` store from the package root in server code only (`lib/watch/webhooks.ts`), so the web and the watcher's alert sink write and read one file the same way.
+The web takes the file schemas from `@specfirst/core/watch` and the CheckSubscriptions ABI, day accounting and webhook verification from `@specfirst/core/subs` (`packages/web/lib/watch/core.ts` and `lib/subs/core.ts` re-export them; both are browser-safe), and the `webhooks.json` store from the Node-only `@specfirst/core/webhooks` in server code (`lib/watch/webhooks.ts`), so the web and the watcher's alert sink write and read one file the same way. It never imports the package root.
 
 ## License
 

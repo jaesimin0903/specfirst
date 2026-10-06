@@ -26,7 +26,7 @@ import { attestationViewOf, readAttestations, type RegistryReader } from './atte
 
 /*
  * Build-time pipeline behind `pnpm --filter @specfirst/web board:build` (scripts/build-board.mjs). Node only:
- * it imports @specfirst/core's root for the report schema and hashes, which client code must never do.
+ * it imports @specfirst/core's root for the report schema and hashes, which the Next app must never do.
  */
 
 const CHAIN_DIR = /^\d+$/;

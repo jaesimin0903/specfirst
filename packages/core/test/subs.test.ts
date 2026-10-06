@@ -39,6 +39,7 @@ import {
   type WebhookRegistration,
 } from '../src/index.js';
 import * as browserSubs from '../src/subs/index.js';
+import * as nodeWebhooks from '../src/subs/webhooks.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ERC4626 = standardIdOf('erc4626');
@@ -105,7 +106,6 @@ describe('browser-safe @specfirst/core/subs', () => {
     expect(browserSubs.SubscriptionsClient).toBe(SubscriptionsClient);
     expect(browserSubs).not.toHaveProperty('createWebhookAlertSink');
   });
-
   it('the ABI is exactly the ADR 0006 interface', () => {
     const fns = Object.fromEntries(
       checkSubscriptionsAbi.filter((x) => x.type === 'function').map((f) => [f.name, `${f.inputs.map((i) => i.type).join(',')}>${f.outputs.map((o) => o.type).join(',')}`]),
@@ -155,6 +155,35 @@ describe('browser-safe @specfirst/core/subs', () => {
     );
     const ctor = checkSubscriptionsAbi.find((x) => x.type === 'constructor')!;
     expect((ctor as { inputs: readonly { type: string }[] }).inputs.map((i) => i.type)).toEqual(['address', 'uint96']);
+  });
+});
+
+describe('Node-only @specfirst/core/webhooks', () => {
+  it('is the webhooks.json store and the sink alone: node built-ins, viem, zod and alerts.ts, none of the root (forge, execa)', () => {
+    const seen = new Set<string>();
+    const packages = new Set<string>();
+    const queue = [path.join(here, '../src/subs/webhooks.ts')];
+    while (queue.length) {
+      const file = queue.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      for (const dep of importsOf(file)) {
+        if (dep.startsWith('/')) queue.push(dep);
+        else packages.add(dep);
+      }
+    }
+    expect([...packages].sort()).toEqual(['node:crypto', 'node:dns/promises', 'node:fs/promises', 'node:path', 'viem', 'zod']);
+    expect([...seen].map((f) => path.relative(path.join(here, '../src'), f)).sort()).toEqual(['subs/alerts.ts', 'subs/webhooks.ts']);
+    const pkg = JSON.parse(readFileSync(path.join(here, '../package.json'), 'utf8')) as { exports: Record<string, { import: string; types: string }> };
+    expect(pkg.exports['./webhooks']).toEqual({ types: './dist/subs/webhooks.d.ts', import: './dist/subs/webhooks.js' });
+  });
+
+  it('exports the store, the sink and the host lookup, the same objects as the package root', () => {
+    expect(Object.keys(nodeWebhooks).sort()).toEqual(['WEBHOOKS_JSON', 'WebhookStoreError', 'createWebhookAlertSink', 'lookupWebhookHost', 'readWebhooks', 'registerWebhook']);
+    expect(nodeWebhooks.createWebhookAlertSink).toBe(createWebhookAlertSink);
+    expect(nodeWebhooks.registerWebhook).toBe(registerWebhook);
+    expect(nodeWebhooks.readWebhooks).toBe(readWebhooks);
+    expect(nodeWebhooks.WebhookStoreError).toBe(WebhookStoreError);
   });
 });
 
@@ -593,6 +622,7 @@ describe('webhook delivery against a local HTTP server', () => {
     const body = JSON.parse(hits.find((h) => h.path === '/alice')!.body);
     expect(body).toEqual({
       v: 1,
+      kind: 'change',
       subscriptionId: '3',
       subscriptionIds: ['3', '8'],
       subject: VAULT,
@@ -720,10 +750,37 @@ describe('webhook delivery against a local HTTP server', () => {
     expect(never).not.toHaveBeenCalled();
   });
 
-  it('delivers only changed events, and not to a registration that no longer verifies or whose origin is not allowed', async () => {
+  it('delivers a first check after a subscription started as kind first-check, with the subscriptions it is the first check of', async () => {
+    const regs = { [alice.address.toLowerCase()]: await reg(alice, `${base}/alice`) };
+    // What the watcher hands the sink for an unchanged check that is the first since subscription 9 started.
+    const { change: _change, attestation: _attestation, ...rest } = changed;
+    const checked: FeedEvent = { ...rest, seq: 40, kind: 'checked', reason: 'unchanged since attestation 20' };
+    const [out] = await deliverWebhookAlerts(checked, [active(9n, alice.address)], regs, opts);
+    expect(JSON.parse(hits[0]!.body)).toEqual({
+      v: 1,
+      kind: 'first-check',
+      subscriptionId: '9',
+      subscriptionIds: ['9'],
+      subject: VAULT,
+      chainId: 143,
+      change: null,
+      check: changed.check,
+      attestation: null,
+      reportURL: `https://raw.example.org/certs/checks/143/${VAULT.toLowerCase()}/110977300-0011223344556677.json`,
+    });
+    expect(out).toEqual({ v: 1, seq: 40, at: '2026-10-06T10:00:05.000Z', kind: 'alerted', chainId: 143, subject: VAULT, alert: { subscriptionId: '9', subscriber: alice.address, channel: 'webhook', ok: true, status: 204 } });
+    expect(feedEventSchema.parse(out)).toEqual(out);
+  });
+
+  it('delivers only changed events and first checks, and not to a registration that no longer verifies or whose origin is not allowed', async () => {
     const tampered = { ...(await reg(alice, `${base}/alice`)), url: `${base}/other` };
     const regs = { [alice.address.toLowerCase()]: tampered, [mallory.address.toLowerCase()]: await reg(mallory, `${base}/mallory`) };
-    expect(await deliverWebhookAlerts({ ...changed, kind: 'checked' }, [active(3n, alice.address)], regs, opts)).toEqual([]);
+    for (const kind of ['detected', 'queued', 'attested', 'alerted', 'error'] as const) {
+      expect(await deliverWebhookAlerts({ ...changed, kind }, [active(5n, mallory.address)], regs, opts), kind).toEqual([]);
+    }
+    const { check: _check, ...unchecked } = changed;
+    expect(await deliverWebhookAlerts({ ...unchecked, kind: 'checked' }, [active(5n, mallory.address)], regs, opts)).toEqual([]);
+    expect(hits).toEqual([]);
     const both = [active(3n, alice.address), active(5n, mallory.address)];
     const out = await deliverWebhookAlerts(changed, both, regs, opts);
     expect(out.map((e) => [e.alert!.subscriptionId, e.alert!.ok, e.reason])).toEqual([

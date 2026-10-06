@@ -168,6 +168,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch with subscriptions and webhooks fro
     expect(hits[0]).toMatchObject({ path: '/hook', userAgent: 'specfirst-alerts/1' });
     expect(hits[0]!.body).toEqual({
       v: 1,
+      kind: 'change',
       subscriptionId: '0',
       subscriptionIds: ['0'],
       subject: vault,

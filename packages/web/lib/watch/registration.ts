@@ -1,4 +1,4 @@
-import { verifyWebhookRegistration } from '../subs/core';
+import { bareHostname, isIpLiteral, isPrivateAddress, verifyWebhookRegistration, webhookUrlProblem, type WebhookVerification } from '../subs/core';
 import type { SubscriberStanding } from '../subs/service';
 import { serialized } from './atomic';
 import { publicWebhook, readWebhooks, registerStatus, registerWebhook } from './webhooks';
@@ -40,10 +40,41 @@ export function localOriginsFor(requestUrl: string, env: Record<string, string |
 
 const fail = (status: number, error: string, reason?: string): RegistrationResponse => ({ status, body: { ok: false, ...(reason ? { reason } : {}), error } });
 
+function isLocalHost(u: URL): boolean {
+  const host = bareHostname(u);
+  return host === 'localhost' || host.endsWith('.localhost') || (isIpLiteral(u) && isPrivateAddress(host));
+}
+
+/**
+ * What to tell someone whose local URL core refused only because its origin is not allowed (core says "not https" or
+ * "points at a private or loopback address"): where a local webhook may live on this server. null for any other
+ * refusal, which keeps core's message.
+ */
+export function localUrlMessage(url: unknown, allowed: readonly string[]): string | null {
+  if (typeof url !== 'string') return null;
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (!isLocalHost(u) || allowed.includes(u.origin) || webhookUrlProblem(url, { allowedLocalOrigins: [u.origin] }) !== null) return null;
+  return allowed.length
+    ? `url may be local only at this site's own origin, ${allowed.join(', ')}`
+    : 'url points at a local address; this server takes local webhooks only at its own origin, and only with SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1';
+}
+
+/** A refused verification as a response: core's reason code, and its message unless localUrlMessage says more. */
+function refused(v: Exclude<WebhookVerification, { ok: true }>, url: unknown, allowed: readonly string[]): RegistrationResponse {
+  const status = v.reason === 'signature' ? 401 : 400;
+  return fail(status, (v.reason === 'url' ? localUrlMessage(url, allowed) : null) ?? v.message, v.reason);
+}
+
 export async function registerWithPolicy(input: unknown, deps: RegistrationDeps): Promise<RegistrationResponse> {
   const opts = { now: deps.now, allowedLocalOrigins: deps.allowedLocalOrigins };
+  const url = (input as { url?: unknown } | null)?.url;
   const v = await verifyWebhookRegistration(input, opts);
-  if (!v.ok) return fail(v.reason === 'signature' ? 401 : 400, v.message, v.reason);
+  if (!v.ok) return refused(v, url, deps.allowedLocalOrigins);
   const subscriber = v.registration.subscriber;
 
   const standing = await deps.standing(subscriber);
@@ -67,8 +98,8 @@ export async function registerWithPolicy(input: unknown, deps: RegistrationDeps)
       return fail(429, `this server already holds webhooks for ${max} subscribers; new ones are refused for now`);
     }
     const r = await registerWebhook(deps.file, input, opts);
+    if (!r.ok) return refused(r, url, deps.allowedLocalOrigins);
     const status = registerStatus(r);
-    if (!r.ok) return fail(status, r.message, r.reason);
     if (!r.stored) return fail(status, 'a newer registration for this subscriber is already stored');
     return { status: 200, body: { ok: true, webhook: { subscriber: r.registration.subscriber, ...publicWebhook(r.registration)! } } };
   });

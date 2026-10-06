@@ -26,6 +26,10 @@
     "./watch": {
       "types": "./dist/watch/index.d.ts",
       "import": "./dist/watch/index.js"
+    },
+    "./webhooks": {
+      "types": "./dist/subs/webhooks.d.ts",
+      "import": "./dist/subs/webhooks.js"
     }
   },
   "files": [

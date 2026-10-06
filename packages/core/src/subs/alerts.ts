@@ -259,11 +259,19 @@ export async function verifyWebhookRegistration(input: unknown, opts: VerifyWebh
 }
 
 /**
- * The JSON body POSTed to a webhook for one `changed` event (ADR 0006). One POST per subscriber: subscriptionIds
- * lists every active subscription it holds on the subject, subscriptionId is the lowest of them.
+ * What a webhook POST is about: `change`, a `changed` event (change set), or `first-check`, the `checked` event of
+ * the first check after the subscription started, delivered once (change null when nothing changed).
+ */
+export type WebhookAlertKind = 'change' | 'first-check';
+
+/**
+ * The JSON body POSTed to a webhook for one `changed` event, or for the first check after a subscription started
+ * (ADR 0006). One POST per subscriber: subscriptionIds lists the active subscriptions it holds on the subject that
+ * the event is for, subscriptionId is the lowest of them.
  */
 export interface WebhookPayload {
   v: 1;
+  kind: WebhookAlertKind;
   subscriptionId: string;
   subscriptionIds: string[];
   subject: Address;
@@ -287,12 +295,13 @@ export function reportUrlOf(reportPath: string | undefined, reportBaseUrl: strin
   return `${reportBaseUrl.replace(/\/+$/, '')}/${rel.slice('certs/checks/'.length)}`;
 }
 
-/** The payload for one subscriber holding `ids` (sorted here) on the event's subject. */
+/** The payload for one subscriber holding `ids` (sorted here) on the event's subject; a `checked` event is a first check. */
 export function webhookPayload(event: FeedEvent, ids: readonly bigint[], reportBaseUrl?: string): WebhookPayload {
   const sorted = [...ids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map(String);
   if (sorted.length === 0) throw new Error('a webhook payload needs at least one subscription id');
   return {
     v: 1,
+    kind: event.kind === 'checked' ? 'first-check' : 'change',
     subscriptionId: sorted[0]!,
     subscriptionIds: sorted,
     subject: event.subject,
@@ -436,15 +445,24 @@ function unlessAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<{ value: 
 }
 
 /**
- * Delivers one feed event to webhooks: only `changed` events (others return []), only subscriptions on the event's
- * subject and chain, one POST per subscriber (all its subscription ids in the payload), only to subscribers with a
+ * Feed events a webhook gets: a change, and the first check after a subscription started (the watcher hands the
+ * sink a `checked` event only for that, with the subscriptions it is the first check of).
+ */
+export function isWebhookEvent(event: FeedEvent): boolean {
+  return event.kind === 'changed' || (event.kind === 'checked' && event.check !== undefined);
+}
+
+/**
+ * Delivers one feed event to webhooks: only `changed` events and the `checked` event of a first check after a
+ * subscription started (others return []; isWebhookEvent), only subscriptions on the event's subject and chain,
+ * one POST per subscriber (all its given subscription ids in the payload), only to subscribers with a
  * registration whose URL passes webhookUrlProblem, whose signature still verifies (the age is not checked again)
  * and whose host does not resolve to a private address (resolveHost). At most `maxTargets` subscribers are tried;
  * the rest get a failed alerted event. The whole event has `deadlineMs`: when it passes, the POSTs in flight are
  * aborted and the subscribers not reached yet are recorded as failed, so one event never holds the watcher longer.
  * Returns one `alerted` event per subscriber with a registration, in order of first appearance; its subscriptionId
- * is the subscriber's lowest id, `seq` is the seq of the changed event it answers (the feed writer numbers it when
- * it appends), and a failure carries `reason`, never the URL.
+ * is the subscriber's lowest id, `seq` is the seq of the event it answers (the feed writer numbers it when it
+ * appends), and a failure carries `reason`, never the URL.
  */
 export async function deliverWebhookAlerts(
   event: FeedEvent,
@@ -452,7 +470,7 @@ export async function deliverWebhookAlerts(
   registrations: Readonly<Record<string, WebhookRegistration>>,
   opts: DeliverWebhooksOptions,
 ): Promise<FeedEvent[]> {
-  if (event.kind !== 'changed') return [];
+  if (!isWebhookEvent(event)) return [];
   const subject = event.subject.toLowerCase();
   const groups = new Map<string, { subscriber: Address; ids: bigint[] }>();
   for (const sub of subs) {

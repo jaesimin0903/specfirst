@@ -6,7 +6,7 @@ import { keccak256, toHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { webhookMessage } from '../lib/subs/core';
 import type { SubscriberStanding } from '../lib/subs/service';
-import { localOriginsFor, registerWithPolicy, type RegistrationDeps } from '../lib/watch/registration';
+import { localOriginsFor, localUrlMessage, registerWithPolicy, type RegistrationDeps } from '../lib/watch/registration';
 import { inboxNote } from '../lib/watch/words';
 
 /*
@@ -106,11 +106,24 @@ describe('local webhooks', () => {
     const file = path.join(dir, 'g.json');
     const d = deps(file, { state: 'active', ids: ['0'] }, { allowedLocalOrigins: allowed });
     expect((await registerWithPolicy(await reg(40, { url: 'http://localhost:3418/api/v1/watch/demo-hook' }), d)).status).toBe(200);
-    const refused = { status: 400, body: { ok: false, reason: 'url', error: 'url not https' } };
-    expect(await registerWithPolicy(await reg(41, { url: 'http://localhost:9999/hook' }), d)).toEqual(refused);
-    expect(await registerWithPolicy(await reg(43, { url: 'http://127.0.0.1:3418/hook' }), d)).toEqual(refused);
-    expect(await registerWithPolicy(await reg(42, { url: 'http://localhost:3418/hook' }), { ...d, allowedLocalOrigins: [] })).toEqual(refused);
+    // Core's reason code stays; the message says where a local webhook may live.
+    const elsewhere = { status: 400, body: { ok: false, reason: 'url', error: "url may be local only at this site's own origin, http://localhost:3418" } };
+    expect(await registerWithPolicy(await reg(41, { url: 'http://localhost:9999/hook' }), d)).toEqual(elsewhere);
+    expect(await registerWithPolicy(await reg(43, { url: 'http://127.0.0.1:3418/hook' }), d)).toEqual(elsewhere);
+    const off = await registerWithPolicy(await reg(42, { url: 'http://localhost:3418/hook' }), { ...d, allowedLocalOrigins: [] });
+    expect(off).toEqual({ status: 400, body: { ok: false, reason: 'url', error: expect.stringMatching(/only with SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1/) } });
     expect(Object.keys(JSON.parse(await readFile(file, 'utf8')).webhooks)).toEqual([key(40).address.toLowerCase()]);
+  });
+
+  it('localUrlMessage speaks only for a local URL refused for its origin; other refusals keep core message', () => {
+    const allowed = ['http://localhost:3418'];
+    expect(localUrlMessage('http://localhost:9999/hook', allowed)).toMatch(/only at this site's own origin, http:\/\/localhost:3418/);
+    expect(localUrlMessage('https://10.0.0.5/hook', allowed)).toMatch(/only at this site's own origin/);
+    expect(localUrlMessage('https://[::1]:8443/hook', [])).toMatch(/local address/);
+    // Allowed, public, not canonical, with credentials, or not a URL: not this message.
+    for (const url of ['http://localhost:3418/hook', 'http://hooks.example.com/', 'http://localhost:9999', 'http://u:p@localhost:9999/', 'nope', 42]) {
+      expect(localUrlMessage(url, allowed), String(url)).toBeNull();
+    }
   });
 });
 

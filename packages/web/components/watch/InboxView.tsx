@@ -300,7 +300,7 @@ function WebhookForm({
         Webhook
       </h2>
       <p className="sb-lede">
-        The watcher POSTs a JSON alert to this URL for every change on a vault you watch, up to 3 attempts. Registering it is a signature, not a transaction:
+        The watcher POSTs a JSON alert to this URL for every change on a vault you watch, and once for its first check after you subscribe, up to 3 attempts. Registering it is a signature, not a transaction:
         the text below is signed by {shortAddress(subscriber)} and checked by this server, which keeps the latest URL per address and never shows it in full,
         since a webhook URL can be a secret.
       </p>

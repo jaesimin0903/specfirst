@@ -3,9 +3,9 @@ const BOARD_DATA = ['./data/board.json', './data/vaults/**/*.json', './data/vaul
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // Client code imports only the browser-safe subpaths of @specfirst/core (hash, desk, watch, subs: viem and zod),
-  // never the package root, which re-exports Node-only modules (execa, node:fs). On the server only
-  // lib/watch/webhooks.ts imports the root, for core's webhooks.json store. No webpack aliasing is needed.
+  // The app imports only the subpaths of @specfirst/core: the browser-safe hash, desk, watch and subs (viem and zod),
+  // and on the server webhooks (the webhooks.json store, node:fs and node:dns). Never the package root, which
+  // re-exports forge and process code (execa, node:child_process). No webpack aliasing is needed.
   // The board pages are prerendered from data/; vault pages that are not prerendered read it on demand.
   // The desk pages and APIs read the same files at request time, plus ../../certs/checks and the worker's status
   // file, which a standalone deployment has to mount next to the app (see README, Request desk). The watch pages and
