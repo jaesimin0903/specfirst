@@ -1,21 +1,38 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import type { Address, Hex, PublicClient } from 'viem';
-import { attestationParamsFromReport, attestationReportPath, AttestationError, checkReportHash, parseCheckReport, standardIdOf, type AttestParams } from '../attest/params.js';
+import type { Address, Hex } from 'viem';
+import { attestationParamsFromReport, AttestationError, standardIdOf, type AttestParams } from '../attest/params.js';
 import { ATTESTATION_STATUS, type AttestationRegistryClient } from '../attest/registry.js';
+import {
+  checkBlockOf,
+  countsAsFailure,
+  DEFAULT_BLOCK_LAG,
+  errorText,
+  loadReportCopy,
+  precheckErc4626,
+  runSubjectCheck,
+  saveReportCopy,
+  type Erc4626Precheck,
+} from '../attest/subjectCheck.js';
 import { verifySubjectCode, type SubjectClient, type SubjectCodeCheck } from '../attest/verify.js';
 import { isRateLimited, isTransportFailure } from '../chain/transport.js';
-import { runStandardCheck, standardCheckPath, type RunStandardCheckInput, type StandardCheckClient, type StandardCheckEvent } from '../standards/check.js';
+import type { RunStandardCheckInput, StandardCheckClient, StandardCheckEvent } from '../standards/check.js';
 import type { StandardCheckReport } from '../standards/report.js';
 import type { DeskRequest, DeskTx, RequestDeskClient } from './client.js';
 import { reasonOf, REQUEST_STATUS, type RejectReason, type RequestStatusName, type WorkerRequestStatus, type WorkerStage } from './index.js';
 import type { WorkerStateEntry, WorkerStore } from './store.js';
 
-/** The repository's own public copy of certs/checks, used as the default reportURI base. */
-export const DEFAULT_REPORT_BASE_URL = 'https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks';
-export const REPORT_BASE_URL_ENV = 'SPECFIRST_REPORT_BASE_URL';
-/** The check runs this many blocks below the subject chain's latest block, so every RPC already serves its state. */
-export const DEFAULT_BLOCK_LAG = 10n;
+// Shared with the watcher; re-exported so the package root keeps exporting them from here.
+export {
+  checkBlockOf,
+  countsAsFailure,
+  DEFAULT_BLOCK_LAG,
+  DEFAULT_REPORT_BASE_URL,
+  errorText,
+  isContractAnswer,
+  precheckErc4626,
+  REPORT_BASE_URL_ENV,
+  type Erc4626Precheck,
+} from '../attest/subjectCheck.js';
+
 export const DEFAULT_WORKER_RUNS = 16;
 export const DEFAULT_WORKER_POLL_SEC = 15;
 
@@ -27,7 +44,7 @@ export type WorkerDesk = Pick<RequestDeskClient, 'requestCount' | 'requestOf' | 
 /** DeskError name of a reject whose gas estimate is above WorkerConfig.maxRejectGas. */
 export const GAS_CAP_EXCEEDED = 'GasCapExceeded';
 
-export type Erc4626Precheck = { ok: true; asset: Address } | { ok: false; reason: string };
+
 
 /**
  * Everything the worker does outside its own files, injected so the loop is testable: desk reads and
@@ -110,11 +127,6 @@ export interface WorkerPassResult {
 
 // ---------------------------------------------------------------- pure decisions
 
-/** The block the check forks at: `lag` below the latest subject block, never below 0. */
-export function checkBlockOf(latest: bigint, lag: bigint): bigint {
-  return latest > lag ? latest - lag : 0n;
-}
-
 /** Whether the worker can serve a request at all, before touching the subject chain. */
 export function screenRequest(
   r: Pick<DeskRequest, 'subjectChainId' | 'standardId'>,
@@ -136,37 +148,9 @@ export function advanceCursor(cursor: bigint, count: bigint, closed: ReadonlySet
   return c;
 }
 
-/**
- * Whether a failed transaction step counts toward maxTxFailures: a revert (a decoded contract error, or a
- * transaction that reverted) does; an RPC outage, a rate limit or a receipt that did not arrive in time
- * does not, so a short outage never turns into a refund.
- */
-export function countsAsFailure(err: unknown): boolean {
-  if (isTransportFailure(err) || isRateLimited(err)) return false;
-  const seen = new Set<unknown>();
-  let cur: unknown = err;
-  while (cur && typeof cur === 'object' && !seen.has(cur)) {
-    seen.add(cur);
-    const e = cur as { errorName?: unknown; name?: unknown; message?: unknown };
-    if (typeof e.errorName === 'string' && e.errorName) return true;
-    if (e.name === 'ContractFunctionRevertedError') return true;
-    if (typeof e.message === 'string' && /\breverted\b/.test(e.message)) return true;
-    cur = (cur as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
 /** An attestation this worker issued can deliver a request when it was issued at or after the request. */
 export function canDeliver(a: { issuedAt: bigint } | null, r: Pick<DeskRequest, 'requestedAt'>): boolean {
   return a !== null && a.issuedAt >= r.requestedAt;
-}
-
-/** One line of an error, for status.json and events. */
-export function errorText(err: unknown): string {
-  const e = err as { shortMessage?: string; message?: string };
-  const text = e?.shortMessage ?? e?.message ?? String(err);
-  const line = text.split('\n')[0] ?? text;
-  return line.length > 300 ? `${line.slice(0, 297)}...` : line;
 }
 
 /**
@@ -519,59 +503,6 @@ async function withRetries<T>(
 
 // ---------------------------------------------------------------- live effects
 
-const erc4626ProbeAbi = [
-  { type: 'function', name: 'asset', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
-  { type: 'function', name: 'totalAssets', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
-] as const;
-
-const CONTRACT_ANSWER_ERRORS = new Set([
-  'ContractFunctionRevertedError',
-  'ContractFunctionZeroDataError',
-  'AbiDecodingZeroDataError',
-  'AbiDecodingDataSizeTooSmallError',
-  'InvalidAddressError',
-]);
-
-/** True when a read failed because of what the contract returned, not because of the RPC. */
-export function isContractAnswer(err: unknown): boolean {
-  const seen = new Set<unknown>();
-  let cur: unknown = err;
-  while (cur && typeof cur === 'object' && !seen.has(cur)) {
-    seen.add(cur);
-    const name = (cur as { name?: unknown }).name;
-    if (typeof name === 'string' && CONTRACT_ANSWER_ERRORS.has(name)) return true;
-    cur = (cur as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
-/**
- * Pre-check before paying for a suite run: the subject has code at `blockNumber`, and asset() answers a
- * non-zero address and totalAssets() answers, both at that block. A call that reverts, returns nothing or
- * returns data that does not decode means not a vault ({ ok: false }); any other error (transport, rate
- * limit, a node error) is thrown so the caller retries.
- */
-export async function precheckErc4626(client: Pick<PublicClient, 'getCode' | 'readContract'>, address: Address, blockNumber: bigint): Promise<Erc4626Precheck> {
-  const code = await client.getCode({ address, blockNumber });
-  if (!code || code === '0x') return { ok: false, reason: `no contract code at ${address} at block ${blockNumber}` };
-  const call = async <T>(functionName: 'asset' | 'totalAssets'): Promise<{ value: T } | { error: string }> => {
-    try {
-      return { value: (await client.readContract({ address, abi: erc4626ProbeAbi, functionName, blockNumber })) as T };
-    } catch (err) {
-      // Only an answer from the contract (a revert, no data, data that does not decode) means "not a vault".
-      // Anything else, a node error such as "missing trie node" included, is thrown so the caller retries.
-      if (isContractAnswer(err)) return { error: errorText(err) };
-      throw err;
-    }
-  };
-  const asset = await call<Address>('asset');
-  if ('error' in asset) return { ok: false, reason: `asset() failed at block ${blockNumber}: ${asset.error}` };
-  if (/^0x0{40}$/i.test(asset.value)) return { ok: false, reason: `asset() is the zero address at block ${blockNumber}` };
-  const total = await call<bigint>('totalAssets');
-  if ('error' in total) return { ok: false, reason: `totalAssets() failed at block ${blockNumber}: ${total.error}` };
-  return { ok: true, asset: asset.value };
-}
-
 export interface LiveWorkerEffectsInput {
   desk: WorkerDesk;
   /** Registry client with the worker's wallet (the worker must be an issuer). */
@@ -600,38 +531,14 @@ export interface LiveWorkerEffectsInput {
  * certs/checks/<chainId>/<address>/<block>-<hash8>.json (the cert attest rule) and attests with the registry.
  */
 export function liveWorkerEffects(i: LiveWorkerEffectsInput): WorkerEffects {
-  const runCheck = i.runCheck ?? runStandardCheck;
   return {
     desk: i.desk,
     subjectChainId: i.subjectChainId,
     latestSubjectBlock: () => i.subjectClient.getBlockNumber({ cacheTime: 0 }),
     precheck: (subject, block) => precheckErc4626(i.subjectClient, subject, block),
-    runCheck: (subject, block) => {
-      const recordPath = standardCheckPath(i.projectDir, i.subjectChainId, subject, block);
-      return runCheck({
-        standard: 'erc4626',
-        address: subject,
-        rpcUrl: i.subjectRpcUrl,
-        blockNumber: block,
-        runs: i.runs,
-        delta: 0n,
-        client: i.subjectClient,
-        expectedChainId: i.subjectChainId,
-        ...(i.cacheDir ? { cacheDir: i.cacheDir } : {}),
-        recordPath,
-        rawPath: recordPath.replace(/\.json$/, '.forge.json'),
-        ...(i.onCheckEvent ? { onEvent: i.onCheckEvent } : {}),
-      });
-    },
-    saveReport: async (report) => {
-      const file = attestationReportPath(report, checkReportHash(report));
-      const reportPath = `certs/checks/${file}`;
-      const abs = path.join(i.projectDir, reportPath);
-      await mkdir(path.dirname(abs), { recursive: true });
-      await writeFile(abs, `${JSON.stringify(report, null, 2)}\n`);
-      return { reportPath, reportURI: `${i.reportBaseUrl}/${file}` };
-    },
-    loadReport: async (reportPath) => parseCheckReport(await readFile(path.join(i.projectDir, reportPath), 'utf8')),
+    runCheck: (subject, block) => runSubjectCheck(i, subject, block),
+    saveReport: (report) => saveReportCopy(i.projectDir, i.reportBaseUrl, report),
+    loadReport: (reportPath) => loadReportCopy(i.projectDir, reportPath),
     verifySubject: (report) => verifySubjectCode(i.subjectClient, report, { allowUnknownProxy: true }),
     attest: async (params) => {
       const out = await i.registry.attest(params);

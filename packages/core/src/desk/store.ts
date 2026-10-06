@@ -60,7 +60,8 @@ export function emptyWorkerStatus(): WorkerStatus {
   return { totals: { gasCostWei: '0', fulfilled: 0, rejected: 0 } };
 }
 
-async function writeAtomic(file: string, content: string): Promise<void> {
+/** Writes through a temp file in the same directory and a rename, so readers never see half a file. */
+export async function writeAtomic(file: string, content: string): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
   await writeFile(tmp, content);
@@ -146,17 +147,16 @@ function pidAlive(pid: number): boolean {
 }
 
 /**
- * Takes `<projectDir>/.specfirst/worker/worker.lock` (created exclusively, holding the pid). A lock whose
- * pid is still alive refuses the start: two workers on one state directory would attest twice and race on
- * nonces. A lock left by a process that is gone is taken over. Returns the release function.
+ * Takes `file` (created exclusively, holding the pid) for one process. A lock whose pid is still alive
+ * refuses the start with `error`; a lock left by a process that is gone is taken over. `holder` names the
+ * kind of process in the message ("worker", "watcher"). Returns the release function.
  */
-export async function acquireWorkerLock(
-  projectDir: string,
-  opts: { pid?: number; isAlive?: (pid: number) => boolean } = {},
+export async function acquirePidLock(
+  file: string,
+  opts: { holder: string; error: (message: string) => Error; pid?: number; isAlive?: (pid: number) => boolean },
 ): Promise<() => Promise<void>> {
   const pid = opts.pid ?? process.pid;
   const isAlive = opts.isAlive ?? pidAlive;
-  const file = path.join(projectDir, WORKER_DIR, WORKER_LOCK);
   await mkdir(path.dirname(file), { recursive: true });
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -169,10 +169,22 @@ export async function acquireWorkerLock(
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       const other = Number((await readFile(file, 'utf8').catch(() => '')).trim());
       if (Number.isSafeInteger(other) && other > 0 && other !== pid && isAlive(other)) {
-        throw new WorkerError(`another worker (pid ${other}) is running on ${path.dirname(file)}; stop it first, or remove ${file} if that pid is not a worker`);
+        throw opts.error(`another ${opts.holder} (pid ${other}) is running on ${path.dirname(file)}; stop it first, or remove ${file} if that pid is not a ${opts.holder}`);
       }
       await rm(file, { force: true });
     }
   }
-  throw new WorkerError(`could not take ${file}`);
+  throw opts.error(`could not take ${file}`);
+}
+
+/**
+ * Takes `<projectDir>/.specfirst/worker/worker.lock` (created exclusively, holding the pid). A lock whose
+ * pid is still alive refuses the start: two workers on one state directory would attest twice and race on
+ * nonces. A lock left by a process that is gone is taken over. Returns the release function.
+ */
+export function acquireWorkerLock(
+  projectDir: string,
+  opts: { pid?: number; isAlive?: (pid: number) => boolean } = {},
+): Promise<() => Promise<void>> {
+  return acquirePidLock(path.join(projectDir, WORKER_DIR, WORKER_LOCK), { ...opts, holder: 'worker', error: (m) => new WorkerError(m) });
 }

@@ -165,6 +165,7 @@ export {
   rpcTransport,
   isRateLimited,
   isTransportFailure,
+  isNodeError,
   WriteTargetError,
   type RpcTransportOptions,
 } from './chain/transport.js';
@@ -418,6 +419,7 @@ export {
   WORKER_STATUS_JSON,
   WORKER_LOCK,
   acquireWorkerLock,
+  acquirePidLock,
   workerStateSchema,
   workerStateEntrySchema,
   emptyWorkerStatus,
@@ -453,3 +455,9 @@ export {
   type LiveWorkerEffectsInput,
   type RunWorkerPassInput,
 } from './desk/worker.js';
+export {
+  runSubjectCheck,
+  saveReportCopy,
+  loadReportCopy,
+  type SubjectCheckInput,
+} from './attest/subjectCheck.js';

@@ -52,6 +52,11 @@ export interface RpcTransportOptions {
    * refused on a URL that reports a write-forbidden chain.
    */
   writeChainId?: number;
+  /**
+   * Also move on to the next URL after an error this returns true for (the watcher passes isNodeError, so an
+   * archive read one node cannot serve goes to the next). Off by default: a JSON-RPC error is an answer.
+   */
+  failoverIf?: (err: unknown) => boolean;
   /** Called on every retry or failover, for logs and tests. */
   onRetry?: (info: { url: string; attempt: number; delayMs: number; reason: string }) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -102,6 +107,17 @@ export function isTransportFailure(err: unknown): boolean {
       (typeof e.status === 'number' && e.status >= 500) ||
       /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|network/i.test(e.message ?? ''),
   ) && !chain(err).some((e) => e.name === 'RpcRequestError');
+}
+
+/**
+ * A JSON-RPC answer that reports a failure of the node rather than of the request: -32603 "Internal error"
+ * (rpc1.monad.xyz answers "Error getting block by number" for some archive blocks), "missing trie node",
+ * "header not found". Another node may serve the same request.
+ */
+export function isNodeError(err: unknown): boolean {
+  return chain(err).some(
+    (e) => e.code === -32603 || /internal error|missing trie node|header not found|error getting block/i.test(`${e.message ?? ''} ${e.details ?? ''}`),
+  );
 }
 
 const SEND_METHODS = new Set(['eth_sendRawTransaction', 'eth_sendTransaction']);
@@ -170,7 +186,7 @@ export function rpcTransport(urls: readonly string[], opts: RpcTransportOptions 
             await sleep(delayMs);
             continue;
           }
-          if (isRateLimited(err) || isTransportFailure(err)) {
+          if (isRateLimited(err) || isTransportFailure(err) || opts.failoverIf?.(err)) {
             opts.onRetry?.({ url, attempt: attempt + 1, delayMs: 0, reason: 'failover' });
             break;
           }
