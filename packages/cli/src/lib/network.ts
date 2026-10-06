@@ -17,6 +17,8 @@ export const ANVIL_DEFAULT_KEY: Hex = '0xac0974bec39a17e36ba4a6b4d238ff944bacb47
 
 export const DEPLOYER_KEY_ENV = 'DEPLOYER_PRIVATE_KEY';
 export const ISSUER_KEY_ENV = 'ISSUER_PRIVATE_KEY';
+/** The watcher's issuer key: a second registry issuer, so the watcher and the desk worker never share nonces. */
+export const WATCH_ISSUER_KEY_ENV = 'WATCH_ISSUER_PRIVATE_KEY';
 /** Pays the fee of `specfirst desk request`. Never falls back to an anvil key. */
 export const REQUESTER_KEY_ENV = 'REQUESTER_PRIVATE_KEY';
 export const MONAD_RPC_ENV = 'MONAD_TESTNET_RPC';

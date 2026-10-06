@@ -10,6 +10,7 @@ import { registerLockCommand } from './commands/lock.js';
 import { registerRunCommand } from './commands/run.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerVerifyCommand } from './commands/verify.js';
+import { registerWatchCommand } from './commands/watch.js';
 
 const program = new Command();
 
@@ -31,5 +32,6 @@ registerCheckCommand(program);
 registerAttestRegistryCommand(program);
 registerDeskCommand(program);
 registerWorkerCommand(program);
+registerWatchCommand(program);
 
 await program.parseAsync(process.argv);
