@@ -4,6 +4,16 @@
  * blue (--live) marks what is happening now.
  */
 
+/* desk.css sets --live for the light theme only; on dark paper it needs to be lighter to read as text. */
+html[data-theme='dark'] .sb {
+  --live: #7fb0f5;
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme='light']) .sb {
+    --live: #7fb0f5;
+  }
+}
+
 /* Head */
 
 .sw-hero .sb-claim {

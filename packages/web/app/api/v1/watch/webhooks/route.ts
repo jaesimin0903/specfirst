@@ -23,6 +23,7 @@ export async function GET(request: Request): Promise<NextResponse> {
  * old; the URL must be https. The latest registration per subscriber wins.
  */
 export async function POST(request: Request): Promise<NextResponse> {
+  if (Number(request.headers.get('content-length') ?? 0) > MAX_BODY) return NextResponse.json({ ok: false, error: 'body too large' }, { status: 413 });
   const text = await request.text().catch(() => '');
   if (text.length > MAX_BODY) return NextResponse.json({ ok: false, error: 'body too large' }, { status: 413 });
   let body: unknown;
