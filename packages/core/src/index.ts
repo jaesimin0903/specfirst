@@ -617,6 +617,34 @@ export {
   setDemoVaultBroken,
   depositIntoDemoVault,
 } from './watch/demo.js';
+export {
+  allocationGateAbi,
+  allocationGateBytecode,
+  GATE_VERDICTS,
+  GATE_EXIT_PATHS,
+  GATE_VERDICT_TEXT,
+  gateVerdictOf,
+  gateExitPathOf,
+  allocationAllowed,
+  exitAllowed,
+  type GateVerdict,
+  type GateExitPath,
+} from './gate/index.js';
+export {
+  allocationGateCreationCodeHash,
+  DEFAULT_GATE_MAX_AGE_SEC,
+  deployAllocationGate,
+  mintDemoToken,
+  AllocationGateClient,
+  exitDueVaults,
+  GateError,
+  type GatePosition,
+  type GateSummary,
+  type GateVaultState,
+  type GateTx,
+  type GateExitOutcome,
+  type DeployGateInput,
+} from './gate/client.js';
 export { checkSubscriptionsAbi, checkSubscriptionsBytecode } from './subs/artifact.js';
 export {
   SUBSCRIPTION_DAY_SECONDS,

@@ -19,6 +19,10 @@
       "types": "./dist/desk/index.d.ts",
       "import": "./dist/desk/index.js"
     },
+    "./gate": {
+      "types": "./dist/gate/index.d.ts",
+      "import": "./dist/gate/index.js"
+    },
     "./subs": {
       "types": "./dist/subs/index.d.ts",
       "import": "./dist/subs/index.js"
