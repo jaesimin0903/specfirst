@@ -26,7 +26,7 @@ node --env-file=.env packages/cli/dist/index.js <command>
 | 15 | `run` | a run or the total spend passed its cap |
 | 16, 17 | `check` | a property failed; nothing failed but the check is incomplete |
 | 18 | `desk`, `worker` | a desk action failed or was refused |
-| 19 | `watch` | the watcher cannot start, or a `--once` pass cannot read the subject chain |
+| 19 | `watch` | the watcher cannot start, or a `--once` pass cannot read the subject chain; a `watch demo` or `watch demo gate` action failed or was refused |
 | 20 | `subs` | a subscriptions action failed or was refused |
 
 Each is a `*_EXIT_CODE` constant of `@specfirst/core`; `packages/core/test/exit-codes.test.ts` keeps them distinct. 1 is anything else.
@@ -110,6 +110,20 @@ node --env-file=.env packages/cli/dist/index.js subs subscribe <vault> --days 1 
 node --env-file=.env packages/cli/dist/index.js watch demo set-broken <vault> on                 # next re-check: regressed, pending; the one after: confirmed, attested, alerted
 ```
 
+### Allocation gate: a contract that reads the attestations
+
+`AllocationGate` (`packages/contracts/src/demo/`, ADR 0007) answers "who reads these attestations?" on chain. Its owner can move the gate's idle asset into a vault only while the registry's latest attestation of that vault is compliant, fresh (`--max-age`, default a day), from a current issuer and about the code at the vault's address; once the latest attestation fails, is revoked, or its issuer is removed, anyone can call `exit` and the gate redeems its shares. A stale but compliant attestation stops new money and opens no exit. A vault that refuses to pay out ends in an `ExitFailed` event instead of a revert. The gate trusts the registry's issuers, nothing more (ADR 0005). `watch demo gate` signs with `DEPLOYER_PRIVATE_KEY` (the owner) and takes `--network monad-testnet|anvil`, `--registry-attest` and, for `keep`, `--once` and `--poll` of `watch`; the gate address comes from `--gate` or `SPECFIRST_GATE_<chainId>`.
+
+```
+node --env-file=.env packages/cli/dist/index.js watch demo gate deploy --asset <DemoToken> --fund 100   # owner = deployer; prints SPECFIRST_GATE_10143
+node --env-file=.env packages/cli/dist/index.js watch demo gate allocate <vault> 10                     # refused unless the vault is attested compliant
+node --env-file=.env packages/cli/dist/index.js --json watch demo gate keep                             # keeper: exits every vault whose exit is open, every 15 s
+node --env-file=.env packages/cli/dist/index.js watch demo set-broken <vault> on                         # the demo watcher attests the failing report, the keeper exits
+node --env-file=.env packages/cli/dist/index.js watch demo gate status                                   # positions, verdicts, latest attestations
+```
+
+`watch demo gate exit <vault>` is the same exit by hand. The web shows the gate at `/watch/gate` when `NEXT_PUBLIC_SPECFIRST_GATE_10143` is set.
+
 ## Alert subscriptions
 
 `CheckSubscriptions` sells delivery and freshness, not results: a subscriber prepays a fee per day in testnet MON for one vault and gets a webhook POST when its check result changes (and one for the first check after it subscribes), plus a faster re-check cadence from the watcher. A day that has started counts as used; `settle` moves the fee of started days to earned, `cancel` refunds the days not started, and extending an expired subscription starts it again from now, so days without service are never charged. See `docs/adr/0006-chain-as-entry-point.md` (CheckSubscriptions, Alerts) for the accounting and the webhook rules.
@@ -172,7 +186,7 @@ The desk ABI comes from `@specfirst/core/desk`; `packages/web/lib/desk/contract.
 
 ## Watch pages
 
-`/watch` is a window on the watcher (ADR 0006): it reads `feed.ndjson`, `status.json` and `vaults.json` under `SPECFIRST_WATCH_DIR/<chainId>/` per request and then every three seconds, and shows what the watcher is doing, how far behind the head it is, its queue and sources, and its feed with each check's 30 results read from the report the feed names. Nothing there needs a person; a missing directory reads as "not running". Vaults the watcher found that the board build does not have join the board's table (`GET /api/v1/watch/overlay`) and get a vault page with their history and a "Watch this vault" box that pays `CheckSubscriptions` per day. `/watch/inbox` lists the paying address's subscriptions and alerts, cancels with the days not started refunded, and registers a webhook by signing the ADR text; the URL is stored in `<watch dir>/webhooks.json` only for a subscriber holding an active subscription (at most 1000 subscribers), and only its origin is ever shown. `/watch/demo-hook` is a demo receiver for a webhook delivery. `/desk` adds subscription revenue and the watcher's gas when its status reports it.
+`/watch` is a window on the watcher (ADR 0006): it reads `feed.ndjson`, `status.json` and `vaults.json` under `SPECFIRST_WATCH_DIR/<chainId>/` per request and then every three seconds, and shows what the watcher is doing, how far behind the head it is, its queue and sources, and its feed with each check's 30 results read from the report the feed names. Nothing there needs a person; a missing directory reads as "not running". Vaults the watcher found that the board build does not have join the board's table (`GET /api/v1/watch/overlay`) and get a vault page with their history and a "Watch this vault" box that pays `CheckSubscriptions` per day. `/watch/inbox` lists the paying address's subscriptions and alerts, cancels with the days not started refunded, and registers a webhook by signing the ADR text; the URL is stored in `<watch dir>/webhooks.json` only for a subscriber holding an active subscription (at most 1000 subscribers), and only its origin is ever shown. `/watch/demo-hook` is a demo receiver for a webhook delivery. `/watch/gate` shows the allocation gate of ADR 0007: its positions, each vault's verdict and latest attestation, and its recent events, read from Monad testnet per request. `/desk` adds subscription revenue and the watcher's gas when its status reports it.
 
 JSON: `GET /api/v1/watch/status`, `/api/v1/watch/feed?after=<seq>|before=<seq>`, `/api/v1/watch/vaults/<chainId>/<address>`, `/api/v1/watch/subs`, `/api/v1/watch/subs/<subscriber>`, `/api/v1/watch/inbox?subscriber=`, `POST /api/v1/watch/webhooks`. For local rendering without a watcher: `node packages/web/test/fixtures/watch/generate.mjs --now --out /tmp/w`, then `SPECFIRST_WATCH_DIR=/tmp/w SPECFIRST_CHECKS_DIR=/tmp/w/checks` (synthetic data).
 
@@ -182,6 +196,7 @@ JSON: `GET /api/v1/watch/status`, `/api/v1/watch/feed?after=<seq>|before=<seq>`,
 | `NEXT_PUBLIC_SPECFIRST_SUBS_10143` | unset | CheckSubscriptions on Monad testnet. Unset: the subscribe box and the inbox say "not deployed yet". |
 | `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS` | unset | `1` lets a webhook at this site's own origin register even when it is local (`http://localhost:3418/api/v1/watch/demo-hook`), for demos on one machine. Other local URLs stay refused. The watcher delivers to it only when started with `--webhook-local-origin` set to the same origin. |
 | `SPECFIRST_DEMO_HOOK` | on | `off` turns the demo receiver off. |
+| `NEXT_PUBLIC_SPECFIRST_GATE_10143` | unset | AllocationGate on Monad testnet, shown at `/watch/gate` (ADR 0007). Unset: the page says no gate is deployed. |
 
 The web takes the file schemas from `@specfirst/core/watch` and the CheckSubscriptions ABI, day accounting and webhook verification from `@specfirst/core/subs` (`packages/web/lib/watch/core.ts` and `lib/subs/core.ts` re-export them; both are browser-safe), and the `webhooks.json` store from the Node-only `@specfirst/core/webhooks` in server code (`lib/watch/webhooks.ts`), so the web and the watcher's alert sink write and read one file the same way. It never imports the package root.
 
