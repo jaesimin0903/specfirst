@@ -4,7 +4,8 @@ Foundry project for `CertificateRegistry.sol`, the onchain certificate registry 
 `docs/plan.md` section 3.4 (tests follow section 6.1), `CheckAttestationRegistry.sol`, which records
 `specfirst check` results for contracts on any chain (docs/adr/0004), and `CheckRequestDesk.sol`, where
 anyone pays a fee for such a check and the worker is paid when it fulfills the request with a matching
-attestation (docs/adr/0005).
+attestation (docs/adr/0005), and `CheckSubscriptions.sol`, where a subscriber prepays per day for alerts
+about one subject and the fee of each started day becomes earned (docs/adr/0006).
 
 ## Layout
 
@@ -19,6 +20,9 @@ attestation (docs/adr/0005).
 | `src/CheckRequestDesk.sol` | Paid check requests: requestCheck (exact fee, escrowed), fulfill against the registry, reject and expiry refunds, withdraw of earned fees only |
 | `test/CheckRequestDesk.t.sol` | Unit and fuzz tests: fee, ids from 0 and UnknownRequest, permissions, fulfill checks against the registry, reject and expiry refunds with the timeout boundary, withdraw never reaching escrow, refused transfers, reentrancy |
 | `test/CheckRequestDesk.invariant.t.sol` | Handler based invariants: balance == escrowed + earned - withdrawn, escrowed and earned equal the Pending and Fulfilled fees |
+| `src/CheckSubscriptions.sol` | Prepaid alert subscriptions: subscribe and extend (exact fee per day, escrowed), settle of started days, cancel with a refund of the days not started, withdraw of earned fees only |
+| `test/CheckSubscriptions.t.sol` | Unit and fuzz tests: exact value, 1 to 365 days, no fee of 0, uint96 limits, ids from 0 and UnknownSubscription, day boundaries, extend of an active and of an expired subscription, cancel refunds, withdraw never reaching escrow, refused transfers, reentrancy |
+| `test/CheckSubscriptions.invariant.t.sol` | Handler based invariants against the handler's own model of every subscription: balance == escrowed + earned - withdrawn, escrowed and earned match the subscriptions, paid and the run match the model, settled <= the fee of the model's started days, a cancel refunds exactly the rest, earned, withdrawn and settled never go down; adversarial calls (a coin-refusing subscriber, stranger cancels, wrong values, a fee of 0) fail as they must |
 | `lib/forge-std` | forge-std v1.16.2, vendored as plain files (no submodule) |
 
 ## Commands
@@ -120,3 +124,29 @@ across 4 targets and 3 projectIds):
   `specfirst desk deploy`, from the bytecode bundled in `packages/core/src/desk/artifact.ts`
   (`node packages/core/scripts/gen-desk-artifact.mjs` after `forge build`; `packages/core/test/desk.test.ts`
   compares it with a fresh build).
+
+## CheckSubscriptions results (2026-10-06, forge 1.5.1)
+
+| Check | Result |
+|---|---|
+| `forge test --match-contract CheckSubscriptions` | 36 passed, 0 failed (31 unit, 2 fuzz with 256 runs, 3 invariant with 256 runs x 64 depth) |
+| `forge coverage --report summary` | `src/CheckSubscriptions.sol` lines 100% (98/98), statements 100% (125/125), branches 100% (25/25), functions 100% (19/19) |
+
+- Subscription ids are the zero based index of a global list; `subscriptionOf(id)` and `isActive(id)` revert
+  with `UnknownSubscription(id)` for `id >= subscriptionCount()`. `subscribe` takes exactly `feePerDay * days_`
+  for 1 to 365 days (`WrongValue`, `BadDays`) and refuses a zero subject, chain id or standardId. The
+  subscription keeps its fee per day; `setFeePerDay` only changes new subscriptions, and `extend` charges the
+  subscription's own fee. The fee is never 0 (`ZeroFee` in the constructor and `setFeePerDay`), or a subscription
+  made at that fee could be extended for free forever.
+- Days: a run is `[startsAt, endsAt)` in whole days of 86400 s, and a day that has started counts as used
+  (at a day boundary the next day has started). `settle` (anyone) moves `paid - unstarted days * feePerDay -
+  settled` into `earned`; `cancel` (subscriber only) settles, refunds the rest and ends the subscription.
+  `extend` of an active subscription appends at `endsAt`; of an expired one it starts a new run at
+  `block.timestamp`, so days without service are never charged. Details in docs/adr/0006.
+- `withdraw(to)` (owner only) pays `earned - withdrawn`, at most 2^96 - 1 wei per call so the `FeesWithdrawn`
+  amount fits its uint96; escrowed fees are never reachable. Coins leave through `call` after every state
+  change under a reentrancy lock; a refused refund reverts the cancel (`TransferFailed`) and the subscription
+  runs to its end.
+- The owner is immutable. The contract is deployed with `specfirst subs deploy`, from the bytecode bundled in
+  `packages/core/src/subs/artifact.ts` (`node packages/core/scripts/gen-subs-artifact.mjs` after `forge build`;
+  `packages/core/test/subs.test.ts` compares it with a fresh build).

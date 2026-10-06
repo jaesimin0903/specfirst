@@ -17,7 +17,7 @@ export const ANVIL_DEFAULT_KEY: Hex = '0xac0974bec39a17e36ba4a6b4d238ff944bacb47
 
 export const DEPLOYER_KEY_ENV = 'DEPLOYER_PRIVATE_KEY';
 export const ISSUER_KEY_ENV = 'ISSUER_PRIVATE_KEY';
-/** Pays the fee of `specfirst desk request`. Never falls back to an anvil key. */
+/** Pays the fee of `specfirst desk request`, and is the test subscriber of `specfirst subs`. Never falls back to an anvil key. */
 export const REQUESTER_KEY_ENV = 'REQUESTER_PRIVATE_KEY';
 export const MONAD_RPC_ENV = 'MONAD_TESTNET_RPC';
 export const MONAD_RPC_FALLBACKS_ENV = 'MONAD_TESTNET_RPC_FALLBACKS';
@@ -36,6 +36,11 @@ export function attestRegistryEnvVar(chainId: number): string {
 /** CheckRequestDesk address for the chain the desk lives on. */
 export function deskEnvVar(chainId: number): string {
   return `SPECFIRST_DESK_${chainId}`;
+}
+
+/** CheckSubscriptions address for the chain the contract lives on. */
+export function subsEnvVar(chainId: number): string {
+  return `SPECFIRST_SUBS_${chainId}`;
 }
 
 export interface NetworkOptions {
@@ -138,6 +143,15 @@ export function resolveDesk(net: ResolvedNetwork, opts: { desk?: string }, env: 
   const v = opts.desk ?? env[envName];
   if (!v || !/^0x[0-9a-fA-F]{40}$/.test(v)) {
     throw new ConfigError(`no CheckRequestDesk address: set ${envName} or pass --desk <address>`);
+  }
+  return v as Address;
+}
+
+export function resolveSubs(net: ResolvedNetwork, opts: { subs?: string }, env: NodeJS.ProcessEnv = process.env): Address {
+  const envName = subsEnvVar(net.clients.chain.id);
+  const v = opts.subs ?? env[envName];
+  if (!v || !/^0x[0-9a-fA-F]{40}$/.test(v)) {
+    throw new ConfigError(`no CheckSubscriptions address: set ${envName} or pass --subs <address>`);
   }
   return v as Address;
 }
