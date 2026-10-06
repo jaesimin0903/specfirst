@@ -4,7 +4,7 @@ Foundry project for `CertificateRegistry.sol`, the onchain certificate registry 
 `docs/plan.md` section 3.4 (tests follow section 6.1), `CheckAttestationRegistry.sol`, which records
 `specfirst check` results for contracts on any chain (docs/adr/0004), and `CheckRequestDesk.sol`, where
 anyone pays a fee for such a check and the worker is paid when it fulfills the request with a matching
-attestation (docs/adr/0005).
+attestation (docs/adr/0005), and the demo contracts of the watcher (docs/adr/0006, `src/demo/`).
 
 ## Layout
 
@@ -19,6 +19,9 @@ attestation (docs/adr/0005).
 | `src/CheckRequestDesk.sol` | Paid check requests: requestCheck (exact fee, escrowed), fulfill against the registry, reject and expiry refunds, withdraw of earned fees only |
 | `test/CheckRequestDesk.t.sol` | Unit and fuzz tests: fee, ids from 0 and UnknownRequest, permissions, fulfill checks against the registry, reject and expiry refunds with the timeout boundary, withdraw never reaching escrow, refused transfers, reentrancy |
 | `test/CheckRequestDesk.invariant.t.sol` | Handler based invariants: balance == escrowed + earned - withdrawn, escrowed and earned equal the Pending and Fulfilled fees |
+| `src/demo/DemoVaultFactory.sol` | Watcher demo (docs/adr/0006): DemoVaultFactory deploys DemoVaults and emits `VaultDeployed(vault, asset)`; DemoVault is a minimal ERC-4626 with the positive control's previewDeposit bug behind an operator switch (`setBroken`, `BrokenSet`) |
+| `src/demo/DemoToken.sol` | ERC-20 anyone can mint, the asset of demo vaults |
+| `test/DemoVaultFactory.t.sol` | Deploy event and operator, deposit and redeem with events, previewDeposit equal to deposit unless broken (and a fuzz of it), setBroken by the operator only, allowances |
 | `lib/forge-std` | forge-std v1.16.2, vendored as plain files (no submodule) |
 
 ## Commands
@@ -40,6 +43,8 @@ CLI sends from a guarded wallet that refuses mainnet and checks the RPC chain id
 `packages/core/src/attest/artifact.ts` bundles its ABI and creation code; regenerate it with
 `node packages/core/scripts/gen-attest-artifact.mjs` after `forge build` whenever the contract changes;
 `packages/core/test/attest.test.ts` runs `forge build` and fails when the bundle differs.
+
+The demo contracts are bundled the same way in `packages/core/src/watch/demoArtifact.ts` (`node packages/core/scripts/gen-demo-artifact.mjs` after `forge build`; `packages/core/test/watch.test.ts` compares). DemoVaultFactory's CREATE2 address follows from its creation code, so a change to `src/demo/DemoVaultFactory.sol` (comments included, through the metadata hash) moves it: update `examples/watch/sources-demo.json` with the new `DEMO_FACTORY_ADDRESS`; the same test fails until they agree.
 
 ## Results (2026-09-29, forge 1.5.1)
 

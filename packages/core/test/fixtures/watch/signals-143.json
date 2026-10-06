@@ -1,0 +1,194 @@
+{
+  "description": "Raw eth_getLogs entries from Monad mainnet (chain 143) via https://rpc1.monad.xyz, recorded 2026-10-06 for the watcher signal decoding tests (docs/adr/0006). factories: the factory event of each ADR fixture, in its creation block. generic: one roxIFI Deposit, the Upgraded the Neverland factory proxy emitted at 54765321, and the EVK GenericFactory SetImplementation at 30858657 whose newImplementation is the implementation EVK vaults resolve to.",
+  "chainId": 143,
+  "factories": [
+    {
+      "source": "Euler EVK GenericFactory",
+      "block": "38331148",
+      "vault": "0x69b4A7829F6BAE4e0c3C281aA7026D897fEC199F",
+      "log": {
+        "address": "0xba4dd672062de8feedb665dd4410658864483f1e",
+        "blockNumber": "0x248e30c",
+        "transactionHash": "0x94760fc9b356e72cc1a55320edcf1e7123f88f480b24aaa56977e670bca0c9f8",
+        "logIndex": "0x31",
+        "topics": [
+          "0x04e664079117e113faa9684bc14aecb41651cbf098b14eda271248c6d0cda57c",
+          "0x00000000000000000000000069b4a7829f6bae4e0c3c281aa7026d897fec199f"
+        ],
+        "data": "0x0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000ef17750d3a162e28a302e266c474ff8989d60ecd0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000003c00000000efe302beaa2b3e6e1b18d08d69a9012a89422625aec4ccc9512b172a49b32049a43a141c000000000000000000000000000000000000034800000000"
+      }
+    },
+    {
+      "source": "Morpho VaultV2Factory",
+      "block": "108743758",
+      "vault": "0x91643f54C4F5F7559BD43a082eFF97594d16708C",
+      "log": {
+        "address": "0x8b2f922162fbb60a6a072cc784a2e4168fb0bb0c",
+        "blockNumber": "0x67b4c4e",
+        "transactionHash": "0x80e01c66b7707b65bca1c0f8ccfd2460ee7f2330ebad957706be22aae242adef",
+        "logIndex": "0x69",
+        "topics": [
+          "0x341ce009267aa0d78cc12b34155e223904a51ed49d144beb6eb8be87813edb4e",
+          "0x00000000000000000000000040ddccac38e4f6f2cb802c09f0a08f39d3dcb48f",
+          "0x000000000000000000000000754704bc059f8c67012fed69bc8a327a5aafb603",
+          "0x00000000000000000000000091643f54c4f5f7559bd43a082eff97594d16708c"
+        ],
+        "data": "0x64b2cdfee7021cde1f3d30aaa28064f20284aec5e9538abf80c1129ce0cd9f94"
+      }
+    },
+    {
+      "source": "Morpho VaultV2Factory",
+      "block": "73672212",
+      "vault": "0xbeef067c9d2591accab7d1c336a41ca3bd45b8f5",
+      "log": {
+        "address": "0x8b2f922162fbb60a6a072cc784a2e4168fb0bb0c",
+        "blockNumber": "0x4642614",
+        "transactionHash": "0x4f5af4adbe799220db972c659e6015b6c3f271e8b70f0bc82a04f1aa12f311ba",
+        "logIndex": "0x38",
+        "topics": [
+          "0x341ce009267aa0d78cc12b34155e223904a51ed49d144beb6eb8be87813edb4e",
+          "0x000000000000000000000000f120dea2abbbb9b502ecb20d3f4038e5732d906c",
+          "0x000000000000000000000000aca92e438df0b2401ff60da7e4337b687a2435da",
+          "0x000000000000000000000000beef067c9d2591accab7d1c336a41ca3bd45b8f5"
+        ],
+        "data": "0x0c34ce9f969e6c2be39270570ef0f0ca1afd8cc166841833731d5e7b10ea9fd4"
+      }
+    },
+    {
+      "source": "Morpho VaultV2Factory",
+      "block": "110391543",
+      "vault": "0xde16452c1f8cc209d8e9b104b7f240d9a251768b",
+      "log": {
+        "address": "0x8b2f922162fbb60a6a072cc784a2e4168fb0bb0c",
+        "blockNumber": "0x69470f7",
+        "transactionHash": "0xe24783039d029e47d30ca5014c664104bef94185d11e20e200fa5e736771b430",
+        "logIndex": "0x1b",
+        "topics": [
+          "0x341ce009267aa0d78cc12b34155e223904a51ed49d144beb6eb8be87813edb4e",
+          "0x0000000000000000000000002a155ed454dc5861a755f9c6bc7334a23b80cdaf",
+          "0x000000000000000000000000754704bc059f8c67012fed69bc8a327a5aafb603",
+          "0x000000000000000000000000de16452c1f8cc209d8e9b104b7f240d9a251768b"
+        ],
+        "data": "0xac3c4bb48446f50730fa4e84b37041eb8dc24e8fcab2ea80443b9338b4561e01"
+      }
+    },
+    {
+      "source": "Morpho VaultV2Factory",
+      "block": "110930586",
+      "vault": "0xbd6d56b5b1b535b92d4a0a8c0a9e6cfd9b545167",
+      "log": {
+        "address": "0x8b2f922162fbb60a6a072cc784a2e4168fb0bb0c",
+        "blockNumber": "0x69caa9a",
+        "transactionHash": "0x6d1fbed14bb0be465eb8811a349d8997aab03a9b5fd1947de0888c8d3a85badd",
+        "logIndex": "0x35",
+        "topics": [
+          "0x341ce009267aa0d78cc12b34155e223904a51ed49d144beb6eb8be87813edb4e",
+          "0x00000000000000000000000022d4dbfff37c7d7a0c7afb9427a51de6f90a676a",
+          "0x00000000000000000000000000000000efe302beaa2b3e6e1b18d08d69a9012a",
+          "0x000000000000000000000000bd6d56b5b1b535b92d4a0a8c0a9e6cfd9b545167"
+        ],
+        "data": "0x0e3cae7f3db2ed0f284055fd5ffc014781ec9ed304f777c1e4d4ffeb82bd30ec"
+      }
+    },
+    {
+      "source": "MetaMorpho V1.1 factory",
+      "block": "62600546",
+      "vault": "0xA35189d1a1d1d42BB7BA56E6d979D6Bb34fFeED7",
+      "log": {
+        "address": "0x33f20973275b2f574488b18929cd7dcbf1abf275",
+        "blockNumber": "0x3bb3562",
+        "transactionHash": "0x29fe1e1ebe8da01db5ad7630524fc2b2a94028121b902d2de19b1396e0e5c361",
+        "logIndex": "0x6",
+        "topics": [
+          "0xed8c95d05909b0f217f3e68171ef917df4b278d5addfe4dda888e90279be7d1d",
+          "0x000000000000000000000000a35189d1a1d1d42bb7ba56e6d979d6bb34ffeed7",
+          "0x0000000000000000000000003ff3a32986a159ab40e14fd5c4747f0cc0f048f8",
+          "0x000000000000000000000000754704bc059f8c67012fed69bc8a327a5aafb603"
+        ],
+        "data": "0x0000000000000000000000003ff3a32986a159ab40e14fd5c4747f0cc0f048f8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000015556e6966696564204c61627320525741205553444300000000000000000000000000000000000000000000000000000000000000000000000000000000000005554c727761000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "source": "Euler Earn factory",
+      "block": "36248205",
+      "vault": "0x9D42b0D57e88771B365e30c0A589Fcdbeca8828c",
+      "log": {
+        "address": "0xf463d4acb650cc6c4e1d6cd4d0d1b0cb224094cf",
+        "blockNumber": "0x2291a8d",
+        "transactionHash": "0xab10848edd20b2492c3f64da11e87de7b301634fc3cc37c02c8c37b1ec2a41b0",
+        "logIndex": "0x5",
+        "topics": [
+          "0x2ecfce4fdb2055c9639b56f59c2a14eeafce06a51d93d898155bc11b6141896f",
+          "0x0000000000000000000000009d42b0d57e88771b365e30c0a589fcdbeca8828c",
+          "0x0000000000000000000000005d42f8acd567810d57d60f90bb9c6d194207a6e1",
+          "0x0000000000000000000000003bd359c1119da7da1d913d1c4d2b7c461115433a"
+        ],
+        "data": "0x0000000000000000000000005d42f8acd567810d57d60f90bb9c6d194207a6e1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e0761f806d5bc55b949aaf3371e9d1c7b03b7bcc80cfb50698ebbef3b768951a58000000000000000000000000000000000000000000000000000000000000000f45756c6572204561726e20574d4f4e000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000066565574d4f4e0000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "source": "Neverland static wrapper factory",
+      "block": "54765321",
+      "vault": "0xD45D54ad7Ae6D5dEdb0De7B283Fe0b4e2ba40217",
+      "log": {
+        "address": "0x81148e8e1d9910080317e11c9f178559ba23bc80",
+        "blockNumber": "0x343a709",
+        "transactionHash": "0x9787226a5c09fa6ca143a97447999d51a94b248adc64f078cf9718309b4f54fb",
+        "logIndex": "0x7a",
+        "topics": [
+          "0x7397831292236fdc8043acf7b9d21183e46fd54f9b06bd34210068f95dd378d6",
+          "0x000000000000000000000000d45d54ad7ae6d5dedb0de7b283fe0b4e2ba40217",
+          "0x000000000000000000000000103222f020e98bba0ad9809a011fdf8e6f067496"
+        ],
+        "data": "0x"
+      }
+    }
+  ],
+  "generic": {
+    "deposit": {
+      "subject": "0xbd6d56b5b1b535b92d4a0a8c0a9e6cfd9b545167",
+      "log": {
+        "address": "0xbd6d56b5b1b535b92d4a0a8c0a9e6cfd9b545167",
+        "blockNumber": "0x69caa9a",
+        "transactionHash": "0x6d1fbed14bb0be465eb8811a349d8997aab03a9b5fd1947de0888c8d3a85badd",
+        "logIndex": "0x69",
+        "topics": [
+          "0xdcbc1c05240f31ff3ad067ef1ee35ce4997762752e3a095284754544f4c709d7",
+          "0x00000000000000000000000022d4dbfff37c7d7a0c7afb9427a51de6f90a676a",
+          "0x000000000000000000000000000000000000000000000000000000000000dead"
+        ],
+        "data": "0x00000000000000000000000000000000000000000000000000000000000f42400000000000000000000000000000000000000000000000000de0b6b3a7640000"
+      }
+    },
+    "upgraded": {
+      "subject": "0x81148e8e1d9910080317e11c9f178559ba23bc80",
+      "implementation": "0x73006f5e72af8d593bb7c029eaafbc4d4b535a7b",
+      "log": {
+        "address": "0x81148e8e1d9910080317e11c9f178559ba23bc80",
+        "blockNumber": "0x343a709",
+        "transactionHash": "0xd64ccbb48b78cb7dbf7c9661a2452bc7faac6070841edc266ba4917677ea6576",
+        "logIndex": "0x28",
+        "topics": [
+          "0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b",
+          "0x00000000000000000000000073006f5e72af8d593bb7c029eaafbc4d4b535a7b"
+        ],
+        "data": "0x"
+      }
+    },
+    "implementation": {
+      "factory": "0xba4Dd672062dE8FeeDb665DD4410658864483f1E",
+      "implementation": "0xef17750d3a162e28a302e266c474ff8989d60ecd",
+      "log": {
+        "address": "0xba4dd672062de8feedb665dd4410658864483f1e",
+        "blockNumber": "0x1d6dda1",
+        "transactionHash": "0xd3e2df7e80c93bd0dafcb66eca87a0b86219a136a7be86c290a34d23b10656e4",
+        "logIndex": "0x0",
+        "topics": [
+          "0xddebe6de740fe0dd01cc33ffa314d11c6ac6acbbe50b80513c4c360ae7aa4f04",
+          "0x000000000000000000000000ef17750d3a162e28a302e266c474ff8989d60ecd"
+        ],
+        "data": "0x"
+      }
+    }
+  }
+}

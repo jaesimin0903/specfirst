@@ -18,6 +18,10 @@
     "./desk": {
       "types": "./dist/desk/index.d.ts",
       "import": "./dist/desk/index.js"
+    },
+    "./watch": {
+      "types": "./dist/watch/index.d.ts",
+      "import": "./dist/watch/index.js"
     }
   },
   "files": [
