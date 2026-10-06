@@ -14,8 +14,9 @@ interface IDemoAsset {
 ///         with the standard's events added, and the control's deliberate bug sits behind a switch: while
 ///         `broken` is true, previewDeposit promises 1% more shares than deposit mints, which EIP-4626
 ///         forbids, and the check reports previewDeposit as failed. The account that deployed the vault
-///         through the factory (`operator`) can flip the switch, so a re-check sees the result change.
-/// @dev Testnet and local demo only: no fees, no limits, no access control beyond setBroken.
+///         through the factory (`operator`) can flip the switch, so a re-check sees the result change, and can
+///         make the vault lose a share of its assets (`setLoss`), so the value of a share falls.
+/// @dev Testnet and local demo only: no fees, no limits, no access control beyond setBroken and setLoss.
 contract DemoVault {
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
@@ -24,9 +25,14 @@ contract DemoVault {
         address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares
     );
     event BrokenSet(bool broken);
+    event LossSet(uint256 bps, uint256 assets);
 
     error NotOperator();
     error TransferFailed();
+    error BadLoss(uint256 bps);
+
+    /// @notice Where setLoss sends the assets it takes away; nobody holds its key.
+    address public constant LOSS_SINK = 0x000000000000000000000000000000000000dEaD;
 
     // The ERC-20 and ERC-4626 getters keep their standard names, so the lint's naming rule is off for them.
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
@@ -58,6 +64,16 @@ contract DemoVault {
         if (msg.sender != operator) revert NotOperator();
         broken = broken_;
         emit BrokenSet(broken_);
+    }
+
+    /// @notice Sends `bps` basis points (1 to 9,999) of the vault's assets to LOSS_SINK: a loss every holder shares,
+    ///         so convertToAssets of a share falls by that fraction. The demo of the watcher's share value alerts.
+    function setLoss(uint256 bps) external {
+        if (msg.sender != operator) revert NotOperator();
+        if (bps == 0 || bps >= 10_000) revert BadLoss(bps);
+        uint256 assets = totalAssets() * bps / 10_000;
+        _push(LOSS_SINK, assets);
+        emit LossSet(bps, assets);
     }
 
     function asset() external view returns (address) {
