@@ -172,6 +172,20 @@ describe('identifyImplementation', () => {
     }
   });
 
+  it('beacon read that fails on the RPC (HTTP error, 429, node error): thrown, never an unknown proxy', async () => {
+    for (const err of [
+      Object.assign(new Error('HTTP request failed.'), { name: 'HttpRequestError', status: 502 }),
+      Object.assign(new Error('HTTP request failed.'), { name: 'HttpRequestError', status: 429 }),
+      Object.assign(new Error('An internal error was received.'), { name: 'ContractFunctionExecutionError', cause: { name: 'InternalRpcError', code: -32603, message: 'missing trie node' } }),
+    ]) {
+      const readContract = vi.fn(async () => {
+        throw err;
+      });
+      const client = { ...mockClient({ code: { [lc(VAULT)]: EULER_PROXY }, slots: { [EIP1967_BEACON_SLOT]: word(BEACON) } }), readContract } as unknown as IdentityClient;
+      await expect(identifyImplementation(client, VAULT, BLOCK)).rejects.toBe(err);
+    }
+  });
+
   it('EIP-1967 proxy: follows the implementation slot and keys by the implementation metadataHash', async () => {
     const client = mockClient({
       code: { [lc(VAULT)]: EULER_PROXY, [lc(IMPL)]: PLAIN_IMPL },

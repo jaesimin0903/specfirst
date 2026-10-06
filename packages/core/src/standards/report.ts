@@ -216,7 +216,8 @@ const DEAL_FAILED = /^stdStorage (find|checked_write)\(StdStorage\): /;
  */
 const FORK_ERROR = /^EVM error; database error: /;
 const MAX_LOG_LINES = 20;
-const FORK_ERROR_NOTE = 'fork RPC error, rerun or pass another --rpc';
+/** Prefix of the reason of a property left inconclusive by a fork RPC failure (in the suite or its setUp). */
+export const FORK_ERROR_NOTE = 'fork RPC error, rerun or pass another --rpc';
 
 function testName(key: string): string {
   const i = key.indexOf('(');
@@ -372,4 +373,12 @@ export function parseStandardForgeJson(
 export function skipReasonOf(results: readonly Pick<StandardPropertyResult, 'status' | 'reason'>[]): SkipReason | null {
   if (results.length === 0 || !results.every((r) => r.status === 'not_applicable')) return null;
   return results.every((r) => r.reason?.startsWith(RESTRICTED_ASSET_NOTE)) ? 'asset-transfer-restricted' : 'setup-reverted';
+}
+
+/**
+ * The results a fork RPC failure left inconclusive (reason starting with FORK_ERROR_NOTE). A report with any
+ * of them says more about the RPC than about the contract: the watcher does not attest it and checks again.
+ */
+export function forkRpcErrorsOf(report: Pick<StandardCheckReport, 'results'>): StandardPropertyResult[] {
+  return report.results.filter((r) => r.status === 'inconclusive' && (r.reason ?? '').startsWith(FORK_ERROR_NOTE));
 }

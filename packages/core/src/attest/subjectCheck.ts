@@ -4,10 +4,13 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Address, PublicClient } from 'viem';
-import { isRateLimited, isTransportFailure } from '../chain/transport.js';
+import { isContractAnswer, isRateLimited, isTransportFailure } from '../chain/transport.js';
 import { runStandardCheck, standardCheckPath, type RunStandardCheckInput, type StandardCheckClient, type StandardCheckEvent } from '../standards/check.js';
 import type { StandardCheckReport } from '../standards/report.js';
 import { attestationReportPath, checkReportHash, parseCheckReport } from './params.js';
+
+/** Lives with the other error classifiers in chain/transport.ts (identity.ts needs it too). */
+export { isContractAnswer };
 
 /** The repository's own public copy of certs/checks, used as the default reportURI base. */
 export const DEFAULT_REPORT_BASE_URL = 'https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks';
@@ -55,27 +58,6 @@ const erc4626ProbeAbi = [
   { type: 'function', name: 'totalAssets', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
 ] as const;
 
-const CONTRACT_ANSWER_ERRORS = new Set([
-  'ContractFunctionRevertedError',
-  'ContractFunctionZeroDataError',
-  'AbiDecodingZeroDataError',
-  'AbiDecodingDataSizeTooSmallError',
-  'InvalidAddressError',
-]);
-
-/** True when a read failed because of what the contract returned, not because of the RPC. */
-export function isContractAnswer(err: unknown): boolean {
-  const seen = new Set<unknown>();
-  let cur: unknown = err;
-  while (cur && typeof cur === 'object' && !seen.has(cur)) {
-    seen.add(cur);
-    const name = (cur as { name?: unknown }).name;
-    if (typeof name === 'string' && CONTRACT_ANSWER_ERRORS.has(name)) return true;
-    cur = (cur as { cause?: unknown }).cause;
-  }
-  return false;
-}
-
 /**
  * Pre-check before paying for a suite run: the subject has code at `blockNumber`, and asset() answers a
  * non-zero address and totalAssets() answers, both at that block. A call that reverts, returns nothing or
@@ -111,6 +93,8 @@ export interface SubjectCheckInput {
   projectDir: string;
   runs: number;
   cacheDir?: string;
+  /** Wall-clock budget of forge, seconds (runStandardCheck's default when unset: one hour). */
+  timeoutSec?: number;
   /** runStandardCheck by default; tests pass a stand-in. */
   runCheck?: (input: RunStandardCheckInput) => Promise<StandardCheckReport>;
   onCheckEvent?: (e: StandardCheckEvent) => void;
@@ -132,6 +116,7 @@ export function runSubjectCheck(i: SubjectCheckInput, subject: Address, block: b
     client: i.subjectClient,
     expectedChainId: i.subjectChainId,
     ...(i.cacheDir ? { cacheDir: i.cacheDir } : {}),
+    ...(i.timeoutSec !== undefined ? { timeoutSec: i.timeoutSec } : {}),
     recordPath,
     rawPath: recordPath.replace(/\.json$/, '.forge.json'),
     ...(i.onCheckEvent ? { onEvent: i.onCheckEvent } : {}),

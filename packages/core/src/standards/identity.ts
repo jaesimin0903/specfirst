@@ -1,4 +1,5 @@
 import { concat, getAddress, keccak256, toHex, type Address, type Hex, type PublicClient } from 'viem';
+import { isNodeError, isRateLimited, isTransportFailure } from '../chain/transport.js';
 
 /** EIP-1967 implementation slot: bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1). */
 export const EIP1967_IMPLEMENTATION_SLOT: Hex = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
@@ -215,11 +216,16 @@ export async function identifyImplementation(client: IdentityClient, address: Ad
       proxy = { kind: 'eip1967', implementation: impl };
     } else {
       const beacon = slotAddress(await client.getStorageAt({ address, slot: EIP1967_BEACON_SLOT, blockNumber }));
+      // A beacon that does not answer implementation() makes the proxy 'unknown'; an RPC failure, a rate
+      // limit or a node error is thrown instead, so a busy RPC never turns into another implementation key.
       const implementation = beacon
         ? await client
             .readContract({ address: beacon, abi: beaconAbi, functionName: 'implementation', blockNumber })
             .then((a) => slotAddress(`0x${(a as string).slice(2).padStart(64, '0')}`))
-            .catch(() => null)
+            .catch((err: unknown) => {
+              if (isTransportFailure(err) || isRateLimited(err) || isNodeError(err)) throw err;
+              return null;
+            })
         : null;
       proxy = beacon && implementation ? { kind: 'eip1967-beacon', implementation, beacon } : { kind: 'unknown' };
     }

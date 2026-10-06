@@ -120,6 +120,30 @@ export function isNodeError(err: unknown): boolean {
   );
 }
 
+const CONTRACT_ANSWER_ERRORS = new Set([
+  'ContractFunctionRevertedError',
+  'ContractFunctionZeroDataError',
+  'AbiDecodingZeroDataError',
+  'AbiDecodingDataSizeTooSmallError',
+  'InvalidAddressError',
+]);
+
+/**
+ * True when a read failed because of what the contract returned (a revert, no data, data that does not
+ * decode), not because of the RPC or the node.
+ */
+export function isContractAnswer(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  while (cur && typeof cur === 'object' && !seen.has(cur)) {
+    seen.add(cur);
+    const name = (cur as { name?: unknown }).name;
+    if (typeof name === 'string' && CONTRACT_ANSWER_ERRORS.has(name)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 const SEND_METHODS = new Set(['eth_sendRawTransaction', 'eth_sendTransaction']);
 
 /** A transaction was about to reach an RPC on the wrong or a write-forbidden chain. Never retried. */

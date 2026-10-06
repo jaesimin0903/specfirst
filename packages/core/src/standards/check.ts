@@ -59,6 +59,14 @@ export class StandardCheckError extends Error {
   }
 }
 
+/** forge ran past timeoutSec and was stopped. Same message as before; the watcher does not retry these. */
+export class StandardCheckTimeoutError extends StandardCheckError {
+  constructor(readonly timeoutSec: number) {
+    super(`forge timed out after ${timeoutSec}s`);
+    this.name = 'StandardCheckTimeoutError';
+  }
+}
+
 /** `<projectDir>/.specfirst/checks/<chainId>/<address, lowercase>/<block>.json`. */
 export function standardCheckPath(projectDir: string, chainId: number, address: string, blockNumber: bigint | string): string {
   return path.join(projectDir, CHECKS_DIR, String(chainId), address.toLowerCase(), `${blockNumber}.json`);
@@ -256,7 +264,7 @@ async function runForgeSuite(i: {
       timeout: timeoutSec * 1000,
       maxBuffer: 512 * 1024 * 1024,
     });
-    if (proc.timedOut) throw new StandardCheckError(`forge timed out after ${timeoutSec}s`);
+    if (proc.timedOut) throw new StandardCheckTimeoutError(timeoutSec);
     const stdout = mask(String(proc.stdout ?? ''));
     const doc = extractForgeDoc(stdout);
     const events = await readFile(eventsFile, 'utf8').catch(() => '');
