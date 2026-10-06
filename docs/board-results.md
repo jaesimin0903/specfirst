@@ -32,7 +32,7 @@
 
 취약점이 아니라 명세 문장과의 불일치다. 자금 손실로 이어진다는 주장은 하지 않는다.
 
-1. **Upshift earnAUSD 0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E**: withdraw와 redeem이 항상 `WithdrawalRequestRequired()`(0x75ed2e3e)로 revert하는데 maxWithdraw와 maxRedeem은 보유 잔액 전체를 돌려준다. EIP-4626은 출금이 막혀 있으면 0을 돌려주라고 정한다.
+1. **Upshift earnAUSD 0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E**: withdraw와 redeem이 항상 `WithdrawalRequestRequired()`(0x75ed2e3e)로 revert하는데 maxWithdraw와 maxRedeem은 보유 잔액 전체를 돌려준다. EIP-4626은 출금이 막혀 있으면 0을 돌려주라고 정한다. 설계상 비동기 출금 볼트다. 구현 0xFd2F793C248Dd673C830DF610a95a045054de267의 코드에 ERC-7540 `requestRedeem(uint256,address,address)`(0x7d41c86e)가 있고, 출금은 요청을 거친다. 2026-10-07부터 결과 파일(schemaVersion 4)은 이를 `traits`의 `async-redeem`으로 기록하고, 현황판은 판정 옆에 "Asynchronous withdrawals: exits go through requestRedeem"을 붙인다. 근거는 코드의 선택자와, 같은 검사에서 예치는 통과하고 출금과 상환은 모든 입력에서 revert했다는 사실이다. Upshift는 ERC-165를 구현하지 않는다. 라벨은 맥락일 뿐 판정을 바꾸지 않는다. ERC-7540도 maxWithdraw와 maxRedeem은 지금 청구할 수 있는 양, 즉 요청이 이행되기 전에는 0을 돌려주라고 정하므로 불일치는 그대로다. 같은 블록 109195820과 같은 시드로 다시 돌린 결과도 16 pass, 2 fail, 12 inconclusive로 상태가 30개 모두 같았고, 두 fail은 같은 0x75ed2e3e였다. 반례 금액만 fuzz 입력이 달라져 바뀌었다.
 2. **Aarna atvYieldMax 0x4C09558A0d000240726679fC3805c3918922d6C6**: 이 블록에서 `withdrawalsPaused()`가 true이고 출금이 `WithdrawalsArePaused()`(0xe14e66da)로 revert하는데 maxWithdraw와 maxRedeem은 0이 아니다. 볼트 총자산은 0.001 USDC로 사실상 비어 있다.
 3. **Euler EVK eeUSD-4 0xf26dC2F1FE883b11Dd56700db594DfC32Eee95Bf**: 볼트 훅(0xF5b821Efb4F6e13DE7521A3E4fc07fd2a153e280)이 허가되지 않은 사용자의 예치를 `NotAuthorized()`(0xea8e4eb5)로 막는데 maxDeposit과 maxMint는 거의 무한대를 돌려준다. EVK의 max 함수가 훅의 동작을 알 수 없는 구조에서 오는 불일치다. 기초자산 Euler USD는 사용자 사이에서 자유롭게 송금됨을 따로 확인했다.
 
