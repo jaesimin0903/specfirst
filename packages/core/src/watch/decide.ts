@@ -62,21 +62,26 @@ export function outcomeDiff(a: CheckOutcome, b: CheckOutcome): string[] {
 
 export type AttestDecision =
   | { attest: true; supersedes: bigint | null; reason: string }
-  | { attest: false; reason: string };
+  /** newer: the latest Valid attestation is of a later block than the check, which it supersedes. */
+  | { attest: false; reason: string; newer?: { id: bigint; block: bigint } };
 
 /**
  * The attest rule (docs/adr/0006, "Pipeline"): attest when the subject has no Valid attestation for the
  * standard (none at all, or the latest is Revoked), or when the outcome differs from the latest Valid one in
- * the four counts, the set of failed property ids or the implementation key. An unchanged outcome is not
- * attested. A latest Valid attestation of a later block than the check is left alone: the registry refuses
- * an older block (OlderThanLatest) while the latest is Valid.
+ * the four counts, the set of failed property ids or the implementation key, whoever issued it. An unchanged
+ * outcome is not attested. A latest Valid attestation of a later block than the check supersedes the check
+ * (`newer`): the registry refuses an older block (OlderThanLatest) while the latest is Valid.
  */
 export function attestDecision(outcome: CheckOutcome, latest: { id: bigint; attestation: Attestation } | null, checkBlock: bigint): AttestDecision {
   if (!latest) return { attest: true, supersedes: null, reason: 'no attestation of the subject yet' };
   const status = ATTESTATION_STATUS[latest.attestation.status] ?? String(latest.attestation.status);
   if (status !== 'Valid') return { attest: true, supersedes: null, reason: `the latest attestation ${latest.id} is ${status}` };
   if (latest.attestation.blockNumber > checkBlock) {
-    return { attest: false, reason: `attestation ${latest.id} is for a later block (${latest.attestation.blockNumber}) than this check (${checkBlock})` };
+    return {
+      attest: false,
+      reason: `attestation ${latest.id} is for a later block (${latest.attestation.blockNumber}) than this check (${checkBlock})`,
+      newer: { id: latest.id, block: latest.attestation.blockNumber },
+    };
   }
   const diff = outcomeDiff(outcome, outcomeOfAttestation(latest.attestation));
   if (diff.length === 0) return { attest: false, reason: `unchanged since attestation ${latest.id}` };

@@ -13,8 +13,8 @@ import {
   type SubjectCheckInput,
 } from '../attest/subjectCheck.js';
 import { verifySubjectCode, type SubjectClient, type SubjectCodeCheck } from '../attest/verify.js';
-import type { StandardCheckClient } from '../standards/check.js';
-import type { StandardCheckReport } from '../standards/report.js';
+import { StandardCheckTimeoutError, type StandardCheckClient } from '../standards/check.js';
+import { forkRpcErrorsOf, type StandardCheckReport } from '../standards/report.js';
 import { attestDecision, changeOf, outcomeOfReport, type AttestDecision, type CheckOutcome } from './decide.js';
 import { NO_ALERTS, NO_SUBSCRIPTIONS, type ActiveSubscription, type AlertSink, type SubscriptionSource } from './hooks.js';
 import { DEFAULT_LOG_WINDOW, LogWindow, readLogWindows } from './logs.js';
@@ -65,8 +65,8 @@ export interface WatchConfig {
   maxCheckAttempts: number;
   /** Wait before retrying a failed check, times the attempts so far. */
   checkRetryMs: number;
-  /** Probes failing on an RPC error before the candidate is dropped (until the next signal). */
-  maxProbeAttempts: number;
+  /** First wait before a probe that failed on an RPC or node error runs again; it doubles up to an hour. */
+  probeRetryMs: number;
   /** A Deposit from an address the probe rejected probes it again only after this long; other signals at once. */
   probeRetryAfterMs: number;
   /** How often the subscription source is read. */
@@ -86,13 +86,18 @@ export const DEFAULT_WATCH_CONFIG: WatchConfig = {
   maxAttestPerDay: 40,
   maxCheckAttempts: 3,
   checkRetryMs: 5 * 60_000,
-  maxProbeAttempts: 3,
+  probeRetryMs: 5 * 60_000,
   probeRetryAfterMs: 24 * HOUR_MS,
   subscriptionRefreshMs: 60_000,
   allowUnknownProxy: false,
   toBlock: null,
 };
 
+/**
+ * Wall-clock budget of one watcher check (forge), seconds. Anyone can deploy what the watcher checks, so a
+ * check never gets the hour `specfirst check` allows; one that runs out is recorded and not retried.
+ */
+export const DEFAULT_WATCH_CHECK_TIMEOUT_SEC = 600;
 /** Exit code of `specfirst watch` when it cannot start or a `--once` pass cannot read the chain. */
 export const WATCH_FAILED_EXIT_CODE = 19;
 export const DEFAULT_WATCH_RUNS = 16;
@@ -149,9 +154,11 @@ interface SignalAt {
  * `specfirst watch` (docs/adr/0006): reads the subject chain's logs from a cursor, turns signals into
  * candidates (probed with the ERC-4626 pre-check) and re-checks of known vaults, keeps one queue entry per
  * subject by priority, and per entry checks at head - lag, saves the report under certs/checks, decides
- * whether to attest (the registry's latest Valid attestation of the subject against the new outcome),
- * attests within the daily budget and hands changes to the alert sink. Every step is a line in feed.ndjson
- * and a rewrite of status.json and vaults.json.
+ * whether to attest (the registry's latest Valid attestation of the subject, from any issuer, against the new
+ * outcome), attests within the daily budget and hands changes to the alert sink. Never attested: a report
+ * with a property the fork RPC could not read (checked again), a check that ran out of time (not retried)
+ * and a check older than the latest Valid attestation (checked again at a new block). Every step is a line
+ * in feed.ndjson and a rewrite of status.json and vaults.json.
  */
 export class Watcher {
   readonly startedAt: string;
@@ -225,6 +232,7 @@ export class Watcher {
       },
       sources: this.sources.map((s) => ({ name: s.name, address: s.address, topic0: s.topic0, seen: this.state.sourcesSeen[s.name] ?? 0 })),
       attestBudget: { perDay: this.config.maxAttestPerDay, usedToday: this.state.attestDay.day === today ? this.state.attestDay.used : 0 },
+      gasCostWei: this.state.gasCostWei,
     };
   }
 
@@ -414,9 +422,10 @@ export class Watcher {
   }
 
   /**
-   * The ERC-4626 pre-check of a candidate at `probeBlock`. Not a vault: recorded (probe-rejected) and not
-   * retried until a new signal. An RPC error: retried in the next passes, up to maxProbeAttempts. A vault:
-   * known from now on and queued as a candidate.
+   * The ERC-4626 pre-check of a candidate at `probeBlock`. Not a vault (only an answer of the contract says
+   * so): recorded (probe-rejected) and not retried until a new signal. An RPC or node error, a rate limit
+   * included, is never "not a vault": the candidate is probed again from a later pass, the wait doubling from
+   * probeRetryMs up to an hour, until it answers. A vault: known from now on and queued as a candidate.
    */
   private async probe(subject: Address, at: SignalAt, probeBlock: bigint): Promise<void> {
     const st = this.state;
@@ -431,13 +440,10 @@ export class Watcher {
     } catch (err) {
       this.running = null;
       const failures = (st.probing[lower]?.failures ?? 0) + 1;
-      if (failures >= this.config.maxProbeAttempts) {
-        delete st.probing[lower];
-        await this.feed([{ ...base, at: this.nowIso(), kind: 'error', reason: `probe failed ${failures} times, dropped until the next signal: ${errorText(err)}` }]);
-      } else {
-        st.probing[lower] = { source: at.source, block: at.block.toString(), ...(at.txHash ? { txHash: at.txHash } : {}), ...(at.factory ? { factory: at.factory } : {}), failures };
-        await this.feed([{ ...base, at: this.nowIso(), kind: 'error', reason: `probe failed (${failures} of ${this.config.maxProbeAttempts}), retrying: ${errorText(err)}` }]);
-      }
+      const delay = Math.min(this.config.probeRetryMs * 2 ** Math.min(failures - 1, 20), HOUR_MS);
+      const notBefore = new Date(this.effects.now().getTime() + delay).toISOString();
+      st.probing[lower] = { source: at.source, block: at.block.toString(), ...(at.txHash ? { txHash: at.txHash } : {}), ...(at.factory ? { factory: at.factory } : {}), failures, notBefore };
+      await this.feed([{ ...base, at: this.nowIso(), kind: 'error', reason: `probe failed (attempt ${failures}), not a verdict, probing again from ${notBefore}: ${errorText(err)}` }]);
       return;
     }
     this.running = null;
@@ -464,7 +470,7 @@ export class Watcher {
         delete this.state.probing[lower];
         continue;
       }
-      if (this.probedThisPass.has(lower)) continue;
+      if (this.probedThisPass.has(lower) || (p.notBefore && p.notBefore > this.nowIso())) continue;
       await this.probe(getAddress(lower), { source: p.source, block: BigInt(p.block), ...(p.txHash ? { txHash: p.txHash as Hex } : {}), ...(p.factory ? { factory: p.factory as { address: Address; name: string } } : {}) }, probeBlock);
     }
   }
@@ -582,10 +588,22 @@ export class Watcher {
     await this.save();
 
     let report: StandardCheckReport;
-    let saved: { reportPath: string; reportURI: string };
     try {
       const block = checkBlockOf(await this.effects.latestBlock(), this.config.lagBlocks);
       report = await this.effects.runCheck(subject, block);
+    } catch (err) {
+      if (isCheckTimeout(err)) await this.checkTimedOut(entry, err);
+      else await this.checkFailed(entry, err);
+      return;
+    }
+    // A property the fork could not read says nothing about the vault: no attestation, check again later.
+    const forkErrors = forkRpcErrorsOf(report);
+    if (forkErrors.length > 0) {
+      await this.checkFailed(entry, new Error(`${forkErrors.length} of ${report.results.length} properties inconclusive on a fork RPC error (${forkErrors[0]!.id}: ${forkErrors[0]!.reason})`));
+      return;
+    }
+    let saved: { reportPath: string; reportURI: string };
+    try {
       saved = await this.effects.saveReport(report);
     } catch (err) {
       await this.checkFailed(entry, err);
@@ -600,12 +618,6 @@ export class Watcher {
       lastAttestationId: null,
       firstDepositBlock: null,
     });
-    const prev: CheckOutcome | null = vault.lastCheck ? { summary: vault.lastCheck.summary, failed: vault.lastCheck.failed, implementationKey: vault.lastCheck.implementationKey } : null;
-    const change = changeOf(prev, outcome);
-    vault.lastCheck = lastCheckOf(report, saved.reportPath);
-    const beacon = beaconOf(report);
-    if (beacon) st.beacons[lower] = beacon;
-    else delete st.beacons[lower];
     // A newer check replaces an attestation still waiting for an older one.
     delete st.deferred[lower];
 
@@ -638,11 +650,29 @@ export class Watcher {
       }
     }
     const [checked] = await this.feed([{ ...base, at: this.nowIso(), kind: 'checked', check, reason }]);
+    let newer = decision && !decision.attest ? decision.newer : undefined;
     let attestation: FeedAttestation | undefined;
     if (attestNow && decision?.attest) {
-      attestation = await this.attestReport(subject, entry.source, report, saved, decision.supersedes, base, check);
-      if (attestation) vault.lastAttestationId = attestation.id;
+      const out = await this.attestReport(subject, entry.source, report, saved, decision.supersedes, base, check);
+      if (out.attested) attestation = out.attested;
+      newer = out.newer;
     }
+    if (newer) {
+      // Another issuer (the desk worker, say) attested a later block while this check ran: this check is
+      // superseded, not failed. It does not become the vault's last check; the vault is checked again.
+      vault.lastAttestationId = newer.id.toString();
+      this.running = null;
+      await this.requeueSuperseded(entry, newer);
+      await this.save();
+      return;
+    }
+    if (attestation) vault.lastAttestationId = attestation.id;
+    const prev: CheckOutcome | null = vault.lastCheck ? { summary: vault.lastCheck.summary, failed: vault.lastCheck.failed, implementationKey: vault.lastCheck.implementationKey } : null;
+    const change = changeOf(prev, outcome);
+    vault.lastCheck = lastCheckOf(report, saved.reportPath);
+    const beacon = beaconOf(report);
+    if (beacon) st.beacons[lower] = beacon;
+    else delete st.beacons[lower];
     let changed: FeedEvent | undefined;
     if (change) [changed] = await this.feed([{ ...base, at: this.nowIso(), kind: 'changed', check, change, ...(attestation ? { attestation } : {}) }]);
     this.running = null;
@@ -667,9 +697,61 @@ export class Watcher {
   }
 
   /**
+   * A check that ran past its wall-clock budget is not retried: a vault that burns gas in its view functions
+   * would otherwise hold the queue for the whole budget again and again. The next signal or sweep checks it.
+   */
+  private async checkTimedOut(entry: QueueEntry, err: unknown): Promise<void> {
+    this.running = null;
+    removeEntry(this.state.queue as QueueEntry[], entry.subject);
+    await this.feed([
+      { at: this.nowIso(), kind: 'error', chainId: this.chainId, subject: entry.subject, source: entry.source, reason: `check stopped, not attested and not retried until the next signal or sweep: ${errorText(err)}` },
+    ]);
+    await this.save();
+  }
+
+  /**
+   * Queues a superseded check again after checkRetryMs (the head moves past the newer attestation's block
+   * meanwhile), counted in attempts so two issuers cannot ping-pong forever.
+   */
+  private async requeueSuperseded(entry: Pick<QueueEntry, 'subject' | 'source' | 'block' | 'txHash' | 'attempts'>, newer: { id: bigint; block: bigint }): Promise<void> {
+    const attempts = entry.attempts + 1;
+    const reason = `superseded by attestation ${newer.id} of block ${newer.block}, a later block than this check`;
+    if (attempts >= this.config.maxCheckAttempts) {
+      await this.feed([{ at: this.nowIso(), kind: 'error', chainId: this.chainId, subject: entry.subject, source: entry.source, reason: `${reason}; ${attempts} times in a row, left to the next signal or sweep` }]);
+      return;
+    }
+    const queued: QueueEntry = {
+      subject: entry.subject,
+      source: entry.source,
+      priority: priorityOf(entry.source, false),
+      enqueuedAt: this.nowIso(),
+      ...(entry.block ? { block: entry.block } : {}),
+      ...(entry.txHash ? { txHash: entry.txHash } : {}),
+      attempts,
+      notBefore: new Date(this.effects.now().getTime() + this.config.checkRetryMs * attempts).toISOString(),
+    };
+    const r = enqueue(this.state.queue as QueueEntry[], queued);
+    if (r === 'kept') return;
+    await this.feed([
+      {
+        at: queued.enqueuedAt,
+        kind: 'queued',
+        chainId: this.chainId,
+        subject: entry.subject,
+        source: entry.source,
+        ...(entry.block ? { block: entry.block } : {}),
+        ...(entry.txHash ? { txHash: entry.txHash } : {}),
+        reason: `${reason}; checking again at a new block`,
+      },
+    ]);
+  }
+
+  /**
    * Checks the subject's identity on its chain at the report's block and attests. An attestation that fails
    * on an RPC error is deferred (the next try decides again from the registry, so a mined transaction whose
-   * receipt was lost is not attested twice); a revert or a report the registry would refuse is recorded.
+   * receipt was lost is not attested twice); OlderThanLatest means another issuer attested a later block
+   * meanwhile, so the check is superseded (`newer`, read again from the registry), not failed; any other
+   * revert or a report the registry would refuse is recorded.
    */
   private async attestReport(
     subject: Address,
@@ -679,7 +761,7 @@ export class Watcher {
     supersedes: bigint | null,
     base: Omit<FeedEventInput, 'at' | 'kind'>,
     check: FeedCheck,
-  ): Promise<FeedAttestation | undefined> {
+  ): Promise<{ attested?: FeedAttestation; newer?: { id: bigint; block: bigint } }> {
     const lower = subject.toLowerCase();
     this.setRunning(subject, source, 'attesting');
     await this.save();
@@ -687,20 +769,28 @@ export class Watcher {
       const identity = await this.effects.verifySubject(report);
       if (identity.unknownProxy && !this.config.allowUnknownProxy) {
         await this.feed([{ ...base, at: this.nowIso(), kind: 'error', check, reason: `not attested: ${subject} is proxy-shaped but its implementation could not be resolved (--allow-unknown-proxy attests it anyway)` }]);
-        return undefined;
+        return {};
       }
       const params = attestationParamsFromReport(report, { reportURI: saved.reportURI });
       const out = await this.effects.attest!(params);
       this.budgetLeft();
       this.state.attestDay.used += 1;
+      this.state.gasCostWei = (BigInt(this.state.gasCostWei) + out.gasCostWei).toString();
       const attestation: FeedAttestation = { id: out.id.toString(), txHash: out.hash, supersedes: supersedes === null ? null : supersedes.toString() };
       await this.feed([{ ...base, at: this.nowIso(), kind: 'attested', check, attestation }]);
-      return attestation;
+      return { attested: attestation };
     } catch (err) {
+      if (errorNameOf(err) === 'OlderThanLatest') {
+        const latest = await this.effects.latestAttestation(subject).catch(() => null);
+        if (latest && ATTESTATION_STATUS[latest.attestation.status] === 'Valid') return { newer: { id: latest.id, block: latest.attestation.blockNumber } };
+        // The registry did not answer the second read: decide again in a later pass, which finds the newer one.
+        this.state.deferred[lower] = { reportPath: saved.reportPath, reportURI: saved.reportURI, source, at: this.nowIso() };
+        return {};
+      }
       const retry = !(err instanceof AttestationError) && !countsAsFailure(err);
       if (retry) this.state.deferred[lower] = { reportPath: saved.reportPath, reportURI: saved.reportURI, source, at: this.nowIso() };
       await this.feed([{ ...base, at: this.nowIso(), kind: 'error', check, reason: `attest failed${retry ? ', tried again in a later pass' : ''}: ${errorText(err)}` }]);
-      return undefined;
+      return {};
     } finally {
       this.running = null;
     }
@@ -708,7 +798,8 @@ export class Watcher {
 
   /**
    * Attestations that waited for the daily budget or for a readable registry, while the budget lasts. Each
-   * is decided again first; one whose vault was checked again since is dropped (the newer check decides).
+   * is decided again first; one whose vault was checked again since is dropped (the newer check decides),
+   * and one a later attestation superseded meanwhile is checked again.
    */
   private async attestDeferred(): Promise<void> {
     const st = this.state;
@@ -731,10 +822,17 @@ export class Watcher {
         continue;
       }
       delete st.deferred[lower];
-      if (!decision.attest) continue;
-      const base = { chainId: this.chainId, subject, source: d.source };
-      const attestation = await this.attestReport(subject, d.source, report, d, decision.supersedes, base, feedCheckOf(report, d.reportPath));
-      if (attestation) vault.lastAttestationId = attestation.id;
+      let newer = decision.attest ? undefined : decision.newer;
+      if (decision.attest) {
+        const base = { chainId: this.chainId, subject, source: d.source };
+        const out = await this.attestReport(subject, d.source, report, d, decision.supersedes, base, feedCheckOf(report, d.reportPath));
+        if (out.attested) vault.lastAttestationId = out.attested.id;
+        newer = out.newer;
+      }
+      if (newer) {
+        vault.lastAttestationId = newer.id.toString();
+        await this.requeueSuperseded({ subject, source: d.source, attempts: 0 }, newer);
+      }
       await this.save();
     }
   }
@@ -758,6 +856,24 @@ export class Watcher {
       await this.feed([{ ...base, at: this.nowIso(), kind: 'error', reason: `alert delivery failed: ${errorText(err)}` }]);
     }
   }
+}
+
+/** The custom error name a registry revert carries (RegistryError.errorName or a decoded data.errorName). */
+function errorNameOf(err: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  while (cur && typeof cur === 'object' && !seen.has(cur)) {
+    seen.add(cur);
+    const e = cur as { errorName?: unknown; data?: { errorName?: unknown } };
+    if (typeof e.errorName === 'string' && e.errorName) return e.errorName;
+    if (e.data && typeof e.data === 'object' && typeof e.data.errorName === 'string') return e.data.errorName;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+function isCheckTimeout(err: unknown): boolean {
+  return err instanceof StandardCheckTimeoutError || (err as { name?: unknown })?.name === 'StandardCheckTimeoutError';
 }
 
 function feedCheckOf(report: StandardCheckReport, reportPath: string): FeedCheck {
@@ -831,7 +947,7 @@ export function liveWatchEffects(i: LiveWatchEffectsInput): WatchEffects {
       return signalLogsOf(raw);
     },
     precheck: (subject, block) => precheckErc4626(i.subjectClient, subject, block),
-    runCheck: (subject, block) => runSubjectCheck(i, subject, block),
+    runCheck: (subject, block) => runSubjectCheck({ ...i, timeoutSec: i.timeoutSec ?? DEFAULT_WATCH_CHECK_TIMEOUT_SEC }, subject, block),
     saveReport: (report) => saveReportCopy(i.projectDir, i.reportBaseUrl, report),
     loadReport: (reportPath) => loadReportCopy(i.projectDir, reportPath),
     verifySubject: (report) => verifySubjectCode(i.subjectClient, report, { allowUnknownProxy: true }),

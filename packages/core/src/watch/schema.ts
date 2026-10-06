@@ -13,6 +13,7 @@ export const WATCH_STATUS_JSON = 'status.json';
 export const WATCH_VAULTS_JSON = 'vaults.json';
 
 export const FEED_KINDS = ['detected', 'probe-rejected', 'queued', 'checked', 'attested', 'changed', 'alerted', 'error'] as const;
+export const feedKindSchema = z.enum(FEED_KINDS);
 export type FeedKind = (typeof FEED_KINDS)[number];
 
 /**
@@ -31,6 +32,7 @@ export const FEED_SOURCES = [
   'subscribed',
   'backfill',
 ] as const;
+export const feedSourceSchema = z.enum(FEED_SOURCES);
 export type FeedSource = (typeof FEED_SOURCES)[number];
 
 /**
@@ -47,10 +49,12 @@ export type WatchStage = (typeof WATCH_STAGES)[number];
 export const ALERT_CHANNELS = ['webhook', 'inbox'] as const;
 export type AlertChannel = (typeof ALERT_CHANNELS)[number];
 
+// zod runs a refinement even after the regex failed, so the refinement checks the shape again before
+// getAddress, which throws on anything that is not 40 hex characters.
 const checksummed = z
   .string()
   .regex(/^0x[0-9a-fA-F]{40}$/, 'expected a 0x address')
-  .refine((a) => getAddress(a) === a, 'expected a checksummed (EIP-55) address')
+  .refine((a) => /^0x[0-9a-fA-F]{40}$/.test(a) && getAddress(a) === a, 'expected a checksummed (EIP-55) address')
   .transform((a) => a as Address);
 const lowerAddress = /^0x[0-9a-f]{40}$/;
 const decimal = z.string().regex(/^(0|[1-9]\d*)$/, 'a non-negative decimal integer string');
@@ -106,10 +110,10 @@ export const feedEventSchema = z
     v: z.literal(1),
     seq: z.number().int().positive(),
     at: iso,
-    kind: z.enum(FEED_KINDS),
+    kind: feedKindSchema,
     chainId: z.number().int().positive(),
     subject: checksummed,
-    source: z.enum(FEED_SOURCES).optional(),
+    source: feedSourceSchema.optional(),
     block: decimal.optional(),
     txHash: hex32.optional(),
     factory: z.object({ address: checksummed, name: z.string().min(1) }).strict().optional(),
@@ -127,7 +131,8 @@ export type FeedEvent = z.infer<typeof feedEventSchema>;
  * whose logs have not been read yet. lagBlocks: how far below head the watcher reads and checks.
  * counts are over the last 24 hours except known (vaults.json). sources: one entry per signal source, seen
  * = signals of that source since the watcher's state was created. attestBudget: attestations made on the
- * current UTC day against --max-attest-per-day.
+ * current UTC day against --max-attest-per-day. gasCostWei (optional): gasUsed x effectiveGasPrice summed over
+ * the watcher's attestations since its state was created, for the web's spend figures.
  */
 export const watchStatusSchema = z
   .object({
@@ -146,6 +151,7 @@ export const watchStatusSchema = z
     counts: z.object({ known: count, detected24h: count, checked24h: count, attested24h: count, changed24h: count }).strict(),
     sources: z.array(z.object({ name: z.string().min(1), address: checksummed.nullable(), topic0: hex32, seen: count }).strict()),
     attestBudget: z.object({ perDay: count, usedToday: count }).strict(),
+    gasCostWei: decimal.optional(),
   })
   .strict();
 export type WatchStatus = z.infer<typeof watchStatusSchema>;

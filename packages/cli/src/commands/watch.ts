@@ -16,6 +16,7 @@ import {
   DEFAULT_BLOCK_LAG,
   DEFAULT_LOG_WINDOW,
   DEFAULT_REPORT_BASE_URL,
+  DEFAULT_WATCH_CHECK_TIMEOUT_SEC,
   DEFAULT_WATCH_CONFIG,
   DEFAULT_WATCH_POLL_SEC,
   DEFAULT_WATCH_RUNS,
@@ -95,6 +96,7 @@ interface WatchOptions {
   poll: string;
   once?: boolean;
   runs: string;
+  checkTimeout: string;
   sweepHours: string;
   sweepPerHour: string;
   subscribedMinutes: string;
@@ -254,6 +256,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
     .option('--poll <sec>', 'seconds to wait when caught up and nothing is due', String(DEFAULT_WATCH_POLL_SEC))
     .option('--once', 'read up to the head (or --to-block), run every due check, and exit')
     .option('--runs <n>', 'fuzz runs per property', String(DEFAULT_WATCH_RUNS))
+    .option('--check-timeout <sec>', 'wall-clock budget of one check; a check that runs out is recorded, not attested and not retried', String(DEFAULT_WATCH_CHECK_TIMEOUT_SEC))
     .option('--sweep-hours <h>', 're-check every known vault at most once per this many hours', String(DEFAULT_WATCH_CONFIG.sweepHours))
     .option('--sweep-per-hour <n>', 'start at most this many sweep checks per hour (0: no sweep)', String(DEFAULT_WATCH_CONFIG.sweepPerHour))
     .option('--subscribed-minutes <m>', 're-check subscribed subjects this often', String(DEFAULT_WATCH_CONFIG.subscribedMinutes))
@@ -276,6 +279,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         const logWindow = positive(opts.logWindow, '--log-window', 1_000_000n);
         const poll = positive(opts.poll, '--poll', 86_400n);
         const runs = Number(positive(opts.runs, '--runs', 100_000n));
+        const checkTimeoutSec = Number(positive(opts.checkTimeout, '--check-timeout', 86_400n));
         const sweepHours = Number(positive(opts.sweepHours, '--sweep-hours', 10_000n));
         const sweepPerHour = Number(nonNegative(opts.sweepPerHour, '--sweep-per-hour', 10_000n));
         const subscribedMinutes = Number(positive(opts.subscribedMinutes, '--subscribed-minutes', 1_000_000n));
@@ -340,6 +344,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             subjectRpcUrl: urls[0]!,
             projectDir: ctx.projectDir,
             runs,
+            timeoutSec: checkTimeoutSec,
             cacheDir: defaultCacheDir(),
             reportBaseUrl: base,
             registry,
@@ -372,7 +377,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           const rel = (p: string) => path.relative(ctx.projectDir, p);
           const known = Object.keys(store.vaults.vaults).length;
           printLine(ctx, stage('watch', `chain ${subjectChainId}  ${sources.length} sources (${sourcesFrom})  ${known} known vault${known === 1 ? '' : 's'}  ${pc.dim(rel(store.dir))}`));
-          printLine(ctx, cont(pc.dim(`subject RPC ${urls.length > 1 ? `${urls[0]} (+${urls.length - 1} fallback)` : urls[0]}  lag ${blockLag}  window ${logWindow}  runs ${runs}  ${opts.once ? 'one pass' : `poll ${poll}s`}`)));
+          printLine(ctx, cont(pc.dim(`subject RPC ${urls.length > 1 ? `${urls[0]} (+${urls.length - 1} fallback)` : urls[0]}  lag ${blockLag}  window ${logWindow}  runs ${runs}  check timeout ${checkTimeoutSec}s  ${opts.once ? 'one pass' : `poll ${poll}s`}`)));
           printLine(
             ctx,
             cont(pc.dim(registry ? `registry ${registry.address} on ${attestOn}${issuer ? `  issuer ${issuer}` : ''}  ${opts.attest ? `max ${maxAttestPerDay} attestations a day` : 'no attest'}` : 'no attest, no registry: decisions assume no attestation')),
@@ -390,6 +395,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             lagBlocks: blockLag.toString(),
             logWindow: logWindow.toString(),
             runs,
+            checkTimeoutSec,
             once: Boolean(opts.once),
             attest: opts.attest,
             registry: registry?.address ?? null,

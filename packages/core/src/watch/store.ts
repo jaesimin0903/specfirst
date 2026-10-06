@@ -64,7 +64,8 @@ export const queueEntrySchema = z
  * attempted: when a check of the vault last started. subscriptions: subscriptions whose first check was
  * delivered. sweeps: start times of sweep checks within the last hour. attestDay: attestations made on one
  * UTC day. recent: feed events of the last 24 hours the status counts. sourcesSeen: signals per source name.
- * deferred: checks whose attestation waits for the daily budget or a readable registry.
+ * deferred: checks whose attestation waits for the daily budget or a readable registry. gasCostWei: what the
+ * watcher's attestations cost, summed.
  */
 export const watchStateSchema = z
   .object({
@@ -83,6 +84,7 @@ export const watchStateSchema = z
           txHash: hex32.optional(),
           factory: z.object({ address: checksummed, name: z.string().min(1) }).strict().optional(),
           failures: count,
+          notBefore: iso.optional(),
         })
         .strict(),
     ),
@@ -94,9 +96,10 @@ export const watchStateSchema = z
     recent: z.array(z.object({ kind: z.enum(FEED_KINDS), at: iso }).strict()),
     sourcesSeen: z.record(z.string(), count),
     deferred: z.record(lowerAddress, z.object({ reportPath: z.string().min(1), reportURI: z.string().min(1), source, at: iso }).strict()),
+    gasCostWei: decimal.default('0'),
   })
   .strict();
-export type WatchState = z.infer<typeof watchStateSchema>;
+export type WatchState = z.output<typeof watchStateSchema>;
 
 /** A feed event before the store stamps it with v and seq. */
 export type FeedEventInput = Omit<FeedEvent, 'v' | 'seq'>;
@@ -122,6 +125,7 @@ export function emptyWatchState(chainId: number): WatchState {
     recent: [],
     sourcesSeen: {},
     deferred: {},
+    gasCostWei: '0',
   };
 }
 

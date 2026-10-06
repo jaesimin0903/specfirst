@@ -21,6 +21,7 @@ import {
   demoVaultFactoryBytecode,
   enqueue,
   feedEventSchema,
+  FORK_ERROR_NOTE,
   GENERIC_SOURCES,
   isRangeError,
   LogWindow,
@@ -38,6 +39,7 @@ import {
   seedKnownVaults,
   signalTopics,
   sourcesFromFile,
+  StandardCheckTimeoutError,
   standardIdOf,
   summarize,
   verifySourceFixture,
@@ -116,8 +118,18 @@ function setImplementationLog(block: bigint): SignalLog {
 }
 
 /** The Morpho fixture re-pointed at `subject` and `block`, with `fail` properties failing and an optional beacon. */
-function reportOf(subject: Address, block: bigint, o: { fail?: string[]; implementationKey?: Hex; beacon?: Address; startedAt?: string } = {}): StandardCheckReport {
-  const results = MORPHO.results.map((r) => (o.fail?.includes(r.id) ? { ...r, status: 'fail' as const, reason: 'counterexample' } : r));
+function reportOf(
+  subject: Address,
+  block: bigint,
+  o: { fail?: string[]; forkError?: string; implementationKey?: Hex; beacon?: Address; startedAt?: string } = {},
+): StandardCheckReport {
+  const results = MORPHO.results.map((r) =>
+    o.fail?.includes(r.id)
+      ? { ...r, status: 'fail' as const, reason: 'counterexample' }
+      : r.id === o.forkError
+        ? { ...r, status: 'inconclusive' as const, reason: `${FORK_ERROR_NOTE}: EVM error; database error: failed to get account: HTTP error 429` }
+        : r,
+  );
   const identity = o.beacon
     ? {
         ...MORPHO.identity,
@@ -137,6 +149,8 @@ function reportOf(subject: Address, block: bigint, o: { fail?: string[]; impleme
 class FakeRegistry {
   readonly list: Array<{ subject: Address; attestation: Attestation }> = [];
   failNext: Error | null = null;
+  /** Runs at the start of the next attest: another issuer acting between the watcher's read and its send. */
+  beforeAttest: ((p: AttestParams) => void) | null = null;
 
   latest(subject: Address): { id: bigint; attestation: Attestation } | null {
     for (let i = this.list.length - 1; i >= 0; i--) if (this.list[i]!.subject.toLowerCase() === subject.toLowerCase()) return { id: BigInt(i), attestation: this.list[i]!.attestation };
@@ -144,6 +158,7 @@ class FakeRegistry {
   }
 
   attest(p: AttestParams): { id: bigint; hash: Hex; gasCostWei: bigint } {
+    this.beforeAttest?.(p);
     if (this.failNext) {
       const err = this.failNext;
       this.failNext = null;
@@ -180,6 +195,10 @@ interface Chain {
   failing: Map<string, string[]>;
   /** Checks of these subjects throw this many more times. */
   checkErrors: Map<string, number>;
+  /** Checks of these subjects leave `deposit` inconclusive on a fork RPC error this many more times. */
+  forkErrors: Map<string, number>;
+  /** Checks of these subjects run out of time. */
+  timeouts: Set<string>;
   beacons: Map<string, Address>;
   /** eth_getLogs refuses windows larger than this, like rpc.monad.xyz (-32614 with HTTP 413). */
   rangeLimit: bigint | null;
@@ -198,6 +217,8 @@ interface Harness {
   watcher(config?: Partial<WatchConfig>, hooks?: ConstructorParameters<typeof Watcher>[0]['hooks'], sources?: WatchSource[]): Watcher;
   feed(): Promise<FeedEvent[]>;
   reload(): Promise<WatchStore>;
+  /** Report copies saved under certs/checks, by path. */
+  savedReports(): string[];
 }
 
 const dirs: string[] = [];
@@ -217,7 +238,19 @@ function rangeError(limit: bigint): Error {
 async function harness(): Promise<Harness> {
   const dir = await mkdtemp(path.join(tmpdir(), 'specfirst-watch-'));
   dirs.push(dir);
-  const chain: Chain = { head: 2000n, logs: [], notVaults: new Set(), probeErrors: new Map(), failing: new Map(), checkErrors: new Map(), beacons: new Map(), rangeLimit: null, getLogsCalls: [] };
+  const chain: Chain = {
+    head: 2000n,
+    logs: [],
+    notVaults: new Set(),
+    probeErrors: new Map(),
+    failing: new Map(),
+    checkErrors: new Map(),
+    forkErrors: new Map(),
+    timeouts: new Set(),
+    beacons: new Map(),
+    rangeLimit: null,
+    getLogsCalls: [],
+  };
   const registry = new FakeRegistry();
   const clock = { now: T0 };
   const saved = new Map<string, StandardCheckReport>();
@@ -246,8 +279,16 @@ async function harness(): Promise<Harness> {
         chain.checkErrors.set(subject.toLowerCase(), left - 1);
         throw new Error('forge exited with code 1: could not fork');
       }
+      if (chain.timeouts.has(subject.toLowerCase())) throw new StandardCheckTimeoutError(600);
       checks.push({ subject, block });
-      return reportOf(subject, block, { fail: chain.failing.get(subject.toLowerCase()), beacon: chain.beacons.get(subject.toLowerCase()), startedAt: clock.now.toISOString() });
+      const forks = chain.forkErrors.get(subject.toLowerCase()) ?? 0;
+      if (forks > 0) chain.forkErrors.set(subject.toLowerCase(), forks - 1);
+      return reportOf(subject, block, {
+        fail: chain.failing.get(subject.toLowerCase()),
+        ...(forks > 0 ? { forkError: 'deposit' } : {}),
+        beacon: chain.beacons.get(subject.toLowerCase()),
+        startedAt: clock.now.toISOString(),
+      });
     },
     saveReport: async (report) => {
       const file = `${report.chainId}/${report.address.toLowerCase()}/${report.blockNumber}-${checkReportHash(report).slice(2, 18)}.json`;
@@ -282,6 +323,7 @@ async function harness(): Promise<Harness> {
       return parsed.events;
     },
     reload: async () => (h.store = await WatchStore.load(dir, 143)),
+    savedReports: () => [...saved.keys()],
   };
   return h;
 }
@@ -348,6 +390,8 @@ describe('watcher file schemas (docs/adr/0006 Interfaces)', () => {
     expect(parseFeed(`${line}\n${JSON.stringify({ ...event, seq: 2 })}\n`).events.map((e) => e.seq)).toEqual([1, 2]);
     expect(parseFeed(`${line}\n{"v":1,"seq":2,"at`)).toEqual({ events: [feedEventSchema.parse(event)], invalid: 0 });
     expect(parseFeed(`not json\n${line}\n{"v":1}\n\n`)).toMatchObject({ invalid: 2, events: [{ seq: 1 }] });
+    // A subject that is not an address at all is an invalid line, not a thrown error.
+    expect(parseFeed(`${JSON.stringify({ ...event, subject: '0xfeed' })}\n${line}\n`)).toMatchObject({ invalid: 1, events: [{ seq: 1 }] });
   });
 
   it('vaults.json keys are lowercase addresses', () => {
@@ -594,7 +638,13 @@ describe('queue and attest rule (pure)', () => {
     expect(attestDecision(broken, other, 120n)).toMatchObject({ attest: true, reason: 'failed differ from attestation 7' });
     expect(attestDecision(broken, att({ passCount: 29, failCount: 1, failedBitmap: 1n << 5n }), 120n)).toMatchObject({ attest: false });
     // The registry refuses an older block while the latest is Valid.
-    expect(attestDecision(broken, att({ blockNumber: 130n }), 120n)).toEqual({ attest: false, reason: 'attestation 7 is for a later block (130) than this check (120)' });
+    expect(attestDecision(broken, att({ blockNumber: 130n }), 120n)).toEqual({
+      attest: false,
+      reason: 'attestation 7 is for a later block (130) than this check (120)',
+      newer: { id: 7n, block: 130n },
+    });
+    // Whoever issued it: the issuer is not part of the rule.
+    expect(attestDecision(ok, att({ issuer: addr(0xdead) }), 120n)).toMatchObject({ attest: false, reason: 'unchanged since attestation 7' });
   });
 
   it('changeOf: new, regressed, recovered, changed, implementation, or nothing', () => {
@@ -862,7 +912,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     expect(h.store.vaults.vaults[X.toLowerCase()]!.firstSeen.source).toBe('subscribed');
   });
 
-  it('probe rejections: recorded, Deposits ignored for a day, another kind of signal probes again; RPC errors retried, then dropped', async () => {
+  it('probe rejections: recorded, Deposits ignored for a day, another kind of signal probes again; RPC errors retried until it answers', async () => {
     const h = await harness();
     h.chain.notVaults.add(X.toLowerCase());
     h.chain.logs.push(depositLog(X, 1995n), depositLog(X, 1996n));
@@ -884,24 +934,30 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     expect(kinds((await h.feed()).slice(2))).toEqual(['detected:upgrade', 'queued:upgrade', 'checked:upgrade', 'attested:upgrade', 'changed:upgrade']);
     expect(h.store.state.rejected).toEqual({});
 
-    // A probe that fails on the RPC is retried in the next passes and dropped after maxProbeAttempts.
+    // An RPC or node error in a probe is never "not a vault": the candidate is probed again, the wait doubling.
     h.chain.probeErrors.set(W.toLowerCase(), 1);
-    h.chain.probeErrors.set(V.toLowerCase(), 5);
+    h.chain.probeErrors.set(V.toLowerCase(), 3);
     h.chain.logs.push(factoryLog(W, 2025n, 0), factoryLog(V, 2025n, 1));
     h.chain.head = 2040n;
+    const mark = (await h.feed()).length;
     await w.pass();
     expect(Object.keys(h.store.state.probing).sort()).toEqual([V.toLowerCase(), W.toLowerCase()].sort());
+    expect(h.store.state.probing[V.toLowerCase()]).toMatchObject({ failures: 1, notBefore: '2026-10-06T12:05:00.000Z' });
     await w.pass();
-    await w.pass();
-    const tail = (await h.feed()).slice(7);
-    expect(tail.filter((e) => e.kind === 'error').map((e) => `${e.subject === V ? 'V' : 'W'} ${e.reason!.split(':')[0]}`)).toEqual([
-      'W probe failed (1 of 3), retrying',
-      'V probe failed (1 of 3), retrying',
-      'V probe failed (2 of 3), retrying',
-      'V probe failed 3 times, dropped until the next signal',
+    for (const minutes of [5, 10, 20]) {
+      later(h, minutes * 60_000);
+      await w.pass();
+    }
+    const tail = (await h.feed()).slice(mark);
+    expect(tail.filter((e) => e.kind === 'error').map((e) => `${e.subject === V ? 'V' : 'W'} ${e.reason!.split(': ')[0]}`)).toEqual([
+      'W probe failed (attempt 1), not a verdict, probing again from 2026-10-06T12:05:00.000Z',
+      'V probe failed (attempt 1), not a verdict, probing again from 2026-10-06T12:05:00.000Z',
+      'V probe failed (attempt 2), not a verdict, probing again from 2026-10-06T12:15:00.000Z',
+      'V probe failed (attempt 3), not a verdict, probing again from 2026-10-06T12:35:00.000Z',
     ]);
+    expect(tail.filter((e) => e.kind === 'probe-rejected')).toEqual([]);
     expect(h.store.vaults.vaults[W.toLowerCase()]).toBeDefined();
-    expect(h.store.vaults.vaults[V.toLowerCase()]).toBeUndefined();
+    expect(h.store.vaults.vaults[V.toLowerCase()]).toBeDefined();
     expect(h.store.state.probing).toEqual({});
   });
 
@@ -964,33 +1020,124 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     expect(dry.store.state.deferred).toEqual({});
   });
 
-  it('a newer attestation (the desk) is left alone; a revert is recorded, an RPC failure is decided again later', async () => {
+  it('a newer attestation of another issuer supersedes the check: no attestation, no change, checked again at a new block', async () => {
     const h = await harness();
-    h.registry.attest({ ...attestParams(V, 5000n) });
-    h.chain.logs.push(factoryLog(V, 1995n, 0), factoryLog(W, 1995n, 1), factoryLog(X, 1995n, 2));
+    h.registry.attest({ ...attestParams(V, 2005n) });
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    const w = h.watcher({ checkRetryMs: 60_000 });
+    await w.pass({ drain: true });
+    expect(kinds(await h.feed())).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'queued:factory']);
+    const feed = await h.feed();
+    expect(feed[2]!.reason).toBe('attestation 0 is for a later block (2005) than this check (2000)');
+    expect(feed[3]!.reason).toBe('superseded by attestation 0 of block 2005, a later block than this check; checking again at a new block');
+    const vault = h.store.vaults.vaults[V.toLowerCase()]!;
+    expect(vault).toMatchObject({ lastAttestationId: '0', lastCheck: null });
+    expect(h.store.state.queue).toEqual([expect.objectContaining({ subject: V, attempts: 1, notBefore: '2026-10-06T12:01:00.000Z' })]);
+    expect(h.registry.list).toHaveLength(1);
+    // A minute later the head is past the newer block: the same outcome as attestation 0, so nothing is sent.
+    later(h, 60_000);
+    h.chain.head = 2100n;
+    await w.pass();
+    const after = (await h.feed()).slice(4);
+    expect(kinds(after)).toEqual(['checked:factory', 'changed:factory']);
+    expect(after[0]).toMatchObject({ reason: 'unchanged since attestation 0', check: { block: '2090' } });
+    expect(h.registry.list).toHaveLength(1);
+    expect(vault.lastCheck!.block).toBe('2090');
+  });
+
+  it('OlderThanLatest at send time (the desk attested meanwhile) is a superseded check, not a failure', async () => {
+    const h = await harness();
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    // Between the watcher's registry read and its transaction, another issuer attests block 2004.
+    h.registry.beforeAttest = (p) => {
+      h.registry.beforeAttest = null;
+      h.registry.attest({ ...attestParams(p.subject, 2004n), failCount: 1, passCount: 29, failedBitmap: 1n << 5n, passedBitmap: ((1n << 30n) - 1n) ^ (1n << 5n) });
+    };
+    const w = h.watcher({ checkRetryMs: 60_000 });
+    await w.pass();
+    const feed = await h.feed();
+    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'queued:factory']);
+    expect(feed[2]!.reason).toBe('attesting: no attestation of the subject yet');
+    expect(feed[3]!.reason).toMatch(/^superseded by attestation 0 of block 2004/);
+    expect(feed.some((e) => e.kind === 'error')).toBe(false);
+    expect(h.store.state.deferred).toEqual({});
+    expect(h.store.vaults.vaults[V.toLowerCase()]).toMatchObject({ lastAttestationId: '0', lastCheck: null });
+    // The re-check differs from the desk's attestation (it saw previewDeposit fail): attested over it.
+    later(h, 60_000);
+    h.chain.head = 2100n;
+    await w.pass();
+    const after = (await h.feed()).slice(4);
+    expect(kinds(after)).toEqual(['checked:factory', 'attested:factory', 'changed:factory']);
+    expect(after[1]!.attestation).toMatchObject({ id: '1', supersedes: '0' });
+  });
+
+  it('a revert is recorded, an RPC failure is decided again later; the status sums the gas', async () => {
+    const h = await harness();
+    h.chain.logs.push(factoryLog(W, 1995n, 1), factoryLog(X, 1995n, 2));
     h.store.state.cursor = '1991';
     h.chain.head = 2010n;
     const w = h.watcher();
     h.registry.failNext = Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' });
     await w.pass({ drain: true });
     const feed = await h.feed();
-    const byV = feed.filter((e) => e.subject === V && e.kind === 'checked');
-    expect(byV[0]!.reason).toBe('attestation 0 is for a later block (5000) than this check (2000)');
-    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastAttestationId).toBe('0');
     const byW = feed.filter((e) => e.subject === W && e.kind === 'error');
     expect(byW[0]!.reason).toBe('attest failed, tried again in a later pass: fetch failed');
     expect(Object.keys(h.store.state.deferred)).toEqual([W.toLowerCase()]);
     expect(feed.filter((e) => e.subject === X).map((e) => e.kind)).toContain('attested');
     await w.pass();
     expect((await h.feed()).at(-1)).toMatchObject({ kind: 'attested', subject: W });
+    expect((await statusOf(h)).gasCostWei).toBe('2');
 
-    h.registry.failNext = Object.assign(new Error('OlderThanLatest reverted'), { errorName: 'OlderThanLatest' });
+    h.registry.failNext = Object.assign(new Error('InvalidCounts reverted'), { errorName: 'InvalidCounts' });
     h.chain.failing.set(X.toLowerCase(), ['deposit']);
     h.chain.logs.push(upgradedLog(X, 2005n));
     h.chain.head = 2020n;
     await w.pass();
-    expect((await h.feed()).filter((e) => e.kind === 'error').at(-1)!.reason).toBe('attest failed: OlderThanLatest reverted');
+    expect((await h.feed()).filter((e) => e.kind === 'error').at(-1)!.reason).toBe('attest failed: InvalidCounts reverted');
     expect(h.store.state.deferred).toEqual({});
+  });
+
+  it('a report with a property left inconclusive by a fork RPC error is not attested and the vault is checked again', async () => {
+    const h = await harness();
+    h.chain.forkErrors.set(V.toLowerCase(), 1);
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    const w = h.watcher({ checkRetryMs: 60_000 });
+    await w.pass();
+    const feed = await h.feed();
+    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'error:factory']);
+    expect(feed[2]!.reason).toBe(
+      `check failed (attempt 1 of 3), retrying from 2026-10-06T12:01:00.000Z: 1 of 30 properties inconclusive on a fork RPC error (deposit: ${FORK_ERROR_NOTE}: EVM error; database error: failed to get account: HTTP error 429)`,
+    );
+    expect(h.registry.list).toHaveLength(0);
+    expect(h.savedReports()).toEqual([]);
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastCheck).toBeNull();
+    later(h, 60_000);
+    await w.pass();
+    expect(kinds((await h.feed()).slice(3))).toEqual(['checked:factory', 'attested:factory', 'changed:factory']);
+  });
+
+  it('a check that runs out of its time budget is recorded, not attested and not retried', async () => {
+    const h = await harness();
+    h.chain.timeouts.add(V.toLowerCase());
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    const w = h.watcher({ checkRetryMs: 60_000 });
+    await w.pass({ drain: true });
+    const feed = await h.feed();
+    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'error:factory']);
+    expect(feed[2]!.reason).toBe('check stopped, not attested and not retried until the next signal or sweep: forge timed out after 600s');
+    expect(h.store.state.queue).toEqual([]);
+    later(h, 3_600_000);
+    await w.pass({ drain: true });
+    expect(await h.feed()).toHaveLength(3);
+    expect(h.registry.list).toHaveLength(0);
   });
 
   it('a failing check is retried after a delay and dropped after maxCheckAttempts', async () => {
