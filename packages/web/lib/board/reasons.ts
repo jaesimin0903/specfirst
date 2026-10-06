@@ -11,6 +11,8 @@ import type { PropertyStatus, ReasonCategory, ReportResultView, SkipReason, Stat
 
 /** core RESTRICTED_ASSET_NOTE: reason of every property when test users cannot move the asset. */
 export const RESTRICTED_ASSET_NOTE = 'asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances';
+/** core MISSING_PRECOMPILE_NOTE: reason of a property stopped by a Monad precompile forge's EVM lacks, address in parentheses. */
+export const MISSING_PRECOMPILE_NOTE = "the vault calls a Monad precompile forge's EVM lacks, so the call reverts on the fork only; not attributable to the vault";
 
 const TOO_MANY_REJECTS = /^`vm\.assume` rejected too many inputs \((\d+) allowed\)/;
 const DEPOSIT_BELOW_MAX = /deposit reverted below maxDeposit (\d+) times/;
@@ -21,8 +23,12 @@ const SEPARATE_SHARE = /^ERC-7575 vault: shares are a separate token \(share\(\)
 const NATIVE_ASSET = /^asset\(\) is the ERC-7535 native-asset sentinel/;
 const SETUP_FAILED = /^setUp failed: ([\s\S]*)$/;
 const FORGE_STATUS = /^forge status (\S+)/;
-/** SpecfirstMaxHonored.t.sol failure text: action, amount, raw selector (or why there is none), max name and value. */
-const MAX_HONORED_FAIL = /^(deposit|mint|withdraw|redeem)\((\d+)\) reverted with (selector (0x[0-9a-fA-F]{8})|no revert data|short revert data) while (max(?:Deposit|Mint|Withdraw|Redeem)) is (\d+)$/;
+/**
+ * SpecfirstMaxHonored.t.sol failure text: action, amount, raw selector (or why there is none), max name and value,
+ * then optionally the runner's notes after "; " (core minAmountNote).
+ */
+const MAX_HONORED_FAIL = /^(deposit|mint|withdraw|redeem)\((\d+)\) reverted with (selector (0x[0-9a-fA-F]{8})|no revert data|short revert data) while (max(?:Deposit|Mint|Withdraw|Redeem)) is (\d+)(?:; [\s\S]*)?$/;
+const MISSING_PRECOMPILE = / \((0x[0-9a-fA-F]{40})\)$/;
 
 /**
  * Custom errors seen in the Monad batch, named by matching the 4-byte selector against candidate signatures.
@@ -60,6 +66,7 @@ export const REASON_LABEL: Record<ReasonCategory, string> = {
   'max-zero': 'Max value was 0, nothing to honor',
   'unfundable-asset': 'Asset balance cannot be set for test users',
   'asset-transfer-restricted': 'Asset restricts transfers',
+  'missing-precompile': 'Vault calls a Monad precompile the fork lacks',
   'rpc-error': 'RPC failed during the fork',
   'separate-share-token': 'ERC-7575, shares are a separate token',
   'native-asset': 'ERC-7535, native asset',
@@ -72,6 +79,7 @@ export function classifyReason(status: PropertyStatus, reason: string | undefine
   if (status === 'pass' || status === 'fail') return null;
   const r = reason ?? '';
   if (r.startsWith(RESTRICTED_ASSET_NOTE)) return 'asset-transfer-restricted';
+  if (r.startsWith(MISSING_PRECOMPILE_NOTE)) return 'missing-precompile';
   if (MAX_ZERO.test(r)) return 'max-zero';
   if (SEPARATE_SHARE.test(r)) return 'separate-share-token';
   if (NATIVE_ASSET.test(r)) return 'native-asset';
@@ -180,6 +188,10 @@ export function explainResult(result: Pick<ReportResultView, 'status' | 'reason'
       return 'Never exercised: test users could not be given the asset. Its balances are not in a storage slot forge-std can write, which is typical of rebasing or computed-balance tokens.';
     case 'asset-transfer-restricted':
       return `Not applicable: the asset restricts transfers, through an allowlist or similar, and both suites need test balances that move freely.${refusalOf(reason)}`;
+    case 'missing-precompile': {
+      const at = MISSING_PRECOMPILE.exec(reason)?.[1];
+      return `Never exercised: the vault called a Monad precompile${at ? ` at ${at}` : ''} that forge's EVM does not have, so the call reverted on the fork while it goes through on Monad. This says nothing about the vault.`;
+    }
     case 'rpc-error':
       return 'Never exercised: the RPC failed while the fork was reading chain state. This says nothing about the vault; a rerun on another RPC should settle it.';
     case 'separate-share-token': {
@@ -229,6 +241,8 @@ export function explainSkip(skip: SkipReason): string {
       return 'No property applies. This is an ERC-7575 vault whose shares live in a separate token, while both suites assume the vault is its own share token. Nothing here says the vault is wrong or right.';
     case 'asset-transfer-restricted':
       return 'No property applies. The asset only moves between allowed parties, so test users cannot be funded and moved around as both suites require. Nothing here is attributed to the vault.';
+    case 'missing-precompile':
+      return "No property could be exercised. The vault's deposit calls a Monad precompile that forge's EVM does not have, so on the fork it reverts while on Monad it goes through. Nothing here says the vault is wrong or right.";
     case 'setup-reverted':
       return 'No property applies. The suites could not start on this contract because setUp reverted. The reason is listed with each property below.';
   }
@@ -277,6 +291,7 @@ export const REASON_DETAIL: Record<ReasonCategory, string> = {
   'max-zero': 'The vault reported a max of 0 for every test user, which EIP-4626 allows, so there was no promised amount to test.',
   'unfundable-asset': "The asset keeps balances where forge-std cannot write them, such as rebasing tokens, so test users could not be funded.",
   'asset-transfer-restricted': 'The asset only moves between allowed parties, and both suites need test users who can send it freely.',
+  'missing-precompile': "The vault calls a Monad precompile, such as staking at 0x1000, that forge's EVM does not have, so the call reverts on the fork only.",
   'rpc-error': 'The public RPC failed while the fork read chain state. A rerun on another RPC should settle it.',
   'separate-share-token': 'Shares live in a separate token, as EIP-7575 allows, while both suites treat the vault as its own share token.',
   'native-asset': "The vault holds the chain's native coin, and the harness funds users with ERC-20 transfers.",

@@ -16,7 +16,7 @@ export type PropertyStatus = 'pass' | 'fail' | 'inconclusive' | 'not_applicable'
 export type VaultStatus = 'mismatch' | 'complete' | 'partial' | 'not_applicable';
 
 /** Report-level `skipReason` (schemaVersion 3), or what an older report implies. */
-export type SkipReason = 'native-asset' | 'separate-share-token' | 'asset-transfer-restricted' | 'setup-reverted';
+export type SkipReason = 'native-asset' | 'separate-share-token' | 'asset-transfer-restricted' | 'missing-precompile' | 'setup-reverted';
 
 /** Why a property was inconclusive or not applicable, grouped for people rather than for forge. */
 export type ReasonCategory =
@@ -24,6 +24,7 @@ export type ReasonCategory =
   | 'max-zero'
   | 'unfundable-asset'
   | 'asset-transfer-restricted'
+  | 'missing-precompile'
   | 'rpc-error'
   | 'separate-share-token'
   | 'native-asset'

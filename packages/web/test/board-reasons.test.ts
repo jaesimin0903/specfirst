@@ -1,9 +1,17 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { toFunctionSelector } from 'viem';
-import { NATIVE_ASSET_REASON, RESTRICTED_ASSET_NOTE as CORE_RESTRICTED_NOTE, erc7575Reason, maxZeroNote } from '@specfirst/core';
+import {
+  MISSING_PRECOMPILE_NOTE as CORE_PRECOMPILE_NOTE,
+  NATIVE_ASSET_REASON,
+  RESTRICTED_ASSET_NOTE as CORE_RESTRICTED_NOTE,
+  erc7575Reason,
+  maxZeroNote,
+  minAmountNote,
+} from '@specfirst/core';
 import {
   KNOWN_ERROR_SELECTORS,
+  MISSING_PRECOMPILE_NOTE,
   RESTRICTED_ASSET_NOTE,
   classifyReason,
   describeFailure,
@@ -21,6 +29,8 @@ const UPSHIFT_FAIL = 'withdraw(1) reverted with selector 0x75ed2e3e while maxWit
 describe('strings copied from @specfirst/core', () => {
   it('match core, so classification cannot drift from what the CLI writes', () => {
     expect(RESTRICTED_ASSET_NOTE).toBe(CORE_RESTRICTED_NOTE);
+    expect(MISSING_PRECOMPILE_NOTE).toBe(CORE_PRECOMPILE_NOTE);
+    expect(classifyReason('inconclusive', `${CORE_PRECOMPILE_NOTE} (0x0000000000000000000000000000000000001000)`)).toBe('missing-precompile');
     expect(classifyReason('not_applicable', maxZeroNote('maxWithdraw'))).toBe('max-zero');
     expect(classifyReason('not_applicable', NATIVE_ASSET_REASON)).toBe('native-asset');
     expect(classifyReason('not_applicable', erc7575Reason('0x1111111111111111111111111111111111111111'))).toBe('separate-share-token');
@@ -63,6 +73,12 @@ describe('explainResult', () => {
     expect(finding).toBe('maxWithdraw was 3, but withdraw(1) reverted with 0x75ed2e3e, WithdrawalRequestRequired().');
     expect(rule).toMatch(/^EIP-4626: maxWithdraw MUST return the maximum amount of assets withdraw accepts without reverting, and 0 while withdrawals are disabled\.$/);
     expect(explainResult({ status: 'fail', reason: UPSHIFT_FAIL })).toBe(`${finding} ${rule}`);
+  });
+
+  it("a max-honored failure with the runner's minimum-amount note still parses", () => {
+    const reason = `redeem(1) reverted with selector 0x03f7f64c while maxRedeem is 1; ${minAmountNote(1)}`;
+    expect(parseMaxHonoredFailure(reason)).toEqual({ action: 'redeem', amount: '1', selector: '0x03f7f64c', maxName: 'maxRedeem', max: '1' });
+    expect(describeFailure(reason).finding).toBe('maxRedeem was 1, but redeem(1) reverted with 0x03f7f64c.');
   });
 
   it('groups digits of large amounts and keeps unknown selectors raw', () => {
@@ -112,6 +128,9 @@ describe('explainResult', () => {
   it('other inconclusive results', () => {
     expect(explainResult({ status: 'inconclusive', reason: 'fork RPC error, rerun or pass another --rpc: EVM error; database error: x' })).toMatch(/says nothing about the vault/);
     expect(explainResult({ status: 'inconclusive', reason: "the asset's balance slot cannot be written, x" })).toMatch(/could not be given the asset/);
+    expect(explainResult({ status: 'inconclusive', reason: `${MISSING_PRECOMPILE_NOTE} (0x0000000000000000000000000000000000001000)` })).toBe(
+      "Never exercised: the vault called a Monad precompile at 0x0000000000000000000000000000000000001000 that forge's EVM does not have, so the call reverted on the fork while it goes through on Monad. This says nothing about the vault.",
+    );
     expect(explainResult({ status: 'inconclusive', reason: 'no result in forge output' })).toBe('Inconclusive: forge reported no result for this property.');
     expect(explainResult({ status: 'inconclusive', reason: 'forge status Skipped' })).toBe('Inconclusive: forge ended this property with status Skipped.');
     expect(explainResult({ status: 'inconclusive', reason: 'something new' })).toBe('Inconclusive: something new');
@@ -138,6 +157,8 @@ describe('effectiveSkipReason', () => {
     for (const s of ['native-asset', 'separate-share-token', 'asset-transfer-restricted', 'setup-reverted'] as const) {
       expect(explainSkip(s)).toMatch(/^No property applies\./);
     }
+    // Inconclusive, not inapplicable: the vault may well be checkable on a fork that has the precompile.
+    expect(explainSkip('missing-precompile')).toMatch(/^No property could be exercised\. .*Nothing here says the vault is wrong or right\.$/);
   });
 });
 
