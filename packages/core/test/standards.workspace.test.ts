@@ -71,7 +71,11 @@ describe('prepareErc4626Workspace (local repositories, no network)', () => {
     const sf = await readFile(erc4626SourceFile('SpecfirstMaxHonored.t.sol'), 'utf8');
     expect(sf.startsWith('// SPDX-License-Identifier: MIT')).toBe(true);
     // It imports forge-std only, never the upstream suite.
-    expect(sf.match(/^import .*$/gm)).toEqual(['import {Test} from "forge-std/Test.sol";', 'import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";']);
+    expect(sf.match(/^import .*$/gm)).toEqual([
+      'import {Test} from "forge-std/Test.sol";',
+      'import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";',
+      'import {Vm, VmSafe} from "forge-std/Vm.sol";',
+    ]);
     expect(await readFile(path.join(first.dir, ERC4626_SF_PROPERTIES_PATH), 'utf8')).toBe(sf);
     expect(first.sfPropertiesSha256).toBe(sha256Hex(sf));
     expect(harness.startsWith('// SPDX-License-Identifier: AGPL-3.0')).toBe(true);

@@ -329,3 +329,84 @@ contract HookBlockedVault is VaultBase {
     function deposit(uint256, address) public pure override returns (uint256) { revert NotAuthorized(); }
     function mint(uint256, address) public pure override returns (uint256) { revert NotAuthorized(); }
 }
+
+address constant MONAD_STAKING = 0x0000000000000000000000000000000000001000;
+
+interface IMonadStaking {
+    function delegate(uint64 validatorId) external payable returns (bool);
+}
+
+/// Stakes what it receives through Monad's staking precompile, like Magma gMON (0x8498..5081), which deposits
+/// through 0x1000. forge's EVM has no Monad precompiles: on a fork the call reaches an empty account, returns
+/// nothing, and the vault reverts with no data. On Monad the same deposit goes through.
+contract PrecompileVault is VaultBase {
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        s = super.deposit(a, r);
+        require(IMonadStaking(MONAD_STAKING).delegate(78));
+    }
+
+    function mint(uint256 s, address r) public override returns (uint256 a) {
+        a = super.mint(s, r);
+        require(IMonadStaking(MONAD_STAKING).delegate(78));
+    }
+}
+
+/// Stakes only deposits and mints above 10 whole tokens. The one-token deposit of the setUp probe goes
+/// through, so the precompile is met inside the sf- properties (and the deposit that gives shares before a
+/// withdraw or redeem check).
+contract ThresholdPrecompileVault is VaultBase {
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        s = super.deposit(a, r);
+        if (a > 10e6) require(IMonadStaking(MONAD_STAKING).delegate(78));
+    }
+
+    function mint(uint256 s, address r) public override returns (uint256 a) {
+        a = super.mint(s, r);
+        if (s > 10e6) require(IMonadStaking(MONAD_STAKING).delegate(78));
+    }
+}
+
+/// Imitates the harness: maxMint and every withdraw revert with the harness's missing-precompile text, and no
+/// precompile is ever called. Its failures must stay failures.
+contract FakePrecompileTextVault is VaultBase {
+    string internal constant TEXT = "specfirst: fork lacks a Monad precompile the vault calls (0x0000000000000000000000000000000000001000)";
+
+    function maxMint(address) public pure override returns (uint256) { revert(TEXT); }
+    function withdraw(uint256, address, address) public pure override returns (uint256) { revert(TEXT); }
+}
+
+/// Imitates the harness in setUp: asset() reverts with the missing-precompile text, so both setUps stop with it.
+contract FakePrecompileSetupVault is VaultBase {
+    function asset() public pure override returns (address) {
+        if (TOKEN != address(0)) revert("specfirst: fork lacks a Monad precompile the vault calls (0x0000000000000000000000000000000000001000)");
+        return TOKEN;
+    }
+}
+
+/// mint pulls 2% more assets than previewMint quotes, plus 2 (Curvance's hyAUSD LendingOptimizer pulled 61 for a
+/// previewMint of 59). That breaks previewMint's sentence, not maxMint's.
+contract MintSurchargeVault is VaultBase {
+    function mint(uint256 s, address r) public override returns (uint256 a) {
+        a = s + s / 50 + 2;
+        IERC20Min(asset()).transferFrom(msg.sender, address(this), a);
+        balanceOf[r] += s; totalSupply += s;
+    }
+}
+
+error BelowMinimum();
+
+/// Refuses deposits and mints below 500,000 whole tokens while maxDeposit and maxMint are unlimited. A minimum
+/// amount is not what a max sentence covers: the amounts at the max go through.
+contract MinDepositVault is VaultBase {
+    uint256 internal constant MIN = 500_000e6;
+
+    function deposit(uint256 a, address r) public override returns (uint256) {
+        if (a < MIN) revert BelowMinimum();
+        return super.deposit(a, r);
+    }
+
+    function mint(uint256 s, address r) public override returns (uint256) {
+        if (s < MIN) revert BelowMinimum();
+        return super.mint(s, r);
+    }
+}

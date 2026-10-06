@@ -386,6 +386,7 @@ describe('standardCheckReportSchema', () => {
     expect(() => standardCheckReportSchema.parse(v3)).toThrow(/skipReason \(null when properties ran\) is required from schemaVersion 3 on/);
     expect(standardCheckReportSchema.parse({ ...v3, skipReason: null }).skipReason).toBeNull();
     expect(standardCheckReportSchema.parse({ ...v3, skipReason: 'asset-transfer-restricted' }).skipReason).toBe('asset-transfer-restricted');
+    expect(standardCheckReportSchema.parse({ ...v3, skipReason: 'missing-precompile' }).skipReason).toBe('missing-precompile');
     expect(() => standardCheckReportSchema.parse({ ...v3, skipReason: 'other' })).toThrow();
     expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 2, vaultKind: 'erc4626', skipReason: null })).toThrow(/skipReason does not exist in schemaVersion 2/);
   });

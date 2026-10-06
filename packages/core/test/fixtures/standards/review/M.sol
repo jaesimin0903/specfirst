@@ -14,12 +14,16 @@ contract MockToken {
     }
 }
 
+interface IMonadStaking {
+    function delegate(uint64 validatorId) external payable returns (bool);
+}
+
 contract Vault {
     MockToken public immutable tok;
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     uint256 public totalSupply;
-    uint256 public mode; // 0 ok, 1 maxDeposit reverts "rate limit exceeded", 2 maxDeposit reverts "paused", 3 maxRedeem reverts "HTTP error 503", 4 deposit reverts for any non-zero amount while maxDeposit is unlimited
+    uint256 public mode; // 0 ok, 1 maxDeposit reverts "rate limit exceeded", 2 maxDeposit reverts "paused", 3 maxRedeem reverts "HTTP error 503", 4 deposit reverts for any non-zero amount while maxDeposit is unlimited, 5 deposit stakes through Monad's staking precompile 0x1000 (gMON shape)
     constructor(MockToken t, uint256 m) { tok = t; mode = m; }
     function asset() external view returns (address) { return address(tok); }
     function decimals() external pure returns (uint8) { return 6; }
@@ -47,7 +51,11 @@ contract Vault {
     function previewMint(uint256 s) public pure returns (uint256) { return s; }
     function previewWithdraw(uint256 a) public pure returns (uint256) { return a; }
     function previewRedeem(uint256 s) public pure returns (uint256) { return s; }
-    function deposit(uint256 a, address r) public returns (uint256 s) { if (mode == 4 && a > 0) revert("closed"); tok.transferFrom(msg.sender, address(this), a); s = a; balanceOf[r] += s; totalSupply += s; }
+    function deposit(uint256 a, address r) public returns (uint256 s) {
+        if (mode == 4 && a > 0) revert("closed");
+        tok.transferFrom(msg.sender, address(this), a); s = a; balanceOf[r] += s; totalSupply += s;
+        if (mode == 5) require(IMonadStaking(address(0x1000)).delegate(78));
+    }
     function mint(uint256 s, address r) public returns (uint256 a) { a = s; tok.transferFrom(msg.sender, address(this), a); balanceOf[r] += s; totalSupply += s; }
     function withdraw(uint256 a, address r, address o) public returns (uint256 s) { s = a; _spend(o, s); tok.transfer(r, a); }
     function redeem(uint256 s, address r, address o) public returns (uint256 a) { a = s; _spend(o, s); tok.transfer(r, a); }
@@ -96,4 +104,18 @@ contract FalseToken {
     uint256 public totalSupply;
     function decimals() external pure returns (uint8) { return 6; }
     function transfer(address, uint256) external pure returns (bool) { return false; }
+}
+
+/// Calls one address, then always reverts: what SfForkGaps sees in a vault call that met a precompile.
+contract CallThenRevert {
+    function callThenRevert(address target, bytes calldata data) external {
+        (bool ok,) = target.call(data);
+        ok;
+        revert();
+    }
+
+    function balanceThenRevert(address target) external view {
+        if (target.balance == type(uint256).max) return;
+        revert();
+    }
 }

@@ -5,6 +5,9 @@ pragma solidity >=0.8.0 <0.9.0;
 // directory at run time and never copied into this repository. See docs/adr/0003.
 import {ERC4626Test, IERC4626} from "erc4626-tests/ERC4626.test.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
+import {Vm} from "forge-std/Vm.sol";
+// Specfirst's own file (MIT): the list of Monad precompiles the fork lacks, shared with the sf- properties.
+import {SfForkGaps} from "./SpecfirstMaxHonored.t.sol";
 
 interface IDecimals {
     function decimals() external view returns (uint8);
@@ -23,6 +26,8 @@ interface IDecimals {
 /// Users are EOAs above the precompile range and never the vault or its asset.
 /// A reverting maxDeposit or decimals is not held against every property: setUpVault falls back to the
 /// cap and decimals to 18, so a reverting maxDeposit fails test_maxDeposit ("MUST NOT revert") only.
+/// setUp probes the asset (transfers between test users) and the vault (a deposit that does not stop at a
+/// Monad precompile the fork lacks); either refusal stops the suite with a fixed prefix the runner reads.
 contract SpecfirstERC4626Test is ERC4626Test {
     using stdStorage for StdStorage;
 
@@ -39,6 +44,7 @@ contract SpecfirstERC4626Test is ERC4626Test {
         _cap = 1_000_000 * 10 ** uint256(_decimalsOr18(_underlying_));
         _poolSalt = vm.envOr("SF_POOL_SALT", uint256(keccak256("specfirst.erc4626.pool")));
         _probeAssetTransfers();
+        _probeDepositPrecompiles();
     }
 
     /// The suites move the asset between test users. An asset that only lets allowlisted addresses transfer
@@ -51,12 +57,7 @@ contract SpecfirstERC4626Test is ERC4626Test {
         address to = _poolMember(1);
         uint256 amount = _cap / 1_000_000;
         uint256 snap = vm.snapshotState();
-        bool given = true;
-        try this.__giveDeal(_underlying_, from, amount) {} catch {
-            try this.__givePacked(_underlying_, from, amount) {} catch {
-                given = false;
-            }
-        }
+        bool given = _tryGive(_underlying_, from, amount);
         bool ok;
         bytes memory ret;
         if (given) {
@@ -66,6 +67,51 @@ contract SpecfirstERC4626Test is ERC4626Test {
         vm.revertToStateAndDelete(snap);
         if (given && !(ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)))))) {
             revert(string.concat("specfirst: asset transfers are restricted for test users (", _refusal(ok, ret), ")"));
+        }
+    }
+
+    /// Magma gMON on Monad deposits through the staking precompile at 0x1000, which forge's EVM does not have:
+    /// on a fork every deposit reverts there, so every property would only reject inputs for a reason the real
+    /// chain does not have. Pool member 0 deposits one whole token with state diffs recorded, and the state is
+    /// restored either way. A revert that reached a precompile Monad has and this fork lacks (SfForkGaps) ends
+    /// setUp with SfForkGaps' prefix and an event (sf-events/<run>.missing-precompile.log); the runner reports
+    /// the suite inconclusive only when both are there, so revert text alone never decides it. Any other
+    /// outcome, a revert for another reason included, leaves the properties to judge the vault.
+    function _probeDepositPrecompiles() internal {
+        address from = _poolMember(0);
+        uint256 amount = _cap / 1_000_000;
+        uint256 snap = vm.snapshotState();
+        address missing;
+        if (_tryGive(_underlying_, from, amount)) {
+            vm.prank(from);
+            (bool approved,) = _underlying_.call(abi.encodeWithSelector(0x095ea7b3, _vault_, amount));
+            if (approved) {
+                vm.startStateDiffRecording();
+                vm.prank(from);
+                (bool ok,) = _vault_.call(abi.encodeCall(IERC4626.deposit, (amount, from)));
+                Vm.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
+                if (!ok) missing = SfForkGaps.missingCalled(acc);
+            }
+        }
+        vm.revertToStateAndDelete(snap);
+        if (missing == address(0)) return;
+        string memory runId = vm.envOr("SF_RUN_ID", string(""));
+        if (bytes(runId).length != 0) {
+            vm.writeLine(
+                string.concat("sf-events/", runId, ".missing-precompile.log"), string.concat(vm.toString(abi.encodePacked(msg.sig)), " ", vm.toString(missing))
+            );
+        }
+        revert(SfForkGaps.reason(missing));
+    }
+
+    function _tryGive(address token, address to, uint256 amount) internal returns (bool) {
+        try this.__giveDeal(token, to, amount) {
+            return true;
+        } catch {}
+        try this.__givePacked(token, to, amount) {
+            return true;
+        } catch {
+            return false;
         }
     }
 

@@ -5,6 +5,7 @@ pragma solidity >=0.8.0 <0.9.0;
 // They compile and run in the same cached workspace as the upstream harness. See docs/adr/0003.
 import {Test} from "forge-std/Test.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
+import {Vm, VmSafe} from "forge-std/Vm.sol";
 
 interface ISfDecimals {
     function decimals() external view returns (uint8);
@@ -26,6 +27,51 @@ interface ISfVault {
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256);
 }
 
+/// Precompiles Monad has and forge's EVM lacks (docs.monad.xyz, "Precompiles"): P256 signature verification at
+/// 0x0100 (EIP-7951, not in forge's prague), staking at 0x1000 and the reserve balance check at 0x1001. On a
+/// fork a call to one of them reaches an empty account, succeeds and returns nothing, so the calling vault
+/// reverts for a reason the real chain does not have (Magma gMON deposits through the staking precompile).
+/// Used by both suites' setUp and by the sf- properties; MIT, so the AGPL harness may import it.
+library SfForkGaps {
+    Vm private constant VM = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    string internal constant PREFIX = "specfirst: fork lacks a Monad precompile the vault calls";
+
+    /// The first listed precompile the recorded calls reached while this EVM does not have it; 0 when none.
+    /// Only call accesses count (call, delegatecall, callcode, staticcall), including those in reverted frames.
+    function missingCalled(Vm.AccountAccess[] memory acc) internal view returns (address) {
+        for (uint256 i = 0; i < acc.length; i++) {
+            if (uint256(acc[i].kind) > uint256(VmSafe.AccountAccessKind.StaticCall)) continue;
+            address p = acc[i].account;
+            if (_knownAnswer(p).length != 0 && _missing(p)) return p;
+        }
+        return address(0);
+    }
+
+    /// The revert text of a test or setUp stopped by `p`. The runner trusts it only with the matching event.
+    function reason(address p) internal pure returns (string memory) {
+        return string.concat(PREFIX, " (", VM.toString(p), ")");
+    }
+
+    /// No code, and an input the real precompile answers with data (or refuses) succeeds with no data: the
+    /// account is empty here. An EVM that has the precompile (a Monad build of forge, say) is not flagged.
+    function _missing(address p) private view returns (bool) {
+        if (p.code.length != 0) return false;
+        (bool ok, bytes memory ret) = p.staticcall(_knownAnswer(p));
+        return ok && ret.length == 0;
+    }
+
+    /// Inputs the Monad precompiles answer with 32 bytes or more (checked by eth_call on Monad mainnet): a valid
+    /// P256 signature (verifies to 1), getEpoch() and dippedIntoReserve(). Empty for an address not listed.
+    function _knownAnswer(address p) private pure returns (bytes memory) {
+        if (p == address(0x0100)) {
+            return hex"bb5a52f42f9c9261ed4361f59422a1e30036e7c32b270c8807a419feca6050232ba3a8be6b94d5ec80a6d9d1190a436effe50d85a1eee859b8cc6af9bd5c2e184cd60b855d442f5b3c7b11eb6c4e0ae7525fe710fab9aa7c77a67f79e6fadd762927b10512bae3eddcfe467828128bad2903269919f7086069c8c4df6c732838c7787964eaac00e5921fb1498a60f4606766b3d9685001558d1a974e7341513e";
+        }
+        if (p == address(0x1000)) return hex"757991a8";
+        if (p == address(0x1001)) return hex"3a61584e";
+        return "";
+    }
+}
+
 /// EIP-4626 says maxDeposit, maxMint, maxWithdraw and maxRedeem return the most the matching call accepts
 /// "and not cause a revert", and that they MUST return 0 when the action is disabled. The a16z suite calls
 /// the vault through a helper that discards reverting inputs with vm.assume(false), so a vault whose
@@ -36,6 +82,11 @@ interface ISfVault {
 /// answer for a disabled action; each such discard is recorded so the runner can report a property whose
 /// max was always 0 as not applicable), and a failed setup step (funding, approve, the deposit that gives
 /// the user shares) discards the input too. Users come from the same salted 16-address pool as the harness.
+/// Two more rules keep other causes off the max properties: an amount below the bound that reverts is tried
+/// again at the bound, and when the bound goes through the refusal was a minimum amount (no max sentence
+/// covers it), so the input is discarded and recorded; and a revert that reached a precompile Monad has and
+/// this fork lacks (SfForkGaps) ends the test with a fixed prefix and an event, which the runner reports as
+/// inconclusive.
 contract SpecfirstMaxHonored is Test {
     using stdStorage for StdStorage;
 
@@ -51,6 +102,7 @@ contract SpecfirstMaxHonored is Test {
         cap = 1_000_000 * 10 ** uint256(_decimalsOr18(asset));
         poolSalt = vm.envOr("SF_POOL_SALT", uint256(keccak256("specfirst.erc4626.pool")));
         _probeAssetTransfers();
+        _probeDepositPrecompiles();
     }
 
     /// Same probe as the upstream harness: pool members 0 and 1 try to move one whole token of the asset,
@@ -61,12 +113,7 @@ contract SpecfirstMaxHonored is Test {
         address to = _poolMember(1);
         uint256 amount = cap / 1_000_000;
         uint256 snap = vm.snapshotState();
-        bool given = true;
-        try this.__sfGiveDeal(from, amount) {} catch {
-            try this.__sfGivePacked(from, amount) {} catch {
-                given = false;
-            }
-        }
+        bool given = _tryGive(from, amount);
         bool ok;
         bytes memory ret;
         if (given) {
@@ -76,6 +123,40 @@ contract SpecfirstMaxHonored is Test {
         vm.revertToStateAndDelete(snap);
         if (given && !(ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)))))) {
             revert(string.concat("specfirst: asset transfers are restricted for test users (", _refusal(ok, ret), ")"));
+        }
+    }
+
+    /// Same probe as the upstream harness: pool member 0 deposits one whole token with state diffs recorded,
+    /// and the state is restored. A revert that reached a precompile this fork lacks ends setUp with
+    /// SfForkGaps' prefix and an event; any other outcome leaves the properties to judge the vault.
+    function _probeDepositPrecompiles() internal {
+        address from = _poolMember(0);
+        uint256 amount = cap / 1_000_000;
+        uint256 snap = vm.snapshotState();
+        address missing;
+        if (_tryGive(from, amount)) {
+            vm.prank(from);
+            (bool approved,) = asset.call(abi.encodeWithSelector(0x095ea7b3, vault, amount));
+            if (approved) {
+                vm.startStateDiffRecording();
+                vm.prank(from);
+                (bool ok,) = vault.call(abi.encodeCall(ISfVault.deposit, (amount, from)));
+                Vm.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
+                if (!ok) missing = SfForkGaps.missingCalled(acc);
+            }
+        }
+        vm.revertToStateAndDelete(snap);
+        if (missing != address(0)) _stopOnMissingPrecompile(missing);
+    }
+
+    function _tryGive(address to, uint256 amount) internal returns (bool) {
+        try this.__sfGiveDeal(to, amount) {
+            return true;
+        } catch {}
+        try this.__sfGivePacked(to, amount) {
+            return true;
+        } catch {
+            return false;
         }
     }
 
@@ -97,7 +178,10 @@ contract SpecfirstMaxHonored is Test {
         uint256 a = bound(amount, 1, hi);
         vm.assume(_read(abi.encodeCall(ISfVault.previewDeposit, (a))) > 0);
         _fund(u, a);
-        _mustNotRevert(u, abi.encodeCall(ISfVault.deposit, (a, u)), "deposit", a, "maxDeposit", max);
+        (bool ok, bytes memory ret) = _callVault(u, abi.encodeCall(ISfVault.deposit, (a, u)));
+        if (ok) return;
+        if (a < hi) _discardIfAcceptedAt(u, abi.encodeCall(ISfVault.deposit, (hi, u)), hi);
+        _failMax(ret, "deposit", a, "maxDeposit", max);
     }
 
     /// mint(s) for 0 < s <= min(maxMint, shares of cap) with previewMint(s) > 0 must not revert.
@@ -111,9 +195,16 @@ contract SpecfirstMaxHonored is Test {
         uint256 s = bound(shares, 1, hi);
         uint256 need = _read(abi.encodeCall(ISfVault.previewMint, (s)));
         vm.assume(need > 0 && need <= 2 * cap);
-        // A little more than previewMint quotes, so a rounding difference is not blamed on maxMint.
-        _fund(u, need + need / 100 + 1);
-        _mustNotRevert(u, abi.encodeCall(ISfVault.mint, (s, u)), "mint", s, "maxMint", max);
+        // Twice what previewMint quotes plus one whole token: a mint that pulls more than its quote is
+        // test_previewMint's finding, and must not fail here for lack of funds.
+        _fund(u, _mintFunding(need));
+        (bool ok, bytes memory ret) = _callVault(u, abi.encodeCall(ISfVault.mint, (s, u)));
+        if (ok) return;
+        if (s < hi) {
+            (bool quoted, uint256 needHi) = _tryRead(abi.encodeCall(ISfVault.previewMint, (hi)));
+            if (quoted && needHi <= 2 * cap) _discardIfAcceptedAt(u, abi.encodeCall(ISfVault.mint, (hi, u)), _mintFunding(needHi));
+        }
+        _failMax(ret, "mint", s, "maxMint", max);
     }
 
     /// After a deposit, withdraw(a, u, u) for 0 < a <= maxWithdraw(u) must not revert.
@@ -123,7 +214,10 @@ contract SpecfirstMaxHonored is Test {
         uint256 max = _read(abi.encodeCall(ISfVault.maxWithdraw, (u)));
         _discardIfZero(max);
         uint256 a = bound(amount, 1, max);
-        _mustNotRevert(u, abi.encodeCall(ISfVault.withdraw, (a, u, u)), "withdraw", a, "maxWithdraw", max);
+        (bool ok, bytes memory ret) = _callVault(u, abi.encodeCall(ISfVault.withdraw, (a, u, u)));
+        if (ok) return;
+        if (a < max) _discardIfAcceptedAt(u, abi.encodeCall(ISfVault.withdraw, (max, u, u)), 0);
+        _failMax(ret, "withdraw", a, "maxWithdraw", max);
     }
 
     /// After a deposit, redeem(s, u, u) for 0 < s <= maxRedeem(u) with previewRedeem(s) > 0 must not revert.
@@ -134,19 +228,77 @@ contract SpecfirstMaxHonored is Test {
         _discardIfZero(max);
         uint256 s = bound(shares, 1, max);
         vm.assume(_read(abi.encodeCall(ISfVault.previewRedeem, (s))) > 0);
-        _mustNotRevert(u, abi.encodeCall(ISfVault.redeem, (s, u, u)), "redeem", s, "maxRedeem", max);
+        (bool ok, bytes memory ret) = _callVault(u, abi.encodeCall(ISfVault.redeem, (s, u, u)));
+        if (ok) return;
+        if (s < max) _discardIfAcceptedAt(u, abi.encodeCall(ISfVault.redeem, (max, u, u)), 0);
+        _failMax(ret, "redeem", s, "maxRedeem", max);
     }
 
-    /// Calls the vault as `u`; a revert fails the test with the action, the amount, the raw revert selector
-    /// and the advertised max. The reason never carries revert text, so a vault cannot shape it.
-    function _mustNotRevert(address u, bytes memory data, string memory action, uint256 amount, string memory maxName, uint256 max) internal {
+    /// Calls the vault as `u` with state diffs recorded. A revert that reached a precompile Monad has and this
+    /// fork lacks says nothing about the vault, so the test stops (see _stopOnMissingPrecompile).
+    function _callVault(address u, bytes memory data) internal returns (bool ok, bytes memory ret) {
+        vm.startStateDiffRecording();
         vm.prank(u);
-        (bool ok, bytes memory ret) = vault.call(data);
+        (ok, ret) = vault.call(data);
+        Vm.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
         if (!ok) {
-            revert(
-                string.concat(action, "(", vm.toString(amount), ") reverted with ", _selectorOf(ret), " while ", maxName, " is ", vm.toString(max))
+            address missing = SfForkGaps.missingCalled(acc);
+            if (missing != address(0)) _stopOnMissingPrecompile(missing);
+        }
+    }
+
+    /// An amount below the bound reverted. The same action at the bound is tried with the state restored
+    /// afterwards (deposit and mint are funded for it first, withdraw and redeem use the shares already
+    /// held). When the bound goes through, the vault refused a small amount, which no max sentence covers:
+    /// the input is discarded and recorded. When the bound reverts too, or the retry cannot be set up, this
+    /// returns and the caller fails: nothing here discards on its own, so a vault cannot turn a fail into a
+    /// discard by making the retry's setup revert.
+    function _discardIfAcceptedAt(address u, bytes memory atBound, uint256 funding) internal {
+        uint256 snap = vm.snapshotState();
+        bool ok;
+        if (funding == 0 || _tryFund(u, funding)) (ok,) = _callVault(u, atBound);
+        vm.revertToStateAndDelete(snap);
+        if (!ok) return;
+        _recordEvent("min-amount");
+        vm.assume(false);
+    }
+
+    /// _fund without discarding: false when the balance or the approval cannot be set.
+    function _tryFund(address u, uint256 amount) internal returns (bool) {
+        if (!_tryGive(u, amount)) return false;
+        vm.prank(u);
+        (bool ok, bytes memory ret) = asset.call(abi.encodeWithSelector(0x095ea7b3, vault, amount));
+        return ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool))));
+    }
+
+    /// _read without discarding: false when the view call reverts or answers short.
+    function _tryRead(bytes memory data) internal view returns (bool, uint256) {
+        (bool ok, bytes memory ret) = vault.staticcall(data);
+        if (!ok || ret.length < 32) return (false, 0);
+        return (true, abi.decode(ret, (uint256)));
+    }
+
+    /// The property failed: the action reverted within the advertised max. The reason names the action, the
+    /// amount, the raw revert selector and the max. It never carries revert text, so a vault cannot shape it.
+    function _failMax(bytes memory ret, string memory action, uint256 amount, string memory maxName, uint256 max) internal pure {
+        revert(string.concat(action, "(", vm.toString(amount), ") reverted with ", _selectorOf(ret), " while ", maxName, " is ", vm.toString(max)));
+    }
+
+    function _mintFunding(uint256 need) internal view returns (uint256) {
+        return 2 * need + cap / 1_000_000;
+    }
+
+    /// Records the precompile with the running test's selector (sf-events/<run>.missing-precompile.log) and
+    /// stops with SfForkGaps' prefix. The runner reports inconclusive only when both are there: a vault can
+    /// revert with the same text, but it cannot write the event, which follows the recorded state diff alone.
+    function _stopOnMissingPrecompile(address missing) internal {
+        string memory runId = vm.envOr("SF_RUN_ID", string(""));
+        if (bytes(runId).length != 0) {
+            vm.writeLine(
+                string.concat("sf-events/", runId, ".missing-precompile.log"), string.concat(vm.toString(abi.encodePacked(msg.sig)), " ", vm.toString(missing))
             );
         }
+        revert(SfForkGaps.reason(missing));
     }
 
     function _selectorOf(bytes memory ret) internal pure returns (string memory) {
@@ -164,24 +316,28 @@ contract SpecfirstMaxHonored is Test {
     /// of 0, the runner reports it as not applicable rather than inconclusive.
     function _discardIfZero(uint256 max) internal {
         if (max != 0) return;
-        string memory runId = vm.envOr("SF_RUN_ID", string(""));
-        if (bytes(runId).length != 0) {
-            vm.writeLine(string.concat("sf-events/", runId, ".max-zero.log"), vm.toString(abi.encodePacked(msg.sig)));
-        }
+        _recordEvent("max-zero");
         vm.assume(false);
     }
 
-    /// Deposits a bounded amount for `u` so it holds shares; any failure here discards the input. Setup only:
-    /// a maxDeposit of 0 does not stop it (the cap is tried, as in the upstream harness), so a vault that
-    /// reports 0 everywhere still gets its maxWithdraw and maxRedeem looked at.
+    /// Appends the running test's selector to sf-events/<SF_RUN_ID>.<kind>.log. No-op when SF_RUN_ID is unset.
+    function _recordEvent(string memory kind) internal {
+        string memory runId = vm.envOr("SF_RUN_ID", string(""));
+        if (bytes(runId).length == 0) return;
+        vm.writeLine(string.concat("sf-events/", runId, ".", kind, ".log"), vm.toString(abi.encodePacked(msg.sig)));
+    }
+
+    /// Deposits a bounded amount for `u` so it holds shares; any failure here discards the input, except a
+    /// revert at a precompile this fork lacks, which stops the test as in _callVault. Setup only: a maxDeposit
+    /// of 0 does not stop it (the cap is tried, as in the upstream harness), so a vault that reports 0
+    /// everywhere still gets its maxWithdraw and maxRedeem looked at.
     function _holdShares(address u, uint256 amount) internal {
         uint256 maxDep = _read(abi.encodeCall(ISfVault.maxDeposit, (u)));
         uint256 hi = maxDep > 0 && maxDep < cap ? maxDep : cap;
         uint256 a = bound(amount, 1, hi);
         vm.assume(_read(abi.encodeCall(ISfVault.previewDeposit, (a))) > 0);
         _fund(u, a);
-        vm.prank(u);
-        (bool ok,) = vault.call(abi.encodeCall(ISfVault.deposit, (a, u)));
+        (bool ok,) = _callVault(u, abi.encodeCall(ISfVault.deposit, (a, u)));
         vm.assume(ok);
     }
 

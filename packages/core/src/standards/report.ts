@@ -35,23 +35,32 @@ export const vaultKindSchema = z.enum(['erc4626', 'erc7535', 'erc7575']);
 export type VaultKind = z.infer<typeof vaultKindSchema>;
 
 /**
- * Why no property was exercised, when that is the case (every result not_applicable); null otherwise.
+ * Why no property was exercised, when that is the case (every result not_applicable, or every result
+ * inconclusive because the vault's deposit stops at a precompile the fork lacks); null otherwise.
  * native-asset and separate-share-token come from the pre-checks (forge did not run);
- * asset-transfer-restricted from the harness's transfer probe; setup-reverted from any other setUp revert.
+ * asset-transfer-restricted from the harness's transfer probe; missing-precompile from its deposit probe;
+ * setup-reverted from any other setUp revert.
  */
-export const skipReasonSchema = z.enum(['native-asset', 'separate-share-token', 'asset-transfer-restricted', 'setup-reverted']);
+export const skipReasonSchema = z.enum(['native-asset', 'separate-share-token', 'asset-transfer-restricted', 'missing-precompile', 'setup-reverted']);
 export type SkipReason = z.infer<typeof skipReasonSchema>;
 
 /** The fixed prefix both suites' setUp revert with when test users cannot move the asset. */
 export const RESTRICTED_ASSET_PREFIX = 'specfirst: asset transfers are restricted for test users';
 /** Reason text of every property of a vault whose asset restricts transfers. */
 export const RESTRICTED_ASSET_NOTE = 'asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances';
+/**
+ * The fixed prefix (SfForkGaps.PREFIX) a setUp or an sf- property reverts with when a vault call reverted after
+ * reaching a precompile Monad has and forge's EVM lacks (staking 0x1000, reserve balance 0x1001, P256 0x0100).
+ */
+export const MISSING_PRECOMPILE_PREFIX = 'specfirst: fork lacks a Monad precompile the vault calls';
+/** Reason text of a property stopped by a missing precompile; the precompile address follows in parentheses. */
+export const MISSING_PRECOMPILE_NOTE = "the vault calls a Monad precompile forge's EVM lacks, so the call reverts on the fork only; not attributable to the vault";
 export type StandardName = z.infer<typeof standardNameSchema>;
 
 /**
  * pass: the property held on every fuzz run. fail: forge found a counterexample.
- * inconclusive: the property could not be exercised (every input rejected, `deal` could not fund users, or
- * the fork RPC failed, including in setUp).
+ * inconclusive: the property could not be exercised (every input rejected, `deal` could not fund users, the
+ * fork RPC failed, or a vault call stopped at a precompile the fork lacks, including in setUp).
  * not_applicable: the suite could not start on this contract (setUp reverted, e.g. no asset()).
  * Policy: only pass counts as verified. inconclusive and not_applicable are "not verified" (exit 17), so a
  * contract that imitates a forge message to turn a fail into inconclusive gains nothing.
@@ -303,6 +312,52 @@ export interface ParseStandardOptions {
   depositRevertEvents?: string;
   /** Content of the sf- suite's max-zero event file for this run: one selector per input discarded for a max of 0. */
   maxZeroEvents?: string;
+  /** Content of the sf- suite's min-amount event file: one selector per input discarded as a minimum-amount refusal. */
+  minAmountEvents?: string;
+  /** Content of the missing-precompile event file both suites write: "<selector> <precompile>" per stop. */
+  missingPrecompileEvents?: string;
+}
+
+/** Note on an sf- property that discarded inputs because a smaller amount reverted while its upper bound went through. */
+export function minAmountNote(n: number): string {
+  return `a smaller amount reverted ${n} times while the upper bound went through (a minimum amount, which no max sentence covers; inputs discarded)`;
+}
+
+/**
+ * Test name -> precompile address, from the harness's missing-precompile event file: one line per stop,
+ * "<selector of the test or setUp> <precompile address>", written only after the recorded state diff showed a
+ * reverting vault call that reached a precompile this fork lacks. A vault cannot write it. Unknown selectors and
+ * malformed lines are ignored.
+ */
+export function missingPrecompilesOf(events: string, testKeys: Iterable<string>): Map<string, string> {
+  const bySelector = selectorsOf(testKeys);
+  const out = new Map<string, string>();
+  for (const line of events.split('\n')) {
+    const m = /^(0x[0-9a-fA-F]{8}) (0x[0-9a-fA-F]{40})$/.exec(line.trim());
+    const test = m ? bySelector.get(m[1]!.toLowerCase()) : undefined;
+    if (test && !out.has(test)) out.set(test, m![2]!);
+  }
+  return out;
+}
+
+function missingPrecompileReason(precompile: string): string {
+  return `${MISSING_PRECOMPILE_NOTE} (${precompile})`;
+}
+
+/**
+ * A property that forge failed with the harness's missing-precompile prefix is inconclusive, but only when the
+ * harness also wrote the event for that test. The text alone can come from a vault (a setUp reason is revert
+ * text verbatim), the event only from the harness after the state diff showed the precompile call.
+ */
+function withMissingPrecompile(r: StandardPropertyResult, forgeReason: string | null | undefined, precompile: string | undefined): StandardPropertyResult {
+  if (r.status !== 'fail' || !precompile || !(forgeReason ?? '').startsWith(`${MISSING_PRECOMPILE_PREFIX} (`)) return r;
+  return { id: r.id, test: r.test, description: r.description, status: 'inconclusive', ...(r.runs !== undefined ? { runs: r.runs } : {}), reason: missingPrecompileReason(precompile) };
+}
+
+function withMinAmountNote(r: StandardPropertyResult, n: number | undefined): StandardPropertyResult {
+  if (!n) return r;
+  const note = minAmountNote(n);
+  return { ...r, reason: r.reason ? `${r.reason}; ${note}` : note };
 }
 
 /** Reason of an sf- property whose every discarded input had a max of 0. */
@@ -325,7 +380,8 @@ function withMaxZero(r: StandardPropertyResult, maxZero: number | undefined): St
 /**
  * Turns `forge test --json` stdout of a standard suite into one result per property, in `properties` order.
  * A property whose suite's setUp() failed is not_applicable, or inconclusive when the failure is a fork RPC
- * error. Any other property forge did not report is inconclusive.
+ * error or a deposit that stopped at a precompile the fork lacks. Any other property forge did not report is
+ * inconclusive.
  * Returns null when the output holds no forge JSON (compile error, fork error); the caller reports stderr.
  */
 export function parseStandardForgeJson(
@@ -351,6 +407,8 @@ export function parseStandardForgeJson(
   const extra = [...byTest.keys()].filter((t) => !known.has(t)).map((t) => ({ test: t, id: t, description: 'not in the property table' }));
   const deposits = opts.depositRevertEvents ? depositRevertCounts(opts.depositRevertEvents, keys) : new Map<string, number>();
   const maxZero = opts.maxZeroEvents ? depositRevertCounts(opts.maxZeroEvents, keys) : new Map<string, number>();
+  const minAmount = opts.minAmountEvents ? depositRevertCounts(opts.minAmountEvents, keys) : new Map<string, number>();
+  const precompiles = opts.missingPrecompileEvents ? missingPrecompilesOf(opts.missingPrecompileEvents, keys) : new Map<string, string>();
   return [...properties, ...extra].map((p): StandardPropertyResult => {
     const base = { id: p.id, test: p.test, description: p.description };
     const r = byTest.get(p.test);
@@ -362,15 +420,20 @@ export function parseStandardForgeJson(
       if (setupFailure.startsWith(`${RESTRICTED_ASSET_PREFIX} (`)) {
         return { ...base, status: 'not_applicable', reason: `${RESTRICTED_ASSET_NOTE} ${setupFailure.slice(RESTRICTED_ASSET_PREFIX.length + 1)}` };
       }
+      // The prefix counts only with the harness's event for setUp; the address comes from the event, not the text.
+      const precompile = precompiles.get('setUp');
+      if (precompile && setupFailure.startsWith(`${MISSING_PRECOMPILE_PREFIX} (`)) return { ...base, status: 'inconclusive', reason: missingPrecompileReason(precompile) };
       return { ...base, status: 'not_applicable', reason: `setUp failed: ${setupFailure}` };
     }
     if (!r) return { ...base, status: 'inconclusive', reason: 'no result in forge output' };
-    return withMaxZero(withDepositNote(classify(p, r), deposits.get(p.test)), maxZero.get(p.test));
+    const classified = withMissingPrecompile(classify(p, r), r.reason, precompiles.get(p.test));
+    return withMinAmountNote(withMaxZero(withDepositNote(classified, deposits.get(p.test)), maxZero.get(p.test)), minAmount.get(p.test));
   });
 }
 
 /** skipReason of a run whose properties forge reported (the pre-checks set their own). */
 export function skipReasonOf(results: readonly Pick<StandardPropertyResult, 'status' | 'reason'>[]): SkipReason | null {
+  if (results.length > 0 && results.every((r) => r.status === 'inconclusive' && r.reason?.startsWith(MISSING_PRECOMPILE_NOTE))) return 'missing-precompile';
   if (results.length === 0 || !results.every((r) => r.status === 'not_applicable')) return null;
   return results.every((r) => r.reason?.startsWith(RESTRICTED_ASSET_NOTE)) ? 'asset-transfer-restricted' : 'setup-reverted';
 }

@@ -233,6 +233,8 @@ async function runForgeSuite(i: {
   const runId = `${Date.now()}-${process.pid}-${randomBytes(4).toString('hex')}`;
   const eventsFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.deposit-below-max.log`);
   const maxZeroFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.max-zero.log`);
+  const minAmountFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.min-amount.log`);
+  const precompileFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.missing-precompile.log`);
   const args = [
     'test',
     ...i.select,
@@ -276,7 +278,11 @@ async function runForgeSuite(i: {
     const doc = extractForgeDoc(stdout);
     const events = await readFile(eventsFile, 'utf8').catch(() => '');
     const maxZeroEvents = await readFile(maxZeroFile, 'utf8').catch(() => '');
-    const results = doc ? parseStandardForgeJson(JSON.stringify(doc), i.properties, { depositRevertEvents: events, maxZeroEvents }) : null;
+    const minAmountEvents = await readFile(minAmountFile, 'utf8').catch(() => '');
+    const missingPrecompileEvents = await readFile(precompileFile, 'utf8').catch(() => '');
+    const results = doc
+      ? parseStandardForgeJson(JSON.stringify(doc), i.properties, { depositRevertEvents: events, maxZeroEvents, minAmountEvents, missingPrecompileEvents })
+      : null;
     if (!doc || !results) {
       const out = mask([String(proc.stderr ?? '').trim(), stdout.trim()].filter(Boolean).join('\n'));
       throw new StandardCheckError(`forge produced no test results (exit ${proc.exitCode}): ${out.split('\n').slice(0, 12).join('\n') || 'no output'}`);
@@ -286,6 +292,8 @@ async function runForgeSuite(i: {
     if (!i.failurePersistDir) await rm(persist, { recursive: true, force: true });
     await rm(eventsFile, { force: true });
     await rm(maxZeroFile, { force: true });
+    await rm(minAmountFile, { force: true });
+    await rm(precompileFile, { force: true });
   }
 }
 

@@ -20,7 +20,9 @@ import {
   SPECFIRST_ERC4626_PROPERTIES,
   standardCheckExitCode,
   RESTRICTED_ASSET_NOTE,
+  MISSING_PRECOMPILE_NOTE,
   maxZeroNote,
+  minAmountNote,
   summarize,
   type StandardWorkspace,
 } from '../src/index.js';
@@ -87,7 +89,7 @@ describe.skipIf(SKIP)('ERC-4626 harness with forge, offline (pinned cache presen
     }
   });
 
-  it('mock vaults: maxDeposit revert fails maxDeposit only, packed balances are funded, decimals falls back, the transfer probe restores state, deposit reverts are recorded', async () => {
+  it('mock vaults: maxDeposit revert fails maxDeposit only, packed balances are funded, decimals falls back, the transfer and deposit probes restore state, deposit reverts are recorded', async () => {
     await copyFile(path.join(here, 'fixtures/standards/review/M.sol'), path.join(ws.dir, 'src/M.sol'));
     await copyFile(path.join(here, 'fixtures/standards/review/Exp.t.sol'), path.join(ws.dir, 'test/Exp.t.sol'));
     const paused = await forge(['test', '--offline', '--match-contract', '^ModePaused$', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '--json', '-vv']);
@@ -106,11 +108,28 @@ describe.skipIf(SKIP)('ERC-4626 harness with forge, offline (pinned cache presen
       Object.entries(x.test_results).map(([k, v]) => [k.split('(')[0], v.status]),
     );
     expect(probeResults.sort()).toEqual([
+      ['test_depositProbeLeavesOtherRevertsAndNoState', 'Success'],
+      ['test_depositProbeStopsAtMissingPrecompile', 'Success'],
       ['test_probeLeavesNoState', 'Success'],
       ['test_probeRejectsFalseTransfer', 'Success'],
       ['test_probeRejectsLockedToken', 'Success'],
+      ['test_sfDepositProbeStopsAtMissingPrecompile', 'Success'],
       ['test_sfProbeLeavesNoState', 'Success'],
       ['test_sfProbeRejectsLockedToken', 'Success'],
+    ]);
+
+    // SfForkGaps: a reverting call that reached a listed precompile this EVM lacks, and nothing else.
+    const gaps = await forge(['test', '--offline', '--match-contract', '^ForkGaps$', '--json']);
+    const gapResults = Object.values(JSON.parse(String(gaps.stdout)) as Record<string, { test_results: Record<string, { status: string }> }>).flatMap((x) =>
+      Object.entries(x.test_results).map(([k, v]) => [k.split('(')[0], v.status]),
+    );
+    expect(gapResults.sort()).toEqual([
+      ['test_gapsFlagReserveBalanceAndP256', 'Success'],
+      ['test_gapsFlagStakingCallInRevertedFrame', 'Success'],
+      ['test_gapsIgnoreBalanceRead', 'Success'],
+      ['test_gapsIgnorePrecompileThisEvmHas', 'Success'],
+      ['test_gapsIgnoreUnlistedEmptyAccountAndEthereumPrecompiles', 'Success'],
+      ['test_gapsReason', 'Success'],
     ]);
 
     const closed = await forge(['test', '--offline', '--match-contract', '^ModeDepositRevertsBelowMax$', '--match-test', 'test_deposit\\(', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '--json', '-vv']);
@@ -161,6 +180,10 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
       'RecipientAllowlistToken',
       'RestrictedAssetVault',
       'PartialRestrictedVault',
+      'PrecompileVault',
+      'FakePrecompileTextVault',
+      'FakePrecompileSetupVault',
+      'MintSurchargeVault',
     ]) {
       const art = JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${name}.json`), 'utf8')) as { deployedBytecode: { object: string } };
       code[name] = art.deployedBytecode.object;
@@ -182,6 +205,10 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000005', code.RecipientAllowlistToken]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000061', code.RestrictedAssetVault]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000062', code.PartialRestrictedVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000071', code.PrecompileVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000073', code.FakePrecompileTextVault]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000074', code.FakePrecompileSetupVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000075', code.MintSurchargeVault]);
     await rpc('anvil_mine', ['0x1']);
   });
   afterAll(async () => {
@@ -271,6 +298,41 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     expect(report.skipReason).toBe('asset-transfer-restricted');
   });
 
+  it('a vault that deposits through Monad staking (gMON shape): both deposit probes stop, 30 inconclusive, skipReason missing-precompile, exit 17', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000071');
+    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 30, notApplicable: 0 });
+    expect(new Set(report.results.map((r) => r.reason))).toEqual(new Set([`${MISSING_PRECOMPILE_NOTE} (0x0000000000000000000000000000000000001000)`]));
+    expect(report.skipReason).toBe('missing-precompile');
+    expect(standardCheckExitCode(report.summary)).toBe(17);
+  });
+
+  it('a vault that reverts with the missing-precompile text but calls no precompile keeps its fails', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000073');
+    const r = new Map(report.results.map((x) => [x.id, x]));
+    // test_maxMint calls maxMint directly, so the vault's own text is forge's reason; without the event it stays fail.
+    expect(r.get('maxMint')).toMatchObject({ status: 'fail', reason: 'specfirst: fork lacks a Monad precompile the vault calls (0x0000000000000000000000000000000000001000)' });
+    // The sf- reason never carries revert text: the selector of Error(string) and the max, so it stays fail too.
+    expect(r.get('sf-maxWithdraw-honored')!.status).toBe('fail');
+    expect(r.get('sf-maxWithdraw-honored')!.reason).toMatch(/^withdraw\(\d+\) reverted with selector 0x08c379a0 while maxWithdraw is \d+$/);
+    expect(report.results.some((x) => x.reason?.startsWith(MISSING_PRECOMPILE_NOTE))).toBe(false);
+    expect(report.skipReason).toBeNull();
+    expect(standardCheckExitCode(report.summary)).toBe(16);
+  });
+
+  it('a setUp revert with the missing-precompile text and no event is setup-reverted, not inconclusive', async () => {
+    const report = await check('0x5F00000000000000000000000000000000000074');
+    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
+    expect(report.results[0]!.reason).toBe('setUp failed: specfirst: fork lacks a Monad precompile the vault calls (0x0000000000000000000000000000000000001000)');
+    expect(report.skipReason).toBe('setup-reverted');
+  });
+
+  it('mint pulls more than previewMint quotes: previewMint fails, sf-maxMint-honored passes (funded at twice the quote)', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000075');
+    const r = new Map(report.results.map((x) => [x.id, x]));
+    expect(r.get('previewMint')!.status).toBe('fail');
+    expect(r.get('sf-maxMint-honored')!.status).toBe('pass');
+  });
+
   it('a vault without share() is a plain ERC-4626 vault: forge runs', async () => {
     const report = await check('0x5F00000000000000000000000000000000000031');
     expect(report.vaultKind).toBe('erc4626');
@@ -304,6 +366,9 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000032', await code('AsyncExitVault')]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000033', await code('HonestClosedExitVault')]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000063', await code('HookBlockedVault')]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000072', await code('ThresholdPrecompileVault')]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000075', await code('MintSurchargeVault')]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000076', await code('MinDepositVault')]);
     await rpc('anvil_mine', ['0x1']);
     ws = await prepareErc4626Workspace({
       cacheDir: path.join(root, 'cache'),
@@ -323,8 +388,12 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
       ['test', '--match-contract', '^SpecfirstMaxHonored$', '--fork-url', anvil.url, '--fork-block-number', '1', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '-j', '2', '--json', '-vv'],
       { cwd: ws.dir, env: forgeEnv({ SF_VAULT: vault, SF_RUN_ID: runId }), extendEnv: false, reject: false, maxBuffer: 256 * 1024 * 1024 },
     );
-    const maxZeroEvents = await readFile(path.join(ws.dir, EVENTS_DIR, `${runId}.max-zero.log`), 'utf8').catch(() => '');
-    const results = parseStandardForgeJson(String(p.stdout), SPECFIRST_ERC4626_PROPERTIES, { maxZeroEvents });
+    const events = (kind: string) => readFile(path.join(ws.dir, EVENTS_DIR, `${runId}.${kind}.log`), 'utf8').catch(() => '');
+    const results = parseStandardForgeJson(String(p.stdout), SPECFIRST_ERC4626_PROPERTIES, {
+      maxZeroEvents: await events('max-zero'),
+      minAmountEvents: await events('min-amount'),
+      missingPrecompileEvents: await events('missing-precompile'),
+    });
     if (!results) throw new Error(String(p.stderr));
     return new Map(results.map((x) => [x.id, x]));
   };
@@ -356,6 +425,30 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     expect(r.get('sf-maxDeposit-honored')!.status).toBe('pass');
   });
 
+
+  it('a precompile met inside the properties (deposits above 10 tokens are staked): inconclusive with the precompile, never fail', async () => {
+    const r = await sf('0x5f00000000000000000000000000000000000072');
+    expect([...r.values()].filter((x) => x.status === 'fail')).toEqual([]);
+    for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored']) {
+      expect(r.get(id)).toMatchObject({ status: 'inconclusive', reason: `${MISSING_PRECOMPILE_NOTE} (0x0000000000000000000000000000000000001000)` });
+    }
+  });
+
+  it('mint pulls more than previewMint quotes: sf-maxMint-honored passes, the extra is previewMint\'s finding', async () => {
+    const r = await sf('0x5f00000000000000000000000000000000000075');
+    expect(r.get('sf-maxMint-honored')!.status).toBe('pass');
+  });
+
+  it('a minimum deposit and mint below an unlimited max: the bound goes through, so sf-maxDeposit and sf-maxMint pass with the discards noted', async () => {
+    const r = await sf('0x5f00000000000000000000000000000000000076');
+    for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored']) {
+      const x = r.get(id)!;
+      expect(x.status).toBe('pass');
+      const n = Number(/^a smaller amount reverted (\d+) times/.exec(x.reason ?? '')?.[1]);
+      expect(n).toBeGreaterThan(0);
+      expect(x.reason).toBe(minAmountNote(n));
+    }
+  });
 
   it('a freely transferable asset behind a vault hook that refuses deposits: the probe passes, sf-maxDeposit fails', async () => {
     const r = await sf('0x5f00000000000000000000000000000000000063');

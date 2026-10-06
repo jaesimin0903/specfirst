@@ -87,3 +87,23 @@ local-restricted-asset.json, local-partial-restricted.json, local-hook-blocked.j
   "asset token restricts transfers ... (selector 0x82b42900)". HookBlockedVault (0x5f..63) keeps a free
   asset but refuses deposits in the vault (like Euler 0xf26d..95Bf): the probe passes, sf-maxDeposit-honored
   and sf-maxMint-honored fail with NotAuthorized() 0xea8e4eb5, the rest are inconclusive.
+
+Monad precompiles, mint funding and minimum amounts (mock-vaults.sol, used live by standards.forge.test.ts on a
+local anvil fork, no recorded JSON):
+  PrecompileVault (0x5f..71)           deposit and mint stake through Monad's staking precompile 0x1000, like
+                                       Magma gMON; forge's EVM has no such precompile. Both setUp deposit probes
+                                       stop: 30 inconclusive, skipReason missing-precompile.
+  ThresholdPrecompileVault (0x5f..72)  stakes only deposits and mints above 10 tokens, so the setUp probe passes
+                                       and the sf- properties meet the precompile themselves: inconclusive.
+  FakePrecompileTextVault (0x5f..73)   maxMint and withdraw revert with the harness's missing-precompile text and
+                                       call no precompile: maxMint and sf-maxWithdraw-honored stay fail.
+  FakePrecompileSetupVault (0x5F..74)  asset() reverts with that text: 30 not_applicable, setup-reverted.
+  MintSurchargeVault (0x5f..75)        mint pulls 2% plus 2 more than previewMint quotes (hyAUSD shape):
+                                       previewMint fails, sf-maxMint-honored passes. The harness before 2026-10-07
+                                       (1% more funding) failed sf-maxMint-honored with Panic 0x4e487b71.
+  MinDepositVault (0x5f..76)           deposit and mint refuse amounts below 500,000 tokens under an unlimited max:
+                                       sf-maxDeposit-honored and sf-maxMint-honored pass with the min-amount note.
+                                       The harness before 2026-10-07 failed both with BelowMinimum() 0x860b82a9.
+review/M.sol Vault mode 5 deposits through 0x1000; review/Exp.t.sol ForkGaps covers SfForkGaps on recorded
+state diffs (flags 0x0100, 0x1000 and 0x1001 in reverted frames, ignores other empty accounts, Ethereum
+precompiles, balance reads and a precompile the EVM has).
