@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { shortAddress } from '../../lib/format';
+import { alertSummary } from '../../lib/watch/words';
 
 interface Received {
   n: number;
@@ -10,12 +10,6 @@ interface Received {
   bytes: number;
   body: unknown;
   isAlert: boolean;
-}
-
-function summary(body: unknown): string | null {
-  const b = body as { subscriptionId?: string; subject?: string; chainId?: number; change?: { kind?: string } } | null;
-  if (!b || typeof b !== 'object' || typeof b.subject !== 'string') return null;
-  return `Subscription #${b.subscriptionId ?? '?'}: ${b.change?.kind ?? 'change'} on ${shortAddress(b.subject)}${b.chainId ? `, chain ${b.chainId}` : ''}`;
 }
 
 /** What the demo receiver got, read every three seconds. */
@@ -80,7 +74,7 @@ export function DemoHookLive({ initial, enabled }: { initial: Received[]; enable
                   <span className="soft">{it.bytes.toLocaleString('en-US')} bytes</span>
                   {it.userAgent && <span className="soft mono">{it.userAgent}</span>}
                 </p>
-                {summary(it.body) && <p style={{ margin: '4px 0 0', fontSize: 14 }}>{summary(it.body)}</p>}
+                {alertSummary(it.body) && <p style={{ margin: '4px 0 0', fontSize: 14 }}>{alertSummary(it.body)}</p>}
                 <pre>{JSON.stringify(it.body, null, 2)}</pre>
               </li>
             ))}

@@ -307,6 +307,10 @@ html[data-theme='dark'] .sb {
   background: linear-gradient(90deg, var(--pass) 50%, var(--fail) 50%);
   box-shadow: none;
 }
+/* A fall of the share value is a fact about two blocks, not a pass or a fail: a plain marker. */
+.sw-kind[data-change='price-drop'] i {
+  background: var(--ink-soft);
+}
 .sw-kind[data-kind='error'],
 .sw-kind[data-kind='probe-rejected'] {
   color: var(--ink-soft);

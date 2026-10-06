@@ -1,6 +1,7 @@
 import { formatBlock } from '../board/reasons';
+import { shortAddress } from '../format';
 import type { StatusCounts } from '../board/types';
-import type { ChangeKind, FeedKind, WatchStage } from './core';
+import { dropPercentText, type ChangeKind, type FeedKind, type WatchStage } from './core';
 
 /* Words the watch pages use for the feed. Client-safe. */
 
@@ -21,6 +22,7 @@ export const CHANGE_LABEL: Readonly<Record<ChangeKind, string>> = {
   recovered: 'Recovered',
   changed: 'Result changed',
   implementation: 'New implementation',
+  'price-drop': 'Share value fell',
 };
 
 export const STAGE_LABEL: Readonly<Record<WatchStage, string>> = {
@@ -28,6 +30,25 @@ export const STAGE_LABEL: Readonly<Record<WatchStage, string>> = {
   checking: 'Checking',
   attesting: 'Attesting',
 };
+
+/** "Share value fell 0.42% between block 110,977,300 and block 110,977,400." A fact about two blocks, not a verdict. */
+export function priceDropSentence(c: { dropBps: number; fromBlock: string; toBlock: string }): string {
+  return `Share value fell ${dropPercentText(c.dropBps)} between block ${blockText(c.fromBlock)} and block ${blockText(c.toBlock)}.`;
+}
+
+/**
+ * One line on a body the demo receiver got, or null when it does not name a subject: "Subscription #0: regressed on
+ * 0x1234..abcd, chain 143", or for a price-drop alert "Subscription #0: share value fell 0.42% between block 10 and
+ * block 12 on ...". The body is untrusted: only numbers and strings of the right type are shown.
+ */
+export function alertSummary(body: unknown): string | null {
+  const b = body as { subscriptionId?: string; subject?: string; chainId?: number; kind?: string; change?: { kind?: string; dropBps?: unknown; fromBlock?: unknown; toBlock?: unknown } } | null;
+  if (!b || typeof b !== 'object' || typeof b.subject !== 'string') return null;
+  const c = b.change;
+  const drop = b.kind === 'price-drop' && c && typeof c.dropBps === 'number' && typeof c.fromBlock === 'string' && typeof c.toBlock === 'string';
+  const what = drop ? `share value fell ${dropPercentText(c.dropBps as number)} between block ${c.fromBlock as string} and block ${c.toBlock as string}` : (c?.kind ?? 'change');
+  return `Subscription #${b.subscriptionId ?? '?'}: ${what} on ${shortAddress(b.subject)}${b.chainId ? `, chain ${b.chainId}` : ''}`;
+}
 
 /** "26 pass, 0 fail, 0 inconclusive, 4 not applicable" */
 export function countsText(s: StatusCounts): string {
@@ -97,10 +118,11 @@ export function foundSentence(f: {
 }
 
 /**
- * The title of an inbox item: "First result" for a vault's first outcome (change kind new), "Result changed" only
- * for a real change, then the first check since the subscription started and deliveries.
+ * The title of an inbox item: "First result" for a vault's first outcome (change kind new), "Share value fell" for a
+ * confirmed fall of the share value, "Result changed" only for a real change, then the first check since the
+ * subscription started and deliveries.
  */
 export function inboxNote(kind: 'change' | 'first-check' | 'delivery', changeKind: ChangeKind | null | undefined): string {
-  if (kind === 'change') return changeKind === 'new' ? 'First result' : 'Result changed';
+  if (kind === 'change') return changeKind === 'new' ? 'First result' : changeKind === 'price-drop' ? 'Share value fell' : 'Result changed';
   return kind === 'first-check' ? 'First check since you subscribed' : 'Delivery';
 }

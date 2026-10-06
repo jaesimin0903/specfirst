@@ -1,5 +1,5 @@
 import type { StatusCounts, VaultStatus } from '../board/types';
-import type { ChangeKind, FeedKind, FeedSource, WatchStage } from './core';
+import type { CheckChangeKind, FeedKind, FeedSource, WatchStage } from './core';
 
 /*
  * JSON the watch API routes return and the watch components read. Block numbers and wei are decimal strings,
@@ -34,6 +34,14 @@ export interface FoundJson {
   firstDepositBlock: string | null;
 }
 
+/**
+ * A change of a check's result, or a confirmed fall of the share value: convertToAssets of one share read at
+ * fromBlock and at toBlock (asset base units), the fall in basis points rounded down.
+ */
+export type ChangeJson =
+  | { kind: CheckChangeKind; from: OutcomeJson | null; to: OutcomeJson }
+  | { kind: 'price-drop'; fromAssetsPerShare: string; toAssetsPerShare: string; dropBps: number; fromBlock: string; toBlock: string };
+
 export interface FeedEventJson {
   seq: number;
   at: string;
@@ -66,7 +74,7 @@ export interface FeedEventJson {
     reportMatches: boolean | null;
   } | null;
   attestation: { id: string; txHash: string; txUrl: string; supersedes: string | null } | null;
-  change: { kind: ChangeKind; from: OutcomeJson | null; to: OutcomeJson } | null;
+  change: ChangeJson | null;
   alert: { subscriptionId: string; subscriber: string; channel: 'webhook' | 'inbox'; ok: boolean; status: number | null } | null;
   reason: string | null;
   /** For checks and attestations: how the subject was found, so a factory find can show deploy block against check time. */

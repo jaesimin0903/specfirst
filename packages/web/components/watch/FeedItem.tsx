@@ -1,5 +1,5 @@
 import type { FeedEventJson } from '../../lib/watch/types';
-import { blockText, CHANGE_LABEL, clock, countsText, failedDiff, KIND_LABEL, secondsBetween, stamp } from '../../lib/watch/words';
+import { blockText, CHANGE_LABEL, clock, countsText, failedDiff, KIND_LABEL, priceDropSentence, secondsBetween, stamp } from '../../lib/watch/words';
 import { formatDuration } from '../../lib/desk/format';
 import { shortAddress, shortHash } from '../../lib/format';
 import { VaultChip } from '../board/StatusChip';
@@ -17,7 +17,7 @@ export function FeedItem({ e, showVault = true, fresh = false, note }: { e: Feed
         {clock(e.at)}
         <small>{e.at.slice(5, 10)}</small>
       </time>
-      <span className="sw-kind" data-kind={e.kind}>
+      <span className="sw-kind" data-kind={e.kind} data-change={e.kind === 'changed' ? e.change?.kind : undefined}>
         <i aria-hidden="true" />
         {e.kind === 'changed' && e.change
           ? CHANGE_LABEL[e.change.kind]
@@ -150,6 +150,18 @@ function FoundTiming({ e }: { e: FeedEventJson }) {
 function ChangeDetail({ e }: { e: FeedEventJson }) {
   const ch = e.change;
   if (!ch) return null;
+  if (ch.kind === 'price-drop') {
+    const units = (v: string) => BigInt(v).toLocaleString('en-US');
+    return (
+      <>
+        <p className="sw-line">{priceDropSentence(ch)}</p>
+        <p className="sw-line soft">
+          convertToAssets of one share, in the asset&apos;s base units: {units(ch.fromAssetsPerShare)} at block {blockText(ch.fromBlock)}, {units(ch.toAssetsPerShare)} at
+          block {blockText(ch.toBlock)}. Seen at two blocks before it was recorded; the watcher re-checks the vault after a drop.
+        </p>
+      </>
+    );
+  }
   const diff = failedDiff(ch.from?.failed ?? [], ch.to.failed);
   return (
     <>
