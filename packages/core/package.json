@@ -18,6 +18,10 @@
     "./desk": {
       "types": "./dist/desk/index.d.ts",
       "import": "./dist/desk/index.js"
+    },
+    "./subs": {
+      "types": "./dist/subs/index.d.ts",
+      "import": "./dist/subs/index.js"
     }
   },
   "files": [
