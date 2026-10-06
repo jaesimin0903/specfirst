@@ -74,6 +74,10 @@ specfirst check <address> --standard erc4626 --block 109061472 --runs 16
 | 출금 경로가 막힌 볼트 | 기본 거부 한도 65536 때문에 1시간 타임아웃 | 거부 한도 4096 (53672f1) |
 | 2KB OpenZeppelin 프록시 | 프록시로 식별 못 해 다른 구현과 합쳐질 위험 | 4KB까지 프록시로 인정 (da049ab) |
 | a16z의 revert 입력 폐기 | max 값 위반이 inconclusive로만 보임 | sf 속성 4개 추가 (53672f1) |
+| forge EVM에 없는 Monad precompile | gMON 예치가 fork에서만 revert해 sf-maxDeposit, sf-maxMint가 fail | 볼트 호출의 상태 차이에서 0x0100, 0x1000, 0x1001 호출을 찾으면 inconclusive. 판정은 revert 문자열이 아니라 하네스만 쓰는 이벤트 파일로 (f3f28c9) |
+| mint 자금 여유 1% | previewMint보다 많이 가져가는 hyAUSD가 sf-maxMint fail | previewMint의 2배와 1토큰 지급, 초과분은 previewMint 속성의 몫 (f3f28c9) |
+| 최소 금액 거부 | hyAUSD deposit(3)의 거부가 sf-maxDeposit fail로 기록 | 상한에서 다시 시도해 통과하면 입력 폐기와 기록, 상한도 revert하면 fail 유지 (f3f28c9) |
+| 빌드가 다른 프로세스의 캐시 공유 | 실행 중인 forge 아래에서 하네스 파일이 다른 버전으로 바뀔 수 있음 | 작업공간 디렉터리 이름을 작업공간 파일 전체의 해시로 (8bf1d17) |
 
 ## 한계
 
