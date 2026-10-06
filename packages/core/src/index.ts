@@ -278,6 +278,7 @@ export {
   FORGE_GAS_LIMIT,
   EVENTS_DIR,
   erc4626WorkspaceDir,
+  erc4626WorkspaceFiles,
   type StandardWorkspace,
   type PrepareWorkspaceInput,
 } from './standards/workspace.js';

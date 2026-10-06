@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -59,14 +59,27 @@ export function defaultCacheDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(homedir(), '.cache', 'specfirst');
 }
 
+/** What a workspace holds besides lib/, by workspace path: the shipped Solidity sources and foundry.toml. */
+export function erc4626WorkspaceFiles(): Record<string, string> {
+  return {
+    [ERC4626_HARNESS_PATH]: readFileSync(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8'),
+    [ERC4626_SF_PROPERTIES_PATH]: readFileSync(erc4626SourceFile('SpecfirstMaxHonored.t.sol'), 'utf8'),
+    // The positive control compiles with the harness but only runs under its own --match-path.
+    [ERC4626_CONTROL_PATH]: readFileSync(erc4626SourceFile('control/SpecfirstERC4626Control.t.sol'), 'utf8'),
+    [ERC4626_CONTROL_VAULT_PATH]: readFileSync(erc4626SourceFile('control/BrokenVault.sol'), 'utf8'),
+    'foundry.toml': ERC4626_FOUNDRY_TOML,
+  };
+}
+
 /**
- * `<cacheDir>/standards/erc4626-<upstream 12>-<forge-std 12>-<foundry.toml sha256 8>`: one workspace per pin
- * pair and foundry.toml, so two versions of specfirst sharing a cache (a desk worker and a watcher of another
- * build) never rewrite each other's foundry.toml under a running forge.
+ * `<cacheDir>/standards/erc4626-<upstream 12>-<forge-std 12>-<files sha256 8>`: one workspace per pin pair and per
+ * set of files it holds (foundry.toml, the harness, the sf- properties, the control). Two versions of specfirst
+ * sharing a cache (a desk worker and a watcher of another build) never rewrite each other's files under a running
+ * forge, so the harness forge compiles is always the one whose sha256 the report records.
  */
-export function erc4626WorkspaceDir(cacheDir: string, upstream: PinnedRepo, forgeStd: PinnedRepo): string {
-  const toml = sha256Hex(ERC4626_FOUNDRY_TOML).slice(2, 10);
-  return path.join(cacheDir, 'standards', `erc4626-${upstream.commit.slice(0, 12)}-${forgeStd.commit.slice(0, 12)}-${toml}`);
+export function erc4626WorkspaceDir(cacheDir: string, upstream: PinnedRepo, forgeStd: PinnedRepo, files: Record<string, string> = erc4626WorkspaceFiles()): string {
+  const key = sha256Hex(JSON.stringify(Object.keys(files).sort().map((k) => [k, files[k]]))).slice(2, 10);
+  return path.join(cacheDir, 'standards', `erc4626-${upstream.commit.slice(0, 12)}-${forgeStd.commit.slice(0, 12)}-${key}`);
 }
 
 export interface StandardWorkspace {
@@ -213,7 +226,8 @@ export async function prepareErc4626Workspace(input: PrepareWorkspaceInput = {})
   const upstream = input.upstream ?? ERC4626_UPSTREAM;
   const forgeStd = input.forgeStd ?? { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit };
   const cacheDir = input.cacheDir ?? defaultCacheDir();
-  const dir = erc4626WorkspaceDir(cacheDir, upstream, forgeStd);
+  const files = erc4626WorkspaceFiles();
+  const dir = erc4626WorkspaceDir(cacheDir, upstream, forgeStd, files);
   const tmpRoot = path.join(cacheDir, 'standards', '.tmp');
   await mkdir(tmpRoot, { recursive: true });
   await mkdir(path.join(dir, 'src'), { recursive: true });
@@ -222,14 +236,6 @@ export async function prepareErc4626Workspace(input: PrepareWorkspaceInput = {})
   if (await ensureCheckout(path.join(dir, 'lib', 'erc4626-tests'), upstream, tmpRoot)) fetched.push(upstream.repo);
   if (await ensureCheckout(path.join(dir, 'lib', 'forge-std'), forgeStd, tmpRoot)) fetched.push(forgeStd.repo);
 
-  const files: Record<string, string> = {
-    [ERC4626_HARNESS_PATH]: await readFile(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8'),
-    [ERC4626_SF_PROPERTIES_PATH]: await readFile(erc4626SourceFile('SpecfirstMaxHonored.t.sol'), 'utf8'),
-    // The positive control compiles with the harness but only runs under its own --match-path.
-    [ERC4626_CONTROL_PATH]: await readFile(erc4626SourceFile('control/SpecfirstERC4626Control.t.sol'), 'utf8'),
-    [ERC4626_CONTROL_VAULT_PATH]: await readFile(erc4626SourceFile('control/BrokenVault.sol'), 'utf8'),
-    'foundry.toml': ERC4626_FOUNDRY_TOML,
-  };
   const removed = await prune(dir, new Set(Object.keys(files)));
   for (const [rel, content] of Object.entries(files)) await writeIfChanged(path.join(dir, rel), content, tmpRoot);
   await mkdir(path.join(dir, EVENTS_DIR), { recursive: true });

@@ -16,6 +16,7 @@ import {
   ERC4626_SF_PROPERTIES_PATH,
   erc4626SourceFile,
   erc4626WorkspaceDir,
+  erc4626WorkspaceFiles,
   EVENTS_DIR,
   prepareErc4626Workspace,
   sha256Hex,
@@ -56,7 +57,14 @@ describe('prepareErc4626Workspace (local repositories, no network)', () => {
     const { up, std, cacheDir, pins } = await setup();
     const first = await prepareErc4626Workspace({ cacheDir, ...pins() });
     expect(first.dir).toBe(erc4626WorkspaceDir(cacheDir, pins().upstream, pins().forgeStd));
-    expect(path.basename(first.dir)).toBe(`erc4626-${up.shas[1]!.slice(0, 12)}-${std.shas[0]!.slice(0, 12)}-${sha256Hex(ERC4626_FOUNDRY_TOML).slice(2, 10)}`);
+    expect(path.basename(first.dir)).toMatch(new RegExp(`^erc4626-${up.shas[1]!.slice(0, 12)}-${std.shas[0]!.slice(0, 12)}-[0-9a-f]{8}$`));
+    // The last part follows every file the workspace writes, so two builds sharing a cache never rewrite each
+    // other's harness or foundry.toml under a running forge.
+    const files = erc4626WorkspaceFiles();
+    expect(Object.keys(files).sort()).toEqual([ERC4626_CONTROL_VAULT_PATH, 'foundry.toml', ERC4626_CONTROL_PATH, ERC4626_HARNESS_PATH, ERC4626_SF_PROPERTIES_PATH].sort());
+    for (const k of Object.keys(files)) {
+      expect(erc4626WorkspaceDir(cacheDir, pins().upstream, pins().forgeStd, { ...files, [k]: `${files[k]}\n` })).not.toBe(first.dir);
+    }
     expect(first.fetched).toEqual([up.url, std.url]);
     expect(await git(path.join(first.dir, 'lib/erc4626-tests'), 'rev-parse', 'HEAD')).toBe(up.shas[1]);
     const harness = await readFile(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8');
