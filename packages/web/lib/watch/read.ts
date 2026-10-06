@@ -71,7 +71,10 @@ const locks = new Map<string, Promise<unknown>>();
 function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = locks.get(key) ?? Promise.resolve();
   const next = prev.then(fn, fn);
-  locks.set(key, next.catch(() => {}));
+  locks.set(
+    key,
+    next.catch(() => {}),
+  );
   return next;
 }
 
@@ -105,7 +108,13 @@ export async function readFeed(file: string): Promise<FeedSnapshot> {
       st = await stat(file);
     } catch (err) {
       feeds.delete(file);
-      return { available: false, problem: (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable', events: [], skipped: 0, dropped: 0 } as FeedSnapshot;
+      return {
+        available: false,
+        problem: (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable',
+        events: [],
+        skipped: 0,
+        dropped: 0,
+      } as FeedSnapshot;
     }
     let s = feeds.get(file);
     if (!s || s.ino !== st.ino || st.size < s.offset) {
@@ -184,10 +193,20 @@ export interface StatusSnapshot {
   gasCostWei: bigint | null;
 }
 
+/**
+ * The ADR's status.json, plus an optional top-level gasCostWei (decimal string, what the watcher spent on
+ * attestations) that is read beside the schema rather than through it: the ADR does not define it, so a watcher
+ * that adds it neither breaks the strict schema here nor needs this page changed.
+ */
 export function parseWatchStatus(raw: unknown): { status: WatchStatus | null; detail: string | null; gasCostWei: bigint | null } {
-  const r = watchStatusSchema.safeParse(raw);
-  const gas = (raw as { gasCostWei?: unknown } | null)?.gasCostWei;
-  const gasCostWei = typeof gas === 'string' && /^\d+$/.test(gas) ? BigInt(gas) : typeof gas === 'number' && Number.isSafeInteger(gas) && gas >= 0 ? BigInt(gas) : null;
+  let body = raw;
+  let gasCostWei: bigint | null = null;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'gasCostWei' in raw) {
+    const { gasCostWei: gas, ...rest } = raw as Record<string, unknown>;
+    body = rest;
+    gasCostWei = typeof gas === 'string' && /^\d+$/.test(gas) ? BigInt(gas) : null;
+  }
+  const r = watchStatusSchema.safeParse(body);
   if (r.success) return { status: r.data, detail: null, gasCostWei };
   const issue = r.error.issues[0];
   return { status: null, detail: issue ? `${issue.path.join('.') || '(root)'}: ${issue.message}` : 'invalid', gasCostWei };
@@ -249,4 +268,3 @@ export function clearWatchCaches(): void {
   feeds.clear();
   jsonCache.clear();
 }
-

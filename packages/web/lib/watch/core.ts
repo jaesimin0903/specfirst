@@ -7,93 +7,126 @@ import { z } from 'zod';
  * becomes a re-export of the core subpath. Nothing else in the web defines these shapes. Client-safe (viem, zod).
  */
 
-const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
-const hex = z.string().regex(/^0x[0-9a-fA-F]*$/);
+// As the ADR says: addresses checksummed (EIP-55), block numbers and wei decimal strings, times ISO 8601 UTC.
+const address = z
+  .string()
+  .regex(/^0x[0-9a-fA-F]{40}$/)
+  .refine((a) => /^0x[0-9a-fA-F]{40}$/.test(a) && getAddress(a) === a, 'expected a checksummed (EIP-55) address');
 const hash32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
-const decimal = z.string().regex(/^\d+$/);
-const isoTime = z.string().datetime({ offset: true });
+const decimal = z.string().regex(/^(0|[1-9]\d*)$/);
+const isoTime = z.string().datetime();
 const count = z.number().int().nonnegative();
 
-export const summarySchema = z.object({ pass: count, fail: count, inconclusive: count, notApplicable: count });
+export const summarySchema = z.object({ pass: count, fail: count, inconclusive: count, notApplicable: count }).strict();
 export type Summary = z.infer<typeof summarySchema>;
 
 export const feedKindSchema = z.enum(['detected', 'probe-rejected', 'queued', 'checked', 'attested', 'changed', 'alerted', 'error']);
 export type FeedKind = z.infer<typeof feedKindSchema>;
 
-export const feedSourceSchema = z.enum(['factory', 'deposit', 'upgrade', 'beacon-upgrade', 'implementation', 'first-deposit', 'sweep', 'subscribed', 'backfill']);
+export const feedSourceSchema = z.enum([
+  'factory',
+  'deposit',
+  'upgrade',
+  'beacon-upgrade',
+  'implementation',
+  'first-deposit',
+  'sweep',
+  'subscribed',
+  'backfill',
+]);
 export type FeedSource = z.infer<typeof feedSourceSchema>;
 
 export const changeKindSchema = z.enum(['new', 'regressed', 'recovered', 'changed', 'implementation']);
 export type ChangeKind = z.infer<typeof changeKindSchema>;
 
-const outcomeSchema = z.object({ summary: summarySchema, failed: z.array(z.string()) });
+const outcomeSchema = z.object({ summary: summarySchema, failed: z.array(z.string().min(1)) }).strict();
 
-export const feedCheckSchema = z.object({
-  block: decimal,
-  summary: summarySchema,
-  failed: z.array(z.string()),
-  implementationKey: hex.nullable(),
-  reportPath: z.string().min(1),
-  reportHash: hash32,
-  durationMs: count,
-});
+export const feedCheckSchema = z
+  .object({
+    block: decimal,
+    summary: summarySchema,
+    failed: z.array(z.string().min(1)),
+    implementationKey: hash32.nullable(),
+    reportPath: z.string().min(1),
+    reportHash: hash32,
+    durationMs: count,
+  })
+  .strict();
 export type FeedCheck = z.infer<typeof feedCheckSchema>;
 
-/** One line of feed.ndjson. */
-export const feedEventSchema = z.object({
-  v: z.literal(1),
-  seq: count,
-  at: isoTime,
-  kind: feedKindSchema,
-  chainId: z.number().int().positive(),
-  subject: address,
-  source: feedSourceSchema.optional(),
-  block: decimal.optional(),
-  txHash: hash32.optional(),
-  factory: z.object({ address, name: z.string() }).optional(),
-  check: feedCheckSchema.optional(),
-  attestation: z.object({ id: decimal, txHash: hash32, supersedes: decimal.nullable() }).optional(),
-  change: z.object({ kind: changeKindSchema, from: outcomeSchema.nullable(), to: outcomeSchema }).optional(),
-  alert: z
-    .object({ subscriptionId: decimal, subscriber: address, channel: z.enum(['webhook', 'inbox']), ok: z.boolean(), status: z.number().int().optional() })
-    .optional(),
-  reason: z.string().optional(),
-});
+/** One line of feed.ndjson. seq counts from 1 and never repeats. */
+export const feedEventSchema = z
+  .object({
+    v: z.literal(1),
+    seq: z.number().int().positive(),
+    at: isoTime,
+    kind: feedKindSchema,
+    chainId: z.number().int().positive(),
+    subject: address,
+    source: feedSourceSchema.optional(),
+    block: decimal.optional(),
+    txHash: hash32.optional(),
+    factory: z
+      .object({ address, name: z.string().min(1) })
+      .strict()
+      .optional(),
+    check: feedCheckSchema.optional(),
+    attestation: z.object({ id: decimal, txHash: hash32, supersedes: decimal.nullable() }).strict().optional(),
+    change: z.object({ kind: changeKindSchema, from: outcomeSchema.nullable(), to: outcomeSchema }).strict().optional(),
+    alert: z
+      .object({ subscriptionId: decimal, subscriber: address, channel: z.enum(['webhook', 'inbox']), ok: z.boolean(), status: z.number().int().optional() })
+      .strict()
+      .optional(),
+    reason: z.string().optional(),
+  })
+  .strict();
 export type FeedEvent = z.infer<typeof feedEventSchema>;
 
 export const watchStageSchema = z.enum(['probing', 'checking', 'attesting']);
 export type WatchStage = z.infer<typeof watchStageSchema>;
 
 /** status.json, rewritten atomically after every step. */
-export const watchStatusSchema = z.object({
-  v: z.literal(1),
-  chainId: z.number().int().positive(),
-  head: decimal,
-  cursor: decimal,
-  lagBlocks: count,
-  startedAt: isoTime,
-  updatedAt: isoTime,
-  running: z.object({ subject: address, source: z.string(), stage: watchStageSchema, startedAt: isoTime }).nullable(),
-  queue: z.array(z.object({ subject: address, source: z.string(), enqueuedAt: isoTime })),
-  counts: z.object({ known: count, detected24h: count, checked24h: count, attested24h: count, changed24h: count }),
-  sources: z.array(z.object({ name: z.string(), address: address.nullable(), topic0: hash32, seen: count })),
-  attestBudget: z.object({ perDay: count, usedToday: count }),
-});
+export const watchStatusSchema = z
+  .object({
+    v: z.literal(1),
+    chainId: z.number().int().positive(),
+    head: decimal,
+    cursor: decimal,
+    lagBlocks: count,
+    startedAt: isoTime,
+    updatedAt: isoTime,
+    running: z.object({ subject: address, source: feedSourceSchema, stage: watchStageSchema, startedAt: isoTime }).strict().nullable(),
+    queue: z.array(z.object({ subject: address, source: feedSourceSchema, enqueuedAt: isoTime }).strict()),
+    counts: z.object({ known: count, detected24h: count, checked24h: count, attested24h: count, changed24h: count }).strict(),
+    sources: z.array(z.object({ name: z.string().min(1), address: address.nullable(), topic0: hash32, seen: count }).strict()),
+    attestBudget: z.object({ perDay: count, usedToday: count }).strict(),
+  })
+  .strict();
 export type WatchStatus = z.infer<typeof watchStatusSchema>;
 
-export const watchVaultSchema = z.object({
-  firstSeen: z.object({ source: feedSourceSchema, block: decimal, at: isoTime }),
-  deployBlock: decimal.nullable(),
-  lastCheck: z
-    .object({ block: decimal, at: isoTime, reportPath: z.string().min(1), summary: summarySchema, failed: z.array(z.string()), implementationKey: hex.nullable() })
-    .nullable(),
-  lastAttestationId: decimal.nullable(),
-  firstDepositBlock: decimal.nullable(),
-});
+export const watchVaultSchema = z
+  .object({
+    firstSeen: z.object({ source: feedSourceSchema, block: decimal, at: isoTime }).strict(),
+    deployBlock: decimal.nullable(),
+    lastCheck: z
+      .object({
+        block: decimal,
+        at: isoTime,
+        reportPath: z.string().min(1),
+        summary: summarySchema,
+        failed: z.array(z.string().min(1)),
+        implementationKey: hash32.nullable(),
+      })
+      .strict()
+      .nullable(),
+    lastAttestationId: decimal.nullable(),
+    firstDepositBlock: decimal.nullable(),
+  })
+  .strict();
 export type WatchVault = z.infer<typeof watchVaultSchema>;
 
 /** vaults.json: lowercase address -> what the watcher knows about that vault. */
-export const watchVaultsSchema = z.object({ v: z.literal(1), vaults: z.record(z.string().regex(/^0x[0-9a-f]{40}$/), watchVaultSchema) });
+export const watchVaultsSchema = z.object({ v: z.literal(1), vaults: z.record(z.string().regex(/^0x[0-9a-f]{40}$/), watchVaultSchema) }).strict();
 export type WatchVaults = z.infer<typeof watchVaultsSchema>;
 
 /* Webhook registration (ADR 0006, "Alerts"). */
@@ -117,19 +150,22 @@ export interface VerifyWebhookOptions {
   /** unix seconds; defaults to the clock */
   now?: number;
   maxAgeSec?: number;
-  /** http:// is accepted for localhost, 127.0.0.1 and [::1] only when this is true. */
+  /** http:// is accepted for localhost and 127.0.0.1 only when this is true. */
   allowLocalHttp?: boolean;
 }
 
 export type VerifyWebhookResult = { ok: true; subscriber: `0x${string}` } | { ok: false; reason: string };
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
 
 /** Signature by the subscriber over webhookMessage, issued within maxAgeSec, and an https URL. */
 export async function verifyWebhookRegistration(reg: WebhookRegistration, o: VerifyWebhookOptions = {}): Promise<VerifyWebhookResult> {
   if (typeof reg?.subscriber !== 'string' || !isAddress(reg.subscriber, { strict: false })) return { ok: false, reason: 'subscriber is not an address' };
   if (!Number.isSafeInteger(reg.issued) || reg.issued <= 0) return { ok: false, reason: 'issued must be unix seconds' };
   if (typeof reg.signature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(reg.signature)) return { ok: false, reason: 'signature must be 65 bytes of hex' };
+  // Whitespace or control characters would change the signed text's lines.
+  if (typeof reg.url !== 'string' || /[\s\u0000-\u001f\u007f]/.test(reg.url))
+    return { ok: false, reason: 'url must not contain whitespace or control characters' };
   let url: URL;
   try {
     url = new URL(reg.url);

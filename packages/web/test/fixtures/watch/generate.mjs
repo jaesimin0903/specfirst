@@ -29,7 +29,10 @@ const templates = {
 };
 
 const addr = (n) => getAddress(`0xfeed${'0'.repeat(32)}${n.toString(16).padStart(4, '0')}`);
-const hx = (seed, bytes = 32) => `0x${Buffer.from(keccak256(toHex(`synthetic ${seed}`)).slice(2), 'hex').subarray(0, bytes).toString('hex')}`;
+const hx = (seed, bytes = 32) =>
+  `0x${Buffer.from(keccak256(toHex(`synthetic ${seed}`)).slice(2), 'hex')
+    .subarray(0, bytes)
+    .toString('hex')}`;
 const V = {
   morpho: addr(1), // found from the Morpho V2 factory at its deploy block, re-checked after its first deposit
   curvance: addr(2), // found from a first Deposit event of an unknown emitter
@@ -60,7 +63,14 @@ function report(template, vault, block, secAgo, implementationKey) {
   r.startedAt = iso(secAgo + 240);
   r.durationMs = 231000;
   r.seed = hx(`seed ${vault} ${block}`);
-  r.identity = { ...r.identity, codeHash: hx(`code ${implementationKey}`), implementationKey: hx(implementationKey), proxy: null, implementation: null, implementationKeyKind: { of: 'self', hash: 'metadataHash+maskedCodeHash' } };
+  r.identity = {
+    ...r.identity,
+    codeHash: hx(`code ${implementationKey}`),
+    implementationKey: hx(implementationKey),
+    proxy: null,
+    implementation: null,
+    implementationKeyKind: { of: 'self', hash: 'metadataHash+maskedCodeHash' },
+  };
   r.summary = summaryOf(r.results);
   const reportHash = keccak256(toHex(canonicalJson(r)));
   const file = `${block}-${reportHash.slice(2, 18)}.json`;
@@ -78,7 +88,7 @@ function report(template, vault, block, secAgo, implementationKey) {
 
 const outcome = (c) => ({ summary: c.summary, failed: c.failed });
 const events = [];
-const ev = (secAgo, kind, subject, extra = {}) => events.push({ v: 1, seq: events.length, at: iso(secAgo), kind, chainId: CHAIN, subject, ...extra });
+const ev = (secAgo, kind, subject, extra = {}) => events.push({ v: 1, seq: events.length + 1, at: iso(secAgo), kind, chainId: CHAIN, subject, ...extra });
 
 // A Morpho V2 vault, announced by its factory: checked at its deploy block (nothing to deposit into yet), then again after its first deposit.
 const deploy = 110930586;
@@ -143,16 +153,59 @@ ev(119, 'queued', V.euler, { source: 'factory' });
 ev(90, 'detected', V.metamorpho, { source: 'factory', block: '110977000', txHash: hx('tx deploy metamorpho'), factory: FACTORY.metaMorpho });
 ev(89, 'queued', V.metamorpho, { source: 'factory' });
 
-const lastCheck = (c, secAgo) => ({ block: c.block, at: iso(secAgo), reportPath: c.reportPath, summary: c.summary, failed: c.failed, implementationKey: c.implementationKey });
+const lastCheck = (c, secAgo) => ({
+  block: c.block,
+  at: iso(secAgo),
+  reportPath: c.reportPath,
+  summary: c.summary,
+  failed: c.failed,
+  implementationKey: c.implementationKey,
+});
 const vaults = {
   v: 1,
   vaults: {
-    [V.morpho.toLowerCase()]: { firstSeen: { source: 'factory', block: String(deploy), at: iso(5400) }, deployBlock: String(deploy), lastCheck: lastCheck(m3, 300), lastAttestationId: '44', firstDepositBlock: String(firstDeposit) },
-    [V.curvance.toLowerCase()]: { firstSeen: { source: 'deposit', block: String(dep), at: iso(3000) }, deployBlock: null, lastCheck: lastCheck(c2, 600), lastAttestationId: '43', firstDepositBlock: String(dep) },
-    [V.upgraded.toLowerCase()]: { firstSeen: { source: 'backfill', block: '110700000', at: iso(86000) }, deployBlock: null, lastCheck: lastCheck(u1, 4000), lastAttestationId: '42', firstDepositBlock: null },
-    [V.broken.toLowerCase()]: { firstSeen: { source: 'deposit', block: '110953000', at: iso(2400) }, deployBlock: null, lastCheck: null, lastAttestationId: null, firstDepositBlock: '110953000' },
-    [V.euler.toLowerCase()]: { firstSeen: { source: 'factory', block: '110976900', at: iso(120) }, deployBlock: '110976900', lastCheck: null, lastAttestationId: null, firstDepositBlock: null },
-    [V.metamorpho.toLowerCase()]: { firstSeen: { source: 'factory', block: '110977000', at: iso(90) }, deployBlock: '110977000', lastCheck: null, lastAttestationId: null, firstDepositBlock: null },
+    [V.morpho.toLowerCase()]: {
+      firstSeen: { source: 'factory', block: String(deploy), at: iso(5400) },
+      deployBlock: String(deploy),
+      lastCheck: lastCheck(m3, 300),
+      lastAttestationId: '44',
+      firstDepositBlock: String(firstDeposit),
+    },
+    [V.curvance.toLowerCase()]: {
+      firstSeen: { source: 'deposit', block: String(dep), at: iso(3000) },
+      deployBlock: null,
+      lastCheck: lastCheck(c2, 600),
+      lastAttestationId: '43',
+      firstDepositBlock: String(dep),
+    },
+    [V.upgraded.toLowerCase()]: {
+      firstSeen: { source: 'backfill', block: '110700000', at: iso(86000) },
+      deployBlock: null,
+      lastCheck: lastCheck(u1, 4000),
+      lastAttestationId: '42',
+      firstDepositBlock: null,
+    },
+    [V.broken.toLowerCase()]: {
+      firstSeen: { source: 'deposit', block: '110953000', at: iso(2400) },
+      deployBlock: null,
+      lastCheck: null,
+      lastAttestationId: null,
+      firstDepositBlock: '110953000',
+    },
+    [V.euler.toLowerCase()]: {
+      firstSeen: { source: 'factory', block: '110976900', at: iso(120) },
+      deployBlock: '110976900',
+      lastCheck: null,
+      lastAttestationId: null,
+      firstDepositBlock: null,
+    },
+    [V.metamorpho.toLowerCase()]: {
+      firstSeen: { source: 'factory', block: '110977000', at: iso(90) },
+      deployBlock: '110977000',
+      lastCheck: null,
+      lastAttestationId: null,
+      firstDepositBlock: null,
+    },
   },
 };
 
@@ -173,15 +226,29 @@ const status = {
   sources: [
     { name: 'Euler EVK GenericFactory', address: FACTORY.evk.address, topic0: '0x04e664079117e113faa9684bc14aecb41651cbf098b14eda271248c6d0cda57c', seen: 1 },
     { name: 'Morpho VaultV2Factory', address: FACTORY.morphoV2.address, topic0: '0x341ce009267aa0d78cc12b34155e223904a51ed49d144beb6eb8be87813edb4e', seen: 1 },
-    { name: 'MetaMorpho V1.1 factory', address: FACTORY.metaMorpho.address, topic0: '0xed8c95d05909b0f217f3e68171ef917df4b278d5addfe4dda888e90279be7d1d', seen: 1 },
-    { name: 'Euler Earn factory', address: getAddress('0xf463d4acb650cc6c4e1d6cd4d0d1b0cb224094cf'), topic0: '0x2ecfce4fdb2055c9639b56f59c2a14eeafce06a51d93d898155bc11b6141896f', seen: 0 },
-    { name: 'Neverland static wrapper factory', address: getAddress('0x81148e8e1d9910080317e11c9f178559ba23bc80'), topic0: '0x7397831292236fdc8043acf7b9d21183e46fd54f9b06bd34210068f95dd378d6', seen: 0 },
+    {
+      name: 'MetaMorpho V1.1 factory',
+      address: FACTORY.metaMorpho.address,
+      topic0: '0xed8c95d05909b0f217f3e68171ef917df4b278d5addfe4dda888e90279be7d1d',
+      seen: 1,
+    },
+    {
+      name: 'Euler Earn factory',
+      address: getAddress('0xf463d4acb650cc6c4e1d6cd4d0d1b0cb224094cf'),
+      topic0: '0x2ecfce4fdb2055c9639b56f59c2a14eeafce06a51d93d898155bc11b6141896f',
+      seen: 0,
+    },
+    {
+      name: 'Neverland static wrapper factory',
+      address: getAddress('0x81148e8e1d9910080317e11c9f178559ba23bc80'),
+      topic0: '0x7397831292236fdc8043acf7b9d21183e46fd54f9b06bd34210068f95dd378d6',
+      seen: 0,
+    },
     { name: 'ERC-4626 Deposit', address: null, topic0: '0xdcbc1c05240f31ff3ad067ef1ee35ce4997762752e3a095284754544f4c709d7', seen: 1834 },
     { name: 'EIP-1967 Upgraded', address: null, topic0: '0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b', seen: 2 },
     { name: 'EIP-1967 BeaconUpgraded', address: null, topic0: '0x1cf3b03a6cf19fa2baba4df148e9dcabedea7f8a5c07840e207e5c089be95d3e', seen: 0 },
   ],
   attestBudget: { perDay: 40, usedToday: 4 },
-  gasCostWei: '208000000000000000',
 };
 
 const lines = events.map((e) => JSON.stringify(e));

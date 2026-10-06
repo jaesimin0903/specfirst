@@ -37,7 +37,13 @@ export async function sendCancel(o: { signer: DeskSigner; contract: `0x${string}
   if (o.signer.kind === 'injected') await ensureTestnet(o.signer.provider, o.rpc);
   const pub = browserPublicClient(o.rpc);
   const wallet = walletClientFor(o.signer, o.rpc);
-  const { request } = await pub.simulateContract({ account: wallet.account!, address: o.contract, abi: checkSubscriptionsAbi, functionName: 'cancel', args: [o.id] });
+  const { request } = await pub.simulateContract({
+    account: wallet.account!,
+    address: o.contract,
+    abi: checkSubscriptionsAbi,
+    functionName: 'cancel',
+    args: [o.id],
+  });
   return wallet.writeContract(request);
 }
 

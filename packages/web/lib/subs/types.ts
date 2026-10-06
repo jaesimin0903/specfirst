@@ -68,7 +68,8 @@ export interface InboxJson {
   ended: number;
   /** Newest first. */
   items: InboxItemJson[];
-  webhook: { url: string; issued: number } | null;
+  /** The registered webhook's origin only: a full webhook URL can be a secret. */
+  webhook: { origin: string; issued: number } | null;
   error: string | null;
   readAt: string;
 }

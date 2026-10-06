@@ -10,6 +10,7 @@ import { resolveReportPath } from '../lib/watch/paths';
  * running", a bad line is skipped and counted, a half-written line waits for the next read.
  */
 
+// seq counts from 1, so line(n) is the n-th event.
 const line = (seq: number, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ v: 1, seq, at: '2026-10-06T09:00:00.000Z', kind: 'queued', chainId: 143, subject: '0xFEeD000000000000000000000000000000000001', ...extra });
 
@@ -27,18 +28,18 @@ beforeEach(() => clearWatchCaches());
 
 describe('lenient feed parsing', () => {
   it('skips and counts lines that are not JSON or not events; blank lines are not counted', () => {
-    const p = parseFeedText([line(0), '', '{"v":1,', 'hello', line(1, { kind: 'nonsense' }), line(2), ''].join('\n'));
-    expect(p.events.map((e) => e.seq)).toEqual([0, 2]);
+    const p = parseFeedText([line(1), '', '{"v":1,', 'hello', line(2, { kind: 'nonsense' }), line(3), ''].join('\n'));
+    expect(p.events.map((e) => e.seq)).toEqual([1, 3]);
     expect(p.skipped).toBe(3);
   });
 
   it('splitChunk leaves a torn last line for later, takes a whole one, and counts bytes not characters', () => {
-    const torn = `${line(0)}\n${line(1).slice(0, 40)}`;
-    expect(splitChunk(torn)).toEqual({ lines: [line(0)], consumed: Buffer.byteLength(`${line(0)}\n`) });
-    const whole = `${line(0)}\n${line(1)}`;
+    const torn = `${line(1)}\n${line(2).slice(0, 40)}`;
+    expect(splitChunk(torn)).toEqual({ lines: [line(1)], consumed: Buffer.byteLength(`${line(1)}\n`) });
+    const whole = `${line(1)}\n${line(2)}`;
     expect(splitChunk(whole).lines).toHaveLength(2);
     expect(splitChunk(whole).consumed).toBe(Buffer.byteLength(whole));
-    const wide = `${line(0, { reason: 'naïve ünïcödé' })}\n`;
+    const wide = `${line(1, { reason: 'naïve ünïcödé' })}\n`;
     expect(splitChunk(wide).consumed).toBe(Buffer.byteLength(wide));
     expect(splitChunk('').consumed).toBe(0);
   });
@@ -47,13 +48,13 @@ describe('lenient feed parsing', () => {
 describe('readFeed', () => {
   it('reads incrementally: a torn line is picked up once it is finished, and only new bytes are parsed', async () => {
     const file = path.join(dir, 'inc.ndjson');
-    await writeFile(file, `${line(0)}\n${line(1).slice(0, 30)}`);
+    await writeFile(file, `${line(1)}\n${line(2).slice(0, 30)}`);
     let s = await readFeed(file);
     expect(s.available).toBe(true);
-    expect(s.events.map((e) => e.seq)).toEqual([0]);
-    await appendFile(file, `${line(1).slice(30)}\nnot json\n${line(2)}\n`);
+    expect(s.events.map((e) => e.seq)).toEqual([1]);
+    await appendFile(file, `${line(2).slice(30)}\nnot json\n${line(3)}\n`);
     s = await readFeed(file);
-    expect(s.events.map((e) => e.seq)).toEqual([0, 1, 2]);
+    expect(s.events.map((e) => e.seq)).toEqual([1, 2, 3]);
     expect(s.skipped).toBe(1);
     s = await readFeed(file);
     expect(s.events).toHaveLength(3);
@@ -61,11 +62,11 @@ describe('readFeed', () => {
 
   it('starts over when the file is replaced or shrinks', async () => {
     const file = path.join(dir, 'rot.ndjson');
-    await writeFile(file, `${line(0)}\n${line(1)}\n${line(2)}\n`);
+    await writeFile(file, `${line(1)}\n${line(2)}\n${line(3)}\n`);
     expect((await readFeed(file)).events).toHaveLength(3);
-    await writeFile(file, `${line(9)}\n`);
+    await writeFile(file, `${line(10)}\n`);
     const s = await readFeed(file);
-    expect(s.events.map((e) => e.seq)).toEqual([9]);
+    expect(s.events.map((e) => e.seq)).toEqual([10]);
   });
 
   it('a missing feed is unavailable, not an error', async () => {

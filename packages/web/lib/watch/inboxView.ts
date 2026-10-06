@@ -7,7 +7,7 @@ import { inboxEntries, isActiveSub, type InboxSubscription } from './inbox';
 import { watchFile } from './paths';
 import { readFeed } from './read';
 import { feedEventsJson, labelContext } from './service';
-import { webhookOf } from './webhooks';
+import { publicWebhook, webhookOf } from './webhooks';
 
 /*
  * /watch/inbox for one subscriber: their active subscriptions (read from CheckSubscriptions), the alerts the feed
@@ -19,7 +19,7 @@ export const INBOX_LIMIT = 100;
 export async function inboxView(subscriber: string, reader?: ContractReader): Promise<InboxJson> {
   const readAt = new Date().toISOString();
   const [subs, webhook] = await Promise.all([subscriptionsOf(subscriber, reader), webhookOf(subscriber).catch(() => null)]);
-  const hook = webhook ? { url: webhook.url, issued: webhook.issued } : null;
+  const hook = publicWebhook(webhook);
   if (!subs.deployed) return { deployed: false, subscriber, active: [], ended: 0, items: [], webhook: hook, error: null, readAt };
   const now = nowSec();
   const lite: InboxSubscription[] = subs.subscriptions.map((x) => ({
@@ -34,7 +34,11 @@ export async function inboxView(subscriber: string, reader?: ContractReader): Pr
   const chains = [...new Set(active.map((x) => x.subjectChainId))];
   const feeds = new Map<number, readonly FeedEvent[]>();
   for (const c of chains) feeds.set(c, (await readFeed(watchFile.feed(c))).events);
-  const entries = inboxEntries(active, chains.flatMap((c) => feeds.get(c) ?? []), now).slice(0, INBOX_LIMIT);
+  const entries = inboxEntries(
+    active,
+    chains.flatMap((c) => feeds.get(c) ?? []),
+    now,
+  ).slice(0, INBOX_LIMIT);
   const json = new Map<string, Awaited<ReturnType<typeof feedEventsJson>>[number]>();
   for (const c of chains) {
     const mine = entries.filter((e) => e.event.chainId === c).map((e) => e.event);
@@ -47,7 +51,9 @@ export async function inboxView(subscriber: string, reader?: ContractReader): Pr
     subscriber,
     active: subs.subscriptions.filter((x) => isActiveAt(x, now)).map((x) => subscriptionJson(x, ctx, now)),
     ended: subs.subscriptions.length - active.length,
-    items: entries.map((e) => ({ subscriptionId: e.subscriptionId, kind: e.kind, event: json.get(`${e.event.chainId}:${e.event.seq}`)! })).filter((x) => x.event),
+    items: entries
+      .map((e) => ({ subscriptionId: e.subscriptionId, kind: e.kind, event: json.get(`${e.event.chainId}:${e.event.seq}`)! }))
+      .filter((x) => x.event),
     webhook: hook,
     error: subs.error,
     readAt,

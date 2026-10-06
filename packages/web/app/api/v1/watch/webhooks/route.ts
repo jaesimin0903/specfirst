@@ -1,18 +1,20 @@
 import { NextResponse } from 'next/server';
 import { isAddress } from 'viem';
 import { NO_STORE } from '../../../../../lib/watch/http';
-import { registerWebhook, webhookOf } from '../../../../../lib/watch/webhooks';
+import { publicWebhook, registerWebhook, webhookOf } from '../../../../../lib/watch/webhooks';
 
 export const dynamic = 'force-dynamic';
 
 const MAX_BODY = 8 * 1024;
 
-/** GET /api/v1/watch/webhooks?subscriber=0x...: the URL registered for a subscriber and when it was signed. */
+/**
+ * GET /api/v1/watch/webhooks?subscriber=0x...: whether a subscriber has a webhook, its origin and when it was
+ * signed. The full URL is not shown: it can be a secret, and anyone can ask for any address.
+ */
 export async function GET(request: Request): Promise<NextResponse> {
   const subscriber = new URL(request.url).searchParams.get('subscriber') ?? '';
   if (!isAddress(subscriber, { strict: false })) return NextResponse.json({ error: 'expected ?subscriber=<0x address>' }, { status: 400 });
-  const w = await webhookOf(subscriber);
-  return NextResponse.json({ subscriber, webhook: w ? { url: w.url, issued: w.issued } : null }, { headers: NO_STORE });
+  return NextResponse.json({ subscriber, webhook: publicWebhook(await webhookOf(subscriber)) }, { headers: NO_STORE });
 }
 
 /**
@@ -31,5 +33,5 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   const r = await registerWebhook(body);
   if (!r.ok) return NextResponse.json({ ok: false, error: r.reason }, { status: r.status, headers: NO_STORE });
-  return NextResponse.json({ ok: true, webhook: { subscriber: r.webhook.subscriber, url: r.webhook.url, issued: r.webhook.issued } }, { headers: NO_STORE });
+  return NextResponse.json({ ok: true, webhook: { subscriber: r.webhook.subscriber, ...publicWebhook(r.webhook) } }, { headers: NO_STORE });
 }

@@ -49,9 +49,7 @@ export function resolveReportPath(reportPath: string, env: Record<string, string
   if (typeof reportPath !== 'string' || !reportPath.endsWith('.json') || reportPath.endsWith('.forge.json') || reportPath.includes('\0')) return null;
   const dir = checksDir(env);
   const normalized = reportPath.replace(/\\/g, '/');
-  const abs = normalized.startsWith('certs/checks/')
-    ? path.resolve(dir, normalized.slice('certs/checks/'.length))
-    : path.resolve(repoRoot(env), normalized);
+  const abs = normalized.startsWith('certs/checks/') ? path.resolve(dir, normalized.slice('certs/checks/'.length)) : path.resolve(repoRoot(env), normalized);
   if (!isInside(dir, abs)) return null;
   const rel = path.relative(dir, abs).split(path.sep).join('/');
   if (!/^\d{1,12}\/0x[0-9a-fA-F]{40}\/[\w.-]{1,120}\.json$/.test(rel)) return null;

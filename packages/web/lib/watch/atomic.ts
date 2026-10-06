@@ -14,7 +14,10 @@ const queues = new Map<string, Promise<unknown>>();
 export function serialized<T>(file: string, fn: () => Promise<T>): Promise<T> {
   const prev = queues.get(file) ?? Promise.resolve();
   const next = prev.then(fn, fn);
-  queues.set(file, next.catch(() => {}));
+  queues.set(
+    file,
+    next.catch(() => {}),
+  );
   return next;
 }
 

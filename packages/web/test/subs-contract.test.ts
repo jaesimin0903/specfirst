@@ -78,6 +78,11 @@ describe('local CheckSubscriptions ABI', () => {
     expect(FIRST_SUBSCRIPTION_ID).toBe(0n);
   });
 
+  it('names the contract errors the pages may see on a simulated write', () => {
+    const errors = checkSubscriptionsAbi.filter((x) => x.type === 'error').map((x) => (x as { name: string }).name);
+    expect(errors).toEqual(expect.arrayContaining(['NotSubscriber', 'WrongValue', 'BadDays', 'UnknownSubscription', 'AlreadyCancelled', 'TransferFailed']));
+  });
+
   it('the address comes from NEXT_PUBLIC_SPECFIRST_SUBS_10143; unset or junk means not deployed', () => {
     expect(subsAddress({})).toBeNull();
     expect(subsAddress({ NEXT_PUBLIC_SPECFIRST_SUBS_10143: 'soon' })).toBeNull();
@@ -90,7 +95,11 @@ describe('receipts', () => {
   const cancelledEvent = checkSubscriptionsAbi.find((x) => x.type === 'event' && x.name === 'Cancelled') as AbiEvent;
 
   it('reads the id and end from Subscribed, and the refund from Cancelled, of this contract only', () => {
-    const topics = encodeEventTopics({ abi: [subscribedEvent], eventName: 'Subscribed', args: { id: 5n, subscriber: SUBSCRIBER, subject: VAULT } }) as `0x${string}`[];
+    const topics = encodeEventTopics({
+      abi: [subscribedEvent],
+      eventName: 'Subscribed',
+      args: { id: 5n, subscriber: SUBSCRIBER, subject: VAULT },
+    }) as `0x${string}`[];
     const data = encodeAbiParameters(
       [{ type: 'uint64' }, { type: 'bytes32' }, { type: 'uint32' }, { type: 'uint96' }, { type: 'uint64' }],
       [143n, `0x${'45'.repeat(32)}`, 7, 7n * 10n ** 16n, 1_791_000_000n],
@@ -106,7 +115,18 @@ describe('receipts', () => {
 
 describe('reads', () => {
   it('normalizes the struct from named fields or a tuple', () => {
-    const named = { subscriber: SUBSCRIBER, subjectChainId: 143n, subject: VAULT, standardId: `0x${'45'.repeat(32)}`, feePerDay: 10n, startsAt: 100n, endsAt: 100n + 7n * 86_400n, paid: 70n, settled: 10n, cancelled: false };
+    const named = {
+      subscriber: SUBSCRIBER,
+      subjectChainId: 143n,
+      subject: VAULT,
+      standardId: `0x${'45'.repeat(32)}`,
+      feePerDay: 10n,
+      startsAt: 100n,
+      endsAt: 100n + 7n * 86_400n,
+      paid: 70n,
+      settled: 10n,
+      cancelled: false,
+    };
     const a = normalizeSubscription(1n, named);
     const b = normalizeSubscription(1n, Object.values(named));
     expect(a).toEqual(b);
@@ -119,7 +139,9 @@ describe('reads', () => {
   });
 
   it('a summary with some failed reads says which; all failed is an error', async () => {
-    const reader = { readContract: async ({ functionName }: { functionName: string }) => (functionName === 'owner' ? Promise.reject(new Error('rate limited')) : 7n) };
+    const reader = {
+      readContract: async ({ functionName }: { functionName: string }) => (functionName === 'owner' ? Promise.reject(new Error('rate limited')) : 7n),
+    };
     const s = await readSubsSummary(reader, CONTRACT as `0x${string}`);
     expect(s).toMatchObject({ feePerDayWei: 7n, count: 7n, owner: null });
     expect(s.errors).toEqual(['owner: rate limited']);
@@ -141,6 +163,9 @@ describe('money', () => {
     expect(refundEstimate(sub, 1000 + 6 * DAY)).toBe(0n);
     expect(refundEstimate(sub, 1000 + 7 * DAY)).toBe(0n);
     expect(refundEstimate({ ...sub, cancelled: true }, 1000)).toBe(0n);
+    // Extended after it expired: a new 3-day run, the 10 paid for the first run already used.
+    const rerun = { ...sub, startsAt: 900_000n, endsAt: 900_000n + 3n * BigInt(DAY), paidWei: 100n };
+    expect(refundEstimate(rerun, 900_000)).toBe(20n);
   });
 
   it('combines both contracts against both processes, and says what it could not count', () => {

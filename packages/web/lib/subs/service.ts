@@ -24,7 +24,9 @@ export function nowSec(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-export async function subsSummary(reader: ContractReader = testnetClient()): Promise<{ address: `0x${string}` | null; summary: SubsSummary | null; error: string | null }> {
+export async function subsSummary(
+  reader: ContractReader = testnetClient(),
+): Promise<{ address: `0x${string}` | null; summary: SubsSummary | null; error: string | null }> {
   const address = subsAddress();
   if (!address) return { address, summary: null, error: null };
   try {
@@ -51,7 +53,9 @@ export function subsSummaryJson(address: string | null, sm: SubsSummary | null, 
 }
 
 /** The newest SCAN_LIMIT subscriptions, newest first. */
-export async function scanSubscriptions(reader: ContractReader = testnetClient()): Promise<{ deployed: boolean; subscriptions: Subscription[]; truncated: boolean; error: string | null }> {
+export async function scanSubscriptions(
+  reader: ContractReader = testnetClient(),
+): Promise<{ deployed: boolean; subscriptions: Subscription[]; truncated: boolean; error: string | null }> {
   const { address, summary, error } = await subsSummary(reader);
   if (!address) return { deployed: false, subscriptions: [], truncated: false, error: null };
   if (!summary || summary.count === null) return { deployed: true, subscriptions: [], truncated: false, error: error ?? 'subscriptionCount could not be read' };
@@ -59,7 +63,12 @@ export async function scanSubscriptions(reader: ContractReader = testnetClient()
   if (count === 0n) return { deployed: true, subscriptions: [], truncated: false, error: null };
   const ids = latestSubscriptionIds(count, SCAN_LIMIT);
   const read = await memo(`subs:${address}:scan:${count}`, 10_000, () => readSubscriptions(reader, address, ids));
-  return { deployed: true, subscriptions: read.subscriptions, truncated: count > BigInt(SCAN_LIMIT), error: read.failed ? `${read.failed} subscriptions could not be read` : null };
+  return {
+    deployed: true,
+    subscriptions: read.subscriptions,
+    truncated: count > BigInt(SCAN_LIMIT),
+    error: read.failed ? `${read.failed} subscriptions could not be read` : null,
+  };
 }
 
 export function subscriptionJson(x: Subscription, ctx: LabelContext, now: number = nowSec()): SubscriptionJson {
@@ -85,7 +94,10 @@ export function subscriptionJson(x: Subscription, ctx: LabelContext, now: number
   };
 }
 
-export async function subscriptionsOf(subscriber: string, reader?: ContractReader): Promise<{ deployed: boolean; subscriptions: Subscription[]; scanned: number; truncated: boolean; error: string | null }> {
+export async function subscriptionsOf(
+  subscriber: string,
+  reader?: ContractReader,
+): Promise<{ deployed: boolean; subscriptions: Subscription[]; scanned: number; truncated: boolean; error: string | null }> {
   const scan = await scanSubscriptions(reader);
   const mine = scan.subscriptions.filter((x) => x.subscriber.toLowerCase() === subscriber.toLowerCase());
   return { deployed: scan.deployed, subscriptions: mine, scanned: scan.subscriptions.length, truncated: scan.truncated, error: scan.error };

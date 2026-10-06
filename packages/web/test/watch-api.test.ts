@@ -32,6 +32,8 @@ import { GET as webhookGet, POST as webhookPost } from '../app/api/v1/watch/webh
 import { GET as demoGet, POST as demoPost } from '../app/api/v1/watch/demo-hook/route';
 import { GET as subsRoute } from '../app/api/v1/watch/subs/route';
 import { GET as subscriberRoute } from '../app/api/v1/watch/subs/[subscriber]/route';
+import { revenueView } from '../lib/subs/revenue';
+import type { DeskViewJson } from '../lib/desk/types';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(here, 'fixtures/watch');
@@ -48,7 +50,19 @@ let root: string;
 const env = { ...process.env };
 
 function subscription(subscriber: string, subject: string, startsAt: number, over: Record<string, unknown> = {}) {
-  return { subscriber, subjectChainId: 143n, subject, standardId: keccak256(toHex('erc4626')), feePerDay: FEE, startsAt: BigInt(startsAt), endsAt: BigInt(NOW + 30 * 86_400), paid: FEE * 30n, settled: 0n, cancelled: false, ...over };
+  return {
+    subscriber,
+    subjectChainId: 143n,
+    subject,
+    standardId: keccak256(toHex('erc4626')),
+    feePerDay: FEE,
+    startsAt: BigInt(startsAt),
+    endsAt: BigInt(NOW + 30 * 86_400),
+    paid: FEE * 30n,
+    settled: 0n,
+    cancelled: false,
+    ...over,
+  };
 }
 
 function noAttestation() {
@@ -65,7 +79,10 @@ beforeAll(async () => {
   await mkdir(path.join(root, 'watch'), { recursive: true });
   await cp(path.join(FIXTURES, '143'), path.join(root, 'watch', '143'), { recursive: true });
   await mkdir(path.join(root, 'board'), { recursive: true });
-  await writeFile(path.join(root, 'board', 'vault-meta.json'), JSON.stringify({ '143': { [UPGRADED]: { name: 'Listed upgraded vault', protocol: 'Curvance', assetSymbol: 'USDC' } } }));
+  await writeFile(
+    path.join(root, 'board', 'vault-meta.json'),
+    JSON.stringify({ '143': { [UPGRADED]: { name: 'Listed upgraded vault', protocol: 'Curvance', assetSymbol: 'USDC' } } }),
+  );
   const feed = (await readFile(path.join(FIXTURES, '143', 'feed.ndjson'), 'utf8')).split('\n').filter((l) => l.startsWith('{"v":1,"seq":'));
   const started = fixtureSec(JSON.parse(feed[10]!).at);
   const subs = [
@@ -122,11 +139,21 @@ beforeEach(() => {
 describe('GET /api/v1/watch/status', () => {
   it('reports the head, how far behind, what runs, the queue, sources and the headline count', async () => {
     const s = await json<WatchStatusJson>(await statusRoute(get('/api/v1/watch/status')));
-    expect(s).toMatchObject({ chainId: 143, chains: [143], running: true, problem: null, head: '110977320', behindBlocks: 30, behindSeconds: 12, queueLength: 2, gasCostWei: '208000000000000000' });
+    expect(s).toMatchObject({
+      chainId: 143,
+      chains: [143],
+      running: true,
+      problem: null,
+      head: '110977320',
+      behindBlocks: 30,
+      behindSeconds: 12,
+      queueLength: 2,
+      gasCostWei: null,
+    });
     expect(s.now).toMatchObject({ stage: 'checking', label: { protocol: 'Morpho MetaMorpho V1.1', onList: false } });
     expect(s.sources).toHaveLength(8);
     expect(s.found).toEqual({ watched: 6, notOnList: 5, notOnBoard: 6, listSize: 1 });
-    expect(s.feed).toMatchObject({ available: true, events: 33, latestSeq: 32, skipped: 2 });
+    expect(s.feed).toMatchObject({ available: true, events: 33, latestSeq: 33, skipped: 2 });
   });
 
   it('a chain the watcher does not watch is "not running", not an error', async () => {
@@ -139,8 +166,8 @@ describe('GET /api/v1/watch/feed', () => {
   it('newest first, with the 30 results of each check read from its report and the hash checked', async () => {
     const p = await json<FeedPageJson>(await feedRoute(get('/api/v1/watch/feed?limit=40')));
     expect(p.events).toHaveLength(33);
-    expect(p.events[0]!.seq).toBe(32);
-    expect(p).toMatchObject({ latestSeq: 32, hasOlder: false, skipped: 2 });
+    expect(p.events[0]!.seq).toBe(33);
+    expect(p).toMatchObject({ latestSeq: 33, hasOlder: false, skipped: 2 });
     const checks = p.events.filter((e) => e.kind === 'checked');
     expect(checks).toHaveLength(6);
     for (const c of checks) {
@@ -156,8 +183,8 @@ describe('GET /api/v1/watch/feed', () => {
     const older = await json<FeedPageJson>(await feedRoute(get('/api/v1/watch/feed?before=10&limit=4')));
     expect(older.events.map((e) => e.seq)).toEqual([9, 8, 7, 6]);
     expect(older.hasOlder).toBe(true);
-    const newer = await json<FeedPageJson>(await feedRoute(get('/api/v1/watch/feed?after=30')));
-    expect(newer.events.map((e) => e.seq)).toEqual([32, 31]);
+    const newer = await json<FeedPageJson>(await feedRoute(get('/api/v1/watch/feed?after=31')));
+    expect(newer.events.map((e) => e.seq)).toEqual([33, 32]);
     expect(newer.gap).toBe(false);
   });
 });
@@ -165,8 +192,25 @@ describe('GET /api/v1/watch/feed', () => {
 describe('GET /api/v1/watch/vaults/<chainId>/<address>', () => {
   it("a vault's record and history, newest first", async () => {
     const v = await json<VaultWatchJson>(await vaultRoute(get('/x'), { params: Promise.resolve({ chainId: '143', address: MORPHO }) }));
-    expect(v).toMatchObject({ watched: true, lastAttestationId: '44', found: { source: 'factory', deployBlock: '110930586', firstDepositBlock: '110962000' }, lastCheck: { status: 'complete' } });
-    expect(v.history.map((e) => e.kind)).toEqual(['checked', 'alerted', 'changed', 'attested', 'checked', 'queued', 'changed', 'attested', 'checked', 'queued', 'detected']);
+    expect(v).toMatchObject({
+      watched: true,
+      lastAttestationId: '44',
+      found: { source: 'factory', deployBlock: '110930586', firstDepositBlock: '110962000' },
+      lastCheck: { status: 'complete' },
+    });
+    expect(v.history.map((e) => e.kind)).toEqual([
+      'checked',
+      'alerted',
+      'changed',
+      'attested',
+      'checked',
+      'queued',
+      'changed',
+      'attested',
+      'checked',
+      'queued',
+      'detected',
+    ]);
   });
 
   it('404 for a vault the watcher never saw, 400 for junk', async () => {
@@ -180,9 +224,18 @@ describe('GET /api/v1/watch/overlay', () => {
     const { rows } = await json<{ rows: ExplorerRow[] }>(await overlayRoute());
     expect(rows.map((r) => r.id).sort()).toEqual([`143/${MORPHO}`, `143/0xfeed000000000000000000000000000000000002`, `143/${UPGRADED}`]);
     const morpho = rows.find((r) => r.id === `143/${MORPHO}`)!;
-    expect(morpho).toMatchObject({ status: 'complete', protocol: 'Morpho Vault V2', attestation: { kind: 'none' }, found: { sourceText: 'from Morpho VaultV2Factory', block: '110930586' } });
+    expect(morpho).toMatchObject({
+      status: 'complete',
+      protocol: 'Morpho Vault V2',
+      attestation: { kind: 'none' },
+      found: { sourceText: 'from Morpho VaultV2Factory', block: '110930586' },
+    });
     expect(morpho.cells).toBe('p'.repeat(30));
-    expect(rows.find((r) => r.id === `143/${UPGRADED}`)).toMatchObject({ name: 'Listed upgraded vault', status: 'mismatch', found: { sourceText: 'backfill scan' } });
+    expect(rows.find((r) => r.id === `143/${UPGRADED}`)).toMatchObject({
+      name: 'Listed upgraded vault',
+      status: 'mismatch',
+      found: { sourceText: 'backfill scan' },
+    });
   });
 });
 
@@ -204,7 +257,15 @@ describe('subscriptions and the inbox', () => {
     const r = await json<InboxJson>(await inboxRoute(get(`/api/v1/watch/inbox?subscriber=${burner.address}`)));
     expect(r.active.map((x) => x.id)).toEqual(['3', '2']);
     expect(r.ended).toBe(1);
-    expect(r.items.map((i) => `${i.subscriptionId}:${i.kind}`)).toEqual(['2:delivery', '2:change', '2:first-check', '3:delivery', '3:delivery', '3:change', '3:first-check']);
+    expect(r.items.map((i) => `${i.subscriptionId}:${i.kind}`)).toEqual([
+      '2:delivery',
+      '2:change',
+      '2:first-check',
+      '3:delivery',
+      '3:delivery',
+      '3:change',
+      '3:first-check',
+    ]);
     expect(r.items[1]!.event.change).toMatchObject({ kind: 'changed', from: { status: 'partial' }, to: { status: 'complete' } });
     expect((await inboxRoute(get('/api/v1/watch/inbox?subscriber=me'))).status).toBe(400);
   });
@@ -221,7 +282,8 @@ describe('subscriptions and the inbox', () => {
 });
 
 describe('webhooks', () => {
-  const post = (body: unknown) => new Request('http://localhost/api/v1/watch/webhooks', { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) });
+  const post = (body: unknown) =>
+    new Request('http://localhost/api/v1/watch/webhooks', { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) });
 
   it('stores a signed registration in <watch dir>/webhooks.json and serves it back', async () => {
     const issued = Math.floor(Date.now() / 1000);
@@ -231,10 +293,12 @@ describe('webhooks', () => {
     expect(res.status).toBe(200);
     const file = JSON.parse(await readFile(path.join(root, 'watch', 'webhooks.json'), 'utf8'));
     expect(file.webhooks[burner.address.toLowerCase()]).toEqual({ subscriber: burner.address, url, issued, signature });
-    const back = await json<{ webhook: { url: string } }>(await webhookGet(get(`/api/v1/watch/webhooks?subscriber=${burner.address}`)));
-    expect(back.webhook.url).toBe(url);
+    // The full URL can be a secret: the API shows its origin only.
+    const back = await json<{ webhook: Record<string, unknown> }>(await webhookGet(get(`/api/v1/watch/webhooks?subscriber=${burner.address}`)));
+    expect(back.webhook).toEqual({ origin: 'https://hooks.example.com', issued });
     const inbox = await json<InboxJson>(await inboxRoute(get(`/api/v1/watch/inbox?subscriber=${burner.address}`)));
-    expect(inbox.webhook).toEqual({ url, issued });
+    expect(inbox.webhook).toEqual({ origin: 'https://hooks.example.com', issued });
+    expect(JSON.stringify(inbox)).not.toContain('/specfirst');
   });
 
   it('refuses http unless the local flag is on, then only for localhost', async () => {
@@ -265,10 +329,33 @@ describe('webhooks', () => {
   });
 });
 
+describe('revenue on /desk', () => {
+  it('adds subscription fees to desk fees and the watcher gas a status.json reports', async () => {
+    const status = JSON.parse(await readFile(path.join(FIXTURES, '143', 'status.json'), 'utf8'));
+    await mkdir(path.join(root, 'watch', '10143'), { recursive: true });
+    await writeFile(path.join(root, 'watch', '10143', 'status.json'), JSON.stringify({ ...status, chainId: 10143, gasCostWei: '52000000000000000' }));
+    const desk = {
+      summary: { deployed: true },
+      economics: { earnedWei: (2n * 10n ** 17n).toString(), withdrawnWei: '0', escrowedWei: (10n ** 17n).toString(), gasCostWei: (5n * 10n ** 16n).toString() },
+    } as unknown as DeskViewJson;
+    const r = await revenueView(desk);
+    expect(r).toMatchObject({
+      earnedWei: (2n * 10n ** 17n + 3n * FEE).toString(),
+      escrowedWei: (10n ** 17n + 90n * FEE).toString(),
+      watcherGasWei: '52000000000000000',
+      watcherGasChains: [10143],
+      gasWei: (5n * 10n ** 16n + 52n * 10n ** 15n).toString(),
+      missing: [],
+    });
+    expect(BigInt(r.netWei!)).toBe(2n * 10n ** 17n + 3n * FEE - 5n * 10n ** 16n - 52n * 10n ** 15n);
+  });
+});
+
 describe('demo webhook receiver', () => {
   it('keeps what was POSTed, newest first, and marks ADR alert payloads', async () => {
     const alert = { v: 1, subscriptionId: '2', subject: MORPHO, chainId: 143, change: { kind: 'changed' }, check: {}, attestation: null, reportURL: null };
-    const post = (body: string) => new Request('http://localhost/api/v1/watch/demo-hook', { method: 'POST', body, headers: { 'user-agent': 'specfirst-watch/test' } });
+    const post = (body: string) =>
+      new Request('http://localhost/api/v1/watch/demo-hook', { method: 'POST', body, headers: { 'user-agent': 'specfirst-watch/test' } });
     expect((await demoPost(post(JSON.stringify(alert)))).status).toBe(200);
     expect((await demoPost(post('{"hello":"world"}'))).status).toBe(200);
     expect((await demoPost(post('not json'))).status).toBe(400);

@@ -62,7 +62,10 @@ describe('labels and sources', () => {
     const detected = eventJson(events[0]!, ctx, undefined, found);
     expect(detected.found).toBeNull();
     expect(detected.txUrl).toMatch(/^https:\/\/monadscan\.com\/tx\/0x/);
-    const attested = eventJson(events.find((e) => e.kind === 'attested')!, ctx);
+    const attested = eventJson(
+      events.find((e) => e.kind === 'attested')!,
+      ctx,
+    );
     expect(attested.attestation!.txUrl).toMatch(/^https:\/\/testnet\.monadscan\.com\/tx\/0x/);
   });
 });
@@ -79,17 +82,41 @@ describe('status', () => {
       gasCostWei: null,
       ctx,
       found: countFound(143, vaults, ctx.meta, ctx.boardIds),
-      feed: { available: true, problem: null, events: 33, latestSeq: 32, skipped: 2 },
+      feed: { available: true, problem: null, events: 33, latestSeq: 33, skipped: 2 },
       vaultsFile: { available: true, problem: null, skipped: 0 },
       now: at,
     });
     expect(s).toMatchObject({ running: true, behindBlocks: 30, behindSeconds: 12, stale: false, queueLength: 2, updatedAgoSec: 10 });
     expect(s.now).toMatchObject({ stage: 'checking', source: 'factory', forSec: 66 });
     expect(s.found).toEqual({ watched: 6, notOnList: 5, notOnBoard: 5, listSize: 1 });
-    const later = statusJson({ chainId: 143, chains: [], dir: 'd', status, problem: null, gasCostWei: 5n, ctx, found: s.found, feed: s.feed, vaultsFile: s.vaultsFile, now: new Date(Date.parse(status!.updatedAt) + 600_000) });
+    const later = statusJson({
+      chainId: 143,
+      chains: [],
+      dir: 'd',
+      status,
+      problem: null,
+      gasCostWei: 5n,
+      ctx,
+      found: s.found,
+      feed: s.feed,
+      vaultsFile: s.vaultsFile,
+      now: new Date(Date.parse(status!.updatedAt) + 600_000),
+    });
     expect(later.stale).toBe(true);
     expect(later.gasCostWei).toBe('5');
-    const off = statusJson({ chainId: 143, chains: [], dir: 'd', status: null, problem: 'not running', gasCostWei: null, ctx, found: s.found, feed: s.feed, vaultsFile: s.vaultsFile, now: at });
+    const off = statusJson({
+      chainId: 143,
+      chains: [],
+      dir: 'd',
+      status: null,
+      problem: 'not running',
+      gasCostWei: null,
+      ctx,
+      found: s.found,
+      feed: s.feed,
+      vaultsFile: s.vaultsFile,
+      now: at,
+    });
     expect(off).toMatchObject({ running: false, problem: 'not running', behindBlocks: null, now: null, queue: [] });
   });
 });
@@ -97,12 +124,12 @@ describe('status', () => {
 describe('feed pages', () => {
   it('newest first, with before and after cursors by seq', () => {
     const p = pageOf(events, { limit: 5 });
-    expect(p.page.map((e) => e.seq)).toEqual([32, 31, 30, 29, 28]);
-    expect(p).toMatchObject({ hasOlder: true, gap: false, latestSeq: 32 });
-    expect(pageOf(events, { before: 28, limit: 3 }).page.map((e) => e.seq)).toEqual([27, 26, 25]);
-    expect(pageOf(events, { after: 30, limit: 10 }).page.map((e) => e.seq)).toEqual([32, 31]);
+    expect(p.page.map((e) => e.seq)).toEqual([33, 32, 31, 30, 29]);
+    expect(p).toMatchObject({ hasOlder: true, gap: false, latestSeq: 33 });
+    expect(pageOf(events, { before: 29, limit: 3 }).page.map((e) => e.seq)).toEqual([28, 27, 26]);
+    expect(pageOf(events, { after: 31, limit: 10 }).page.map((e) => e.seq)).toEqual([33, 32]);
     expect(pageOf(events, { after: 10, limit: 5 }).gap).toBe(true);
-    expect(pageOf(events, { before: 0, limit: 5 })).toMatchObject({ page: [], hasOlder: false });
+    expect(pageOf(events, { before: 1, limit: 5 })).toMatchObject({ page: [], hasOlder: false });
   });
 });
 
@@ -111,7 +138,12 @@ describe('board overlay', () => {
 
   it('adds vaults the board lacks once each, and recounts shared implementations', () => {
     const found = { sourceText: 'from Morpho VaultV2Factory', block: '1', at: '2026-10-06T09:00:00.000Z' };
-    const overlay = [row('0xddd', 'k1', { found }), row('0xddd', 'k1', { found }), row('0xccc', 'k2', { found }), row('0xeee', 'k9', { found, protocol: 'Morpho Vault V2' })];
+    const overlay = [
+      row('0xddd', 'k1', { found }),
+      row('0xddd', 'k1', { found }),
+      row('0xccc', 'k2', { found }),
+      row('0xeee', 'k9', { found, protocol: 'Morpho Vault V2' }),
+    ];
     const merged = mergeOverlay(board, overlay);
     expect(merged.map((r) => r.id)).toEqual(['143/0xaaa', '143/0xbbb', '143/0xccc', '143/0xddd', '143/0xeee']);
     expect(merged.map((r) => r.groupSize)).toEqual([3, 3, 1, 3, 1]);
@@ -134,7 +166,14 @@ describe('inbox', () => {
 
   it('active subscriptions get changes since they started, the first check after the start, and their own deliveries', () => {
     const subs = [
-      { id: '2', subjectChainId: 143, subject: MORPHO.toUpperCase().replace('0X', '0x'), startsAtSec: sec(events[10]!.at), endsAtSec: lastAt + 86_400, cancelled: false },
+      {
+        id: '2',
+        subjectChainId: 143,
+        subject: MORPHO.toUpperCase().replace('0X', '0x'),
+        startsAtSec: sec(events[10]!.at),
+        endsAtSec: lastAt + 86_400,
+        cancelled: false,
+      },
       { id: '3', subjectChainId: 143, subject: UPGRADED, startsAtSec: firstAt, endsAtSec: lastAt + 86_400, cancelled: false },
     ];
     const items = inboxEntries(subs, events, lastAt + 60);

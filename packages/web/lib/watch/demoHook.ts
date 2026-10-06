@@ -51,11 +51,21 @@ export async function readDemoHooks(file: string = watchFile.demoHook()): Promis
   return parseDemoHookFile(await readJsonOrNull(file)).sort((a, b) => b.n - a.n);
 }
 
-export async function storeDemoHook(body: unknown, meta: { userAgent: string | null; bytes: number; now?: Date }, file: string = watchFile.demoHook()): Promise<DemoHookEntry> {
+export async function storeDemoHook(
+  body: unknown,
+  meta: { userAgent: string | null; bytes: number; now?: Date },
+  file: string = watchFile.demoHook(),
+): Promise<DemoHookEntry> {
   return serialized(file, async () => {
     const list = parseDemoHookFile(await readJsonOrNull(file));
     const n = list.reduce((m, e) => Math.max(m, e.n), 0) + 1;
-    const entry: DemoHookEntry = { n, receivedAt: (meta.now ?? new Date()).toISOString(), userAgent: meta.userAgent?.slice(0, 200) ?? null, bytes: meta.bytes, body };
+    const entry: DemoHookEntry = {
+      n,
+      receivedAt: (meta.now ?? new Date()).toISOString(),
+      userAgent: meta.userAgent?.slice(0, 200) ?? null,
+      bytes: meta.bytes,
+      body,
+    };
     const kept = [...list, entry].sort((a, b) => a.n - b.n).slice(-MAX_DEMO_HOOKS);
     await writeJsonAtomic(file, { v: 1, received: kept });
     return entry;

@@ -159,10 +159,18 @@ export function eventJson(e: FeedEvent, ctx: LabelContext, report: ReportInfo = 
           ...report,
         }
       : null,
-    attestation: e.attestation ? { id: e.attestation.id, txHash: e.attestation.txHash, txUrl: testnetTxUrl(e.attestation.txHash), supersedes: e.attestation.supersedes } : null,
+    attestation: e.attestation
+      ? { id: e.attestation.id, txHash: e.attestation.txHash, txUrl: testnetTxUrl(e.attestation.txHash), supersedes: e.attestation.supersedes }
+      : null,
     change: e.change ? { kind: e.change.kind, from: e.change.from ? outcomeOf(e.change.from) : null, to: outcomeOf(e.change.to) } : null,
     alert: e.alert
-      ? { subscriptionId: e.alert.subscriptionId, subscriber: checksum(e.alert.subscriber), channel: e.alert.channel, ok: e.alert.ok, status: e.alert.status ?? null }
+      ? {
+          subscriptionId: e.alert.subscriptionId,
+          subscriber: checksum(e.alert.subscriber),
+          channel: e.alert.channel,
+          ok: e.alert.ok,
+          status: e.alert.status ?? null,
+        }
       : null,
     reason: e.reason ?? null,
     found: e.kind === 'checked' || e.kind === 'attested' || e.kind === 'changed' ? found : null,

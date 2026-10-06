@@ -8,7 +8,10 @@ export const dynamic = 'force-dynamic';
 export async function GET(): Promise<NextResponse> {
   if (!demoHookEnabled()) return NextResponse.json({ enabled: false, received: [] }, { status: 404, headers: NO_STORE });
   const received = await readDemoHooks();
-  return NextResponse.json({ enabled: true, received: received.map((e) => ({ ...e, isAlert: alertPayloadSchema.safeParse(e.body).success })) }, { headers: NO_STORE });
+  return NextResponse.json(
+    { enabled: true, received: received.map((e) => ({ ...e, isAlert: alertPayloadSchema.safeParse(e.body).success })) },
+    { headers: NO_STORE },
+  );
 }
 
 /** POST /api/v1/watch/demo-hook: a demo webhook receiver. Keeps the last 50 JSON bodies of at most 64 KB. */

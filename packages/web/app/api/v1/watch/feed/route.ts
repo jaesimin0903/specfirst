@@ -12,6 +12,10 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request): Promise<NextResponse> {
   const sp = new URL(request.url).searchParams;
   const { chainId } = await pickChain(sp.get('chainId'));
-  const body = await feedPageView(chainId, { after: intParam(sp.get('after')), before: intParam(sp.get('before')), limit: intParam(sp.get('limit')) ?? undefined });
+  const body = await feedPageView(chainId, {
+    after: intParam(sp.get('after')),
+    before: intParam(sp.get('before')),
+    limit: intParam(sp.get('limit')) ?? undefined,
+  });
   return NextResponse.json(body, { headers: NO_STORE });
 }

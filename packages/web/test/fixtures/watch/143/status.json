@@ -84,6 +84,5 @@
   "attestBudget": {
     "perDay": 40,
     "usedToday": 4
-  },
-  "gasCostWei": "208000000000000000"
+  }
 }

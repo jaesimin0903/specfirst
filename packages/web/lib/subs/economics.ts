@@ -22,13 +22,14 @@ export function startedDays(s: Pick<Subscription, 'startsAt' | 'endsAt'>, nowSec
 }
 
 /**
- * What cancel would return at `nowSec`: the fee of the days not started. Zero once cancelled or ended. An
- * estimate for the button; the Cancelled event carries the real amount.
+ * What cancel would return at `nowSec`: the fee of the days of the current run not started yet, never more than
+ * was paid. Zero once cancelled or ended. (An extend after expiry starts a new run, so earlier runs, all used,
+ * are not in it.) An estimate for the button; the Cancelled event carries the real amount.
  */
 export function refundEstimate(s: Sub, nowSec: number): bigint {
   if (s.cancelled || BigInt(nowSec) >= s.endsAt) return 0n;
-  const kept = s.feePerDayWei * BigInt(startedDays(s, nowSec));
-  return s.paidWei > kept ? s.paidWei - kept : 0n;
+  const unstarted = s.feePerDayWei * BigInt(daysOf(s) - startedDays(s, nowSec));
+  return unstarted < s.paidWei ? unstarted : s.paidWei;
 }
 
 export function priceOf(feePerDayWei: bigint, days: number): bigint {
@@ -50,7 +51,7 @@ export interface CombinedRevenue {
   deskGasWei: bigint | null;
   watcherGasWei: bigint | null;
   gasWei: bigint | null;
-  /** earned (both contracts) - gas (both processes); null until something was earned or spent is known. */
+  /** earned (both contracts) - gas (both processes); null until some earnings and some gas are known. */
   netWei: bigint | null;
   /** Figures that went into the totals; what is missing is said, not counted as zero. */
   missing: string[];
@@ -65,7 +66,12 @@ function sum(values: Array<bigint | null>): bigint | null {
  * Desk fees and subscription fees side by side, against the gas the desk worker and the watcher report. A
  * contract that is not deployed or could not be read is left out of the sums and listed in `missing`.
  */
-export function combineRevenue(i: { desk: ContractMoney | null; subs: ContractMoney | null; deskGasWei: bigint | null; watcherGasWei: bigint | null }): CombinedRevenue {
+export function combineRevenue(i: {
+  desk: ContractMoney | null;
+  subs: ContractMoney | null;
+  deskGasWei: bigint | null;
+  watcherGasWei: bigint | null;
+}): CombinedRevenue {
   const missing: string[] = [];
   if (!i.desk || i.desk.earnedWei === null) missing.push('desk fees');
   if (!i.subs || i.subs.earnedWei === null) missing.push('subscription fees');
@@ -82,7 +88,7 @@ export function combineRevenue(i: { desk: ContractMoney | null; subs: ContractMo
     deskGasWei: i.deskGasWei,
     watcherGasWei: i.watcherGasWei,
     gasWei: gas,
-    netWei: earned === null && gas === null ? null : (earned ?? 0n) - (gas ?? 0n),
+    netWei: earned !== null && gas !== null ? earned - gas : null,
     missing,
   };
 }

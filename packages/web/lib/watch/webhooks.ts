@@ -7,7 +7,8 @@ import { watchFile } from './paths';
 /*
  * Webhook registrations (ADR 0006, "Alerts"): verified here, stored in <watch dir>/webhooks.json for the watcher,
  * latest per subscriber. File shape: { v: 1, webhooks: { <lowercase subscriber>: { subscriber, url, issued,
- * signature } } }. Server only.
+ * signature } } }. A webhook URL can be a secret (chat webhooks are), so the file is never served and the API
+ * shows only the URL's origin. Server only.
  */
 
 const entrySchema = z.object({
@@ -27,11 +28,22 @@ export function allowLocalHttp(env: Record<string, string | undefined> = process
   return env.SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS?.trim() === '1';
 }
 
+/** The hosts SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS opens, over http or https. */
+const LOCAL_DEMO_HOSTS = ['localhost', '127.0.0.1'];
+
 function isPrivateIpv4(h: string): boolean {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
   if (!m) return false;
   const [a, b] = [Number(m[1]), Number(m[2])];
-  return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127)
+  );
 }
 
 function isLocalHost(hostname: string): boolean {
@@ -46,13 +58,14 @@ function isLocalHost(hostname: string): boolean {
 }
 
 /**
- * The web's own rules on top of the ADR's: no credentials in the URL, a bounded length, and no loopback, private
- * or link-local host unless local http is allowed (then only localhost names). A public name that resolves to a
- * private address is the watcher's to refuse when it delivers.
+ * The URL rules before a signature is checked: https, a bounded length, no whitespace or control characters (they
+ * would change the signed text), no credentials, and no loopback, private or link-local host; local http opens
+ * localhost and 127.0.0.1 only. A public name that resolves to a private address is not caught here (no DNS).
  */
 export function urlProblem(raw: string, localHttp: boolean): string | null {
   if (typeof raw !== 'string' || raw.length === 0) return 'url is required';
   if (raw.length > MAX_WEBHOOK_URL) return `url is longer than ${MAX_WEBHOOK_URL} characters`;
+  if (/[\s\u0000-\u001f\u007f]/.test(raw)) return 'url must not contain whitespace or control characters';
   let u: URL;
   try {
     u = new URL(raw);
@@ -60,9 +73,10 @@ export function urlProblem(raw: string, localHttp: boolean): string | null {
     return 'url is not a URL';
   }
   if (u.username || u.password) return 'url must not carry a user name or password';
-  if (u.protocol === 'http:') return localHttp && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) ? null : localHttp ? 'http is allowed for localhost only' : 'url must be https';
+  if (u.protocol === 'http:')
+    return localHttp && LOCAL_DEMO_HOSTS.includes(u.hostname) ? null : localHttp ? 'http is allowed for localhost only' : 'url must be https';
   if (u.protocol !== 'https:') return 'url must be https';
-  if (isLocalHost(u.hostname) && !localHttp) return 'url points at a local or private host';
+  if (isLocalHost(u.hostname) && !(localHttp && LOCAL_DEMO_HOSTS.includes(u.hostname))) return 'url points at a local or private host';
   return null;
 }
 
@@ -85,6 +99,16 @@ export async function webhookOf(subscriber: string, file: string = watchFile.web
   return (await readWebhooks(file))[subscriber.toLowerCase()] ?? null;
 }
 
+/** What the API may show of a registration: the URL's origin and when it was signed, never the full URL. */
+export function publicWebhook(w: StoredWebhook | null): { origin: string; issued: number } | null {
+  if (!w) return null;
+  try {
+    return { origin: new URL(w.url).origin, issued: w.issued };
+  } catch {
+    return { origin: 'unreadable URL', issued: w.issued };
+  }
+}
+
 /** Adds or replaces one entry; keeps the newest MAX_WEBHOOKS by issued. Pure. */
 export function withWebhook(all: Record<string, StoredWebhook>, entry: StoredWebhook, max: number = MAX_WEBHOOKS): Record<string, StoredWebhook> {
   const next = { ...all, [entry.subscriber.toLowerCase()]: entry };
@@ -96,16 +120,18 @@ export function withWebhook(all: Record<string, StoredWebhook>, entry: StoredWeb
 
 export type RegisterResult = { ok: true; webhook: StoredWebhook } | { ok: false; status: number; reason: string };
 
-export async function registerWebhook(
-  input: unknown,
-  o: { file?: string; now?: number; localHttp?: boolean } = {},
-): Promise<RegisterResult> {
+export async function registerWebhook(input: unknown, o: { file?: string; now?: number; localHttp?: boolean } = {}): Promise<RegisterResult> {
   const body = input as Partial<WebhookRegistration> | null;
   if (!body || typeof body !== 'object') return { ok: false, status: 400, reason: 'expected a JSON object { subscriber, url, issued, signature }' };
   const localHttp = o.localHttp ?? allowLocalHttp();
   const bad = urlProblem(body.url as string, localHttp);
   if (bad) return { ok: false, status: 400, reason: bad };
-  const reg = { subscriber: String(body.subscriber ?? ''), url: body.url as string, issued: Number(body.issued), signature: String(body.signature ?? '') as `0x${string}` };
+  const reg = {
+    subscriber: String(body.subscriber ?? ''),
+    url: body.url as string,
+    issued: Number(body.issued),
+    signature: String(body.signature ?? '') as `0x${string}`,
+  };
   const v = await verifyWebhookRegistration(reg, { now: o.now, allowLocalHttp: localHttp });
   if (!v.ok) return { ok: false, status: v.reason.startsWith('signature is not') || v.reason.startsWith('signature does not') ? 401 : 400, reason: v.reason };
   const file = o.file ?? watchFile.webhooks();
@@ -113,7 +139,8 @@ export async function registerWebhook(
   return serialized(file, async () => {
     const all = parseWebhooksFile(await readJsonOrNull(file));
     const current = all[entry.subscriber.toLowerCase()];
-    if (current && current.issued > entry.issued) return { ok: false, status: 409, reason: 'a newer registration for this subscriber is already stored' } as RegisterResult;
+    if (current && current.issued > entry.issued)
+      return { ok: false, status: 409, reason: 'a newer registration for this subscriber is already stored' } as RegisterResult;
     await writeJsonAtomic(file, { v: 1, webhooks: withWebhook(all, entry) });
     return { ok: true, webhook: entry } as RegisterResult;
   });

@@ -48,9 +48,22 @@ interface RawSubscription {
 
 /** subscriptionOf's struct as viem decodes it, named fields or a positional tuple. */
 export function normalizeSubscription(id: bigint, raw: unknown): Subscription {
-  const r = (Array.isArray(raw)
-    ? { subscriber: raw[0], subjectChainId: raw[1], subject: raw[2], standardId: raw[3], feePerDay: raw[4], startsAt: raw[5], endsAt: raw[6], paid: raw[7], settled: raw[8], cancelled: raw[9] }
-    : raw) as RawSubscription;
+  const r = (
+    Array.isArray(raw)
+      ? {
+          subscriber: raw[0],
+          subjectChainId: raw[1],
+          subject: raw[2],
+          standardId: raw[3],
+          feePerDay: raw[4],
+          startsAt: raw[5],
+          endsAt: raw[6],
+          paid: raw[7],
+          settled: raw[8],
+          cancelled: raw[9],
+        }
+      : raw
+  ) as RawSubscription;
   return {
     id,
     subscriber: r.subscriber,
@@ -105,8 +118,14 @@ export function latestSubscriptionIds(count: bigint, limit: number): bigint[] {
 }
 
 /** Reads the given ids together; ones that fail are left out and counted. */
-export async function readSubscriptions(reader: ContractReader, address: `0x${string}`, ids: readonly bigint[]): Promise<{ subscriptions: Subscription[]; failed: number }> {
-  const settled = await Promise.allSettled(ids.map((id) => reader.readContract({ address, abi: checkSubscriptionsAbi, functionName: 'subscriptionOf', args: [id] })));
+export async function readSubscriptions(
+  reader: ContractReader,
+  address: `0x${string}`,
+  ids: readonly bigint[],
+): Promise<{ subscriptions: Subscription[]; failed: number }> {
+  const settled = await Promise.allSettled(
+    ids.map((id) => reader.readContract({ address, abi: checkSubscriptionsAbi, functionName: 'subscriptionOf', args: [id] })),
+  );
   const subscriptions: Subscription[] = [];
   let failed = 0;
   settled.forEach((s, i) => {

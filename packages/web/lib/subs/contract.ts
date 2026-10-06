@@ -30,6 +30,20 @@ export const checkSubscriptionsAbi = parseAbi([
   'event Settled(uint256 indexed id, uint96 amount)',
   'event FeesWithdrawn(address indexed to, uint96 amount)',
   'event FeePerDaySet(uint96 feePerDay)',
+  // Custom errors as CheckSubscriptions.sol declares them, so a simulated revert reads as its name.
+  'error NotOwner()',
+  'error NotSubscriber(uint256 id)',
+  'error ZeroAddress()',
+  'error ZeroChainId()',
+  'error EmptyStandardId()',
+  'error BadDays(uint32 days_)',
+  'error WrongValue(uint256 sent, uint256 expected)',
+  'error PaidOverflow(uint256 id, uint256 paid)',
+  'error UnknownSubscription(uint256 id)',
+  'error AlreadyCancelled(uint256 id)',
+  'error NothingToWithdraw()',
+  'error TransferFailed(address to, uint256 amount)',
+  'error Reentrancy()',
 ]);
 
 /** Subscription ids are a zero based index, as in the registry and the desk. */
