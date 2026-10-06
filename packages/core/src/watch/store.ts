@@ -1,12 +1,14 @@
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { appendFile, mkdir, open, readdir, readFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, truncate } from 'node:fs/promises';
 import path from 'node:path';
 import { getAddress } from 'viem';
 import { z } from 'zod';
 import { parseCheckReport } from '../attest/params.js';
-import { acquirePidLock, writeAtomic } from '../desk/store.js';
+import { acquirePidLock } from '../desk/store.js';
 import type { StandardCheckReport } from '../standards/report.js';
-import { outcomeOfReport } from './decide.js';
+import { defaultCacheDir } from '../standards/workspace.js';
+import { ATTEST_CLASSES, outcomeOfReport } from './decide.js';
 import {
   FEED_KINDS,
   FEED_SOURCES,
@@ -64,8 +66,13 @@ export const queueEntrySchema = z
  * attempted: when a check of the vault last started. subscriptions: subscriptions whose first check was
  * delivered. sweeps: start times of sweep checks within the last hour. attestDay: attestations made on one
  * UTC day. recent: feed events of the last 24 hours the status counts. sourcesSeen: signals per source name.
- * deferred: checks whose attestation waits for the daily budget or a readable registry. gasCostWei: what the
- * watcher's attestations cost, summed.
+ * deferred: checks whose attestation waits for a budget, the balance floor or a readable registry, each with its
+ * own retry time. gasCostWei: what the watcher's attestations cost, summed. fingerprints: code hash and EIP-1967
+ * slots of each vault at its last check, so an Upgraded that changed nothing does not buy a check. cooldowns:
+ * vaults whose check timed out, not checked again before `until`. pending: changes waiting for a second check
+ * at a later block. perSubject: attestations per vault on one UTC day. errorsAt: when an error line was last
+ * written per key, so a failing subject writes at most one an hour. checkedBlocks: the block of the last
+ * `checked` event per vault, so a newer report found in certs/checks at start is told from the watcher's own.
  */
 export const watchStateSchema = z
   .object({
@@ -74,7 +81,7 @@ export const watchStateSchema = z
     cursor: decimal.nullable(),
     seq: count,
     queue: z.array(queueEntrySchema),
-    rejected: z.record(lowerAddress, z.object({ at: iso, block: decimal, reason: z.string() }).strict()),
+    rejected: z.record(lowerAddress, z.object({ at: iso, block: decimal, reason: z.string(), fingerprint: hex32.optional() }).strict()),
     probing: z.record(
       lowerAddress,
       z
@@ -92,11 +99,52 @@ export const watchStateSchema = z
     attempted: z.record(lowerAddress, iso),
     subscriptions: z.record(decimal, z.object({ firstCheckAt: iso }).strict()),
     sweeps: z.array(iso),
-    attestDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), used: count }).strict(),
+    attestDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), used: count, unsolicited: count.default(0) }).strict(),
     recent: z.array(z.object({ kind: z.enum(FEED_KINDS), at: iso }).strict()),
     sourcesSeen: z.record(z.string(), count),
-    deferred: z.record(lowerAddress, z.object({ reportPath: z.string().min(1), reportURI: z.string().min(1), source, at: iso }).strict()),
+    deferred: z.record(
+      lowerAddress,
+      z
+        .object({
+          reportPath: z.string().min(1),
+          reportURI: z.string().min(1),
+          source,
+          at: iso,
+          cls: z.enum(ATTEST_CLASSES).optional(),
+          failures: count.default(0),
+          notBefore: iso.optional(),
+        })
+        .strict(),
+    ),
     gasCostWei: decimal.default('0'),
+    fingerprints: z.record(lowerAddress, hex32).default({}),
+    cooldowns: z.record(lowerAddress, z.object({ until: iso, timeouts: count }).strict()).default({}),
+    pending: z
+      .record(
+        lowerAddress,
+        z
+          .object({
+            reportPath: z.string().min(1),
+            reportURI: z.string().min(1),
+            block: decimal,
+            at: iso,
+            outcome: z
+              .object({
+                summary: z.object({ pass: count, fail: count, inconclusive: count, notApplicable: count }).strict(),
+                failed: z.array(z.string()),
+                implementationKey: hex32.nullable(),
+              })
+              .strict(),
+            source,
+            firstCheck: z.boolean(),
+            attempts: count,
+          })
+          .strict(),
+      )
+      .default({}),
+    perSubject: z.record(lowerAddress, z.object({ day: z.string(), used: count }).strict()).default({}),
+    errorsAt: z.record(z.string(), iso).default({}),
+    checkedBlocks: z.record(lowerAddress, decimal).default({}),
   })
   .strict();
 export type WatchState = z.output<typeof watchStateSchema>;
@@ -121,12 +169,83 @@ export function emptyWatchState(chainId: number): WatchState {
     attempted: {},
     subscriptions: {},
     sweeps: [],
-    attestDay: { day: '1970-01-01', used: 0 },
+    attestDay: { day: '1970-01-01', used: 0, unsolicited: 0 },
     recent: [],
     sourcesSeen: {},
     deferred: {},
     gasCostWei: '0',
+    fingerprints: {},
+    cooldowns: {},
+    pending: {},
+    perSubject: {},
+    errorsAt: {},
+    checkedBlocks: {},
   };
+}
+
+/**
+ * Writes through a temp file in the same directory, fsyncs it, renames it into place and fsyncs the
+ * directory, so a crash leaves either the old file or the new one, never a half or an empty one.
+ */
+async function writeDurable(file: string, content: string): Promise<void> {
+  const dir = path.dirname(file);
+  await mkdir(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
+  const fh = await open(tmp, 'w');
+  try {
+    await fh.writeFile(content);
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  await rename(tmp, file);
+  const d = await open(dir, 'r');
+  try {
+    await d.sync();
+  } catch {
+    /* some filesystems refuse fsync on a directory */
+  } finally {
+    await d.close();
+  }
+}
+
+/**
+ * Start-up repair of a watch directory after a crash: a last feed line without its newline (a write cut
+ * short) is cut off, so the next append starts a clean line, and temp files of interrupted writes are removed.
+ */
+async function repairDir(dir: string, feedPath: string): Promise<void> {
+  if (!existsSync(dir)) return;
+  for (const f of await readdir(dir)) {
+    if (/^\..+\.tmp-\d+-[0-9a-f]{8}$/.test(f)) await rm(path.join(dir, f), { force: true });
+  }
+  if (!existsSync(feedPath)) return;
+  const fh = await open(feedPath, 'r');
+  let keep: number | null = null;
+  try {
+    const { size } = await fh.stat();
+    if (size === 0) return;
+    const last = Buffer.alloc(1);
+    await fh.read(last, 0, 1, size - 1);
+    if (last[0] === 0x0a) return;
+    // Walk back to the last newline; everything after it is the cut line.
+    const chunk = 65_536;
+    let end = size;
+    keep = 0;
+    while (end > 0) {
+      const start = Math.max(0, end - chunk);
+      const buf = Buffer.alloc(end - start);
+      await fh.read(buf, 0, buf.length, start);
+      const i = buf.lastIndexOf(0x0a);
+      if (i >= 0) {
+        keep = start + i + 1;
+        break;
+      }
+      end = start;
+    }
+  } finally {
+    await fh.close();
+  }
+  if (keep !== null) await truncate(feedPath, keep);
 }
 
 async function readJson(file: string, what: string): Promise<unknown> {
@@ -191,11 +310,11 @@ export class WatchStore {
     return path.join(this.dir, WATCH_FEED_NDJSON);
   }
 
-  /** Writes vaults.json and state.json, then status.json when given, each through a temp file and a rename. */
+  /** Writes vaults.json and state.json, then status.json when given, each through an fsynced temp file and a rename. */
   async save(status?: WatchStatus): Promise<void> {
-    await writeAtomic(this.vaultsPath, `${JSON.stringify(watchVaultsSchema.parse(this.vaults), null, 2)}\n`);
-    await writeAtomic(this.statePath, `${JSON.stringify(watchStateSchema.parse(this.state), null, 2)}\n`);
-    if (status) await writeAtomic(this.statusPath, `${JSON.stringify(watchStatusSchema.parse(status), null, 2)}\n`);
+    await writeDurable(this.vaultsPath, `${JSON.stringify(watchVaultsSchema.parse(this.vaults), null, 2)}\n`);
+    await writeDurable(this.statePath, `${JSON.stringify(watchStateSchema.parse(this.state), null, 2)}\n`);
+    if (status) await writeDurable(this.statusPath, `${JSON.stringify(watchStatusSchema.parse(status), null, 2)}\n`);
   }
 
   /**
@@ -218,11 +337,14 @@ export class WatchStore {
   /**
    * Loads `<projectDir>/.specfirst/watch/<chainId>`. Missing files start empty. A state.json of another chain
    * is refused. seq continues after the last line of feed.ndjson when that is ahead of state.json (a crash
-   * between the append and the save).
+   * between the append and the save). With `repair` (the lock's holder), a cut last feed line and temp files
+   * left by interrupted writes are removed first.
    */
-  static async load(projectDir: string, chainId: number): Promise<WatchStore> {
+  static async load(projectDir: string, chainId: number, opts: { repair?: boolean } = {}): Promise<WatchStore> {
     const dir = path.join(projectDir, WATCH_DIR, String(chainId));
     const statePath = path.join(dir, WATCH_STATE_JSON);
+    // Only the holder of the directory's lock repairs it: another watcher may be in the middle of a write.
+    if (opts.repair) await repairDir(dir, path.join(dir, WATCH_FEED_NDJSON));
     let state = emptyWatchState(chainId);
     if (existsSync(statePath)) {
       const parsed = watchStateSchema.safeParse(await readJson(statePath, 'watch state'));
@@ -240,6 +362,29 @@ export class WatchStore {
     state.seq = Math.max(state.seq, await lastFeedSeq(path.join(dir, WATCH_FEED_NDJSON)));
     return new WatchStore(dir, state, vaults);
   }
+}
+
+/** Where issuer locks live: $SPECFIRST_LOCK_DIR, else `locks` in the cache directory (defaultCacheDir). */
+export const LOCK_DIR_ENV = 'SPECFIRST_LOCK_DIR';
+
+export function lockDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env[LOCK_DIR_ENV] ? path.resolve(env[LOCK_DIR_ENV]!) : path.join(defaultCacheDir(env), 'locks');
+}
+
+/**
+ * Takes `<lockDir>/issuer-<address>.lock` for the user: two watchers that sign with one key collide on nonces
+ * even when they watch different chains or projects, so the key, not the directory, is what is locked.
+ */
+export function acquireIssuerLock(
+  issuer: string,
+  opts: { dir?: string; pid?: number; isAlive?: (pid: number) => boolean } = {},
+): Promise<() => Promise<void>> {
+  const { dir, ...rest } = opts;
+  return acquirePidLock(path.join(dir ?? lockDir(), `issuer-${issuer.toLowerCase()}.lock`), {
+    ...rest,
+    holder: `watcher signing as ${getAddress(issuer)}`,
+    error: (m) => new WatchError(m),
+  });
 }
 
 /**
@@ -267,14 +412,17 @@ const REPORT_FILE = /^(0|[1-9]\d*)-[0-9a-f]{16}\.json$/;
 /**
  * Adds the vaults of `certs/checks/<chainId>/` (the known set before the watcher, docs/adr/0006) to
  * vaults.json: an address not known yet gets firstSeen backfill (block and startedAt of its oldest report)
- * and its latest report as lastCheck; a known one whose newest report is newer than its lastCheck (a desk
- * check, say) gets that report as lastCheck. The beacon map follows the report used. Unreadable reports are
- * skipped and listed.
+ * and its latest report as lastCheck. A known one whose newest report is newer than its last `checked` event
+ * (a desk check, say) is not overwritten: it is returned in `adopt`, for the watcher to take through the
+ * change decision like a check of its own. Unreadable reports are skipped and listed.
  */
-export async function seedKnownVaults(projectDir: string, store: WatchStore): Promise<{ added: number; updated: number; skipped: string[] }> {
+export async function seedKnownVaults(
+  projectDir: string,
+  store: WatchStore,
+): Promise<{ added: number; adopt: Array<{ subject: string; reportPath: string }>; skipped: string[] }> {
   const chainId = store.state.chainId;
   const root = path.join(projectDir, 'certs', 'checks', String(chainId));
-  const out = { added: 0, updated: 0, skipped: [] as string[] };
+  const out = { added: 0, adopt: [] as Array<{ subject: string; reportPath: string }>, skipped: [] as string[] };
   if (!existsSync(root)) return out;
   for (const dirName of (await readdir(root)).sort()) {
     if (!/^0x[0-9a-f]{40}$/.test(dirName)) continue;
@@ -292,25 +440,28 @@ export async function seedKnownVaults(projectDir: string, store: WatchStore): Pr
         return null;
       }
     };
-    const latest = await read(byBlock[byBlock.length - 1]!.f);
-    if (!latest) continue;
     const known = store.vaults.vaults[dirName];
-    if (!known) {
-      const oldest = byBlock.length > 1 ? ((await read(byBlock[0]!.f)) ?? latest) : latest;
-      store.vaults.vaults[dirName] = {
-        firstSeen: { source: 'backfill', block: oldest.report.blockNumber, at: oldest.report.startedAt },
-        deployBlock: null,
-        lastCheck: lastCheckOf(latest.report, latest.reportPath),
-        lastAttestationId: null,
-        firstDepositBlock: null,
-      };
-      out.added++;
-    } else if (!known.lastCheck || BigInt(known.lastCheck.block) < BigInt(latest.report.blockNumber)) {
-      known.lastCheck = lastCheckOf(latest.report, latest.reportPath);
-      out.updated++;
-    } else {
+    if (known) {
+      const newest = byBlock[byBlock.length - 1]!;
+      const seen = store.state.checkedBlocks[dirName] ?? known.lastCheck?.block;
+      if (seen === undefined || newest.block > BigInt(seen)) {
+        const r = await read(newest.f);
+        if (r) out.adopt.push({ subject: dirName, reportPath: r.reportPath });
+      }
       continue;
     }
+    const latest = await read(byBlock[byBlock.length - 1]!.f);
+    if (!latest) continue;
+    const oldest = byBlock.length > 1 ? ((await read(byBlock[0]!.f)) ?? latest) : latest;
+    store.vaults.vaults[dirName] = {
+      firstSeen: { source: 'backfill', block: oldest.report.blockNumber, at: oldest.report.startedAt },
+      deployBlock: null,
+      lastCheck: lastCheckOf(latest.report, latest.reportPath),
+      lastAttestationId: null,
+      firstDepositBlock: null,
+    };
+    store.state.checkedBlocks[dirName] = latest.report.blockNumber;
+    out.added++;
     const beacon = beaconOf(latest.report);
     if (beacon) store.state.beacons[dirName] = beacon;
     else delete store.state.beacons[dirName];

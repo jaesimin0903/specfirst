@@ -341,13 +341,25 @@ describe('listActive and createSubscriptionSource (mock reads)', () => {
     expect(Date.now() - t).toBeGreaterThanOrEqual(600);
   });
 
-  it('the source does not read a subscription again once it has seen it cancelled', async () => {
+  it('the source reads incrementally: new and active ids each time, expired ones every tenth read, cancelled and other-chain ones never again', async () => {
     const { c, reads } = fake();
     const source = createSubscriptionSource(c, { rps: 1000 });
     expect((await source.active(143)).map((a) => a.id)).toEqual([0n, 4n]);
+    expect(reads.sort()).toEqual([0n, 1n, 2n, 3n, 4n]);
     reads.length = 0;
     expect((await source.active(143)).map((a) => a.id)).toEqual([0n, 4n]);
-    expect(reads.sort()).toEqual([0n, 2n, 3n, 4n]);
+    expect(reads.sort()).toEqual([0n, 4n]);
+    // A new subscription is read once it exists.
+    rows.push(sub({ subject: OTHER }));
+    reads.length = 0;
+    expect((await source.active(143)).map((a) => a.id)).toEqual([0n, 4n, 5n]);
+    expect(reads.sort()).toEqual([0n, 4n, 5n]);
+    // Every tenth read looks at the expired one again (an extend could have restarted it): reads 0, 10, 20, ...
+    for (let i = 0; i < 7; i++) await source.active(143);
+    reads.length = 0;
+    await source.active(143);
+    expect(reads.sort()).toEqual([0n, 2n, 4n, 5n]);
+    rows.pop();
   });
 });
 

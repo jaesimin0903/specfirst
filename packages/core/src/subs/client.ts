@@ -323,21 +323,43 @@ export function listActive(client: SubscriptionsClient, subjectChainId: bigint |
   return client.listActive(subjectChainId, opts);
 }
 
+/** How often (in reads) an expired subscription is read again: only an extend, which costs a fee, restarts it. */
+export const EXPIRED_REREAD_EVERY = 10;
+
 /**
- * The watcher's SubscriptionSource over a CheckSubscriptions client. It remembers the ids it has seen cancelled
- * and does not read them again (a cancelled subscription never becomes active); expired ones are read every time,
- * since an extend can start them again.
+ * The watcher's SubscriptionSource over a CheckSubscriptions client, incremental: each read asks for
+ * subscriptionCount() and reads the ids it has not seen yet, then again the ones that are active (one may be
+ * cancelled or extended), and the expired ones every EXPIRED_REREAD_EVERY reads (an extend can start them
+ * again). Cancelled ones and ones of another subject chain are never read again: neither can become active for
+ * this chain. A read costs about the new and active subscriptions, not all of them.
  */
 export function createSubscriptionSource(client: SubscriptionsClient, opts: Omit<ListActiveOptions, 'skip' | 'onRead'> = {}): SubscriptionSource {
-  const cancelled = new Set<bigint>();
+  const known = new Map<bigint, Subscription>();
+  const never = new Set<bigint>();
+  let reads = 0;
   return {
-    active: (subjectChainId: number) =>
-      client.listActive(subjectChainId, {
+    active: async (subjectChainId: number) => {
+      const chainId = BigInt(subjectChainId);
+      const now = await client.now();
+      const rereadExpired = reads % EXPIRED_REREAD_EVERY === 0;
+      reads++;
+      // Ids known and not worth a read this time: inactive and not due for the expired re-read.
+      const skip = new Set<bigint>(never);
+      for (const [id, s] of known) if (!isActiveAt(s, now) && !rereadExpired) skip.add(id);
+      await client.listActive(subjectChainId, {
         ...opts,
-        skip: cancelled,
+        skip,
         onRead: (id, s) => {
-          if (s.cancelled) cancelled.add(id);
+          known.set(id, s);
+          if (s.cancelled || s.subjectChainId !== chainId) never.add(id);
         },
-      }),
+      });
+      const active: ActiveSubscription[] = [];
+      for (const [id, s] of [...known].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+        if (never.has(id) || !isActiveAt(s, now)) continue;
+        active.push({ id, subscriber: s.subscriber, subjectChainId: s.subjectChainId, subject: s.subject, standardId: s.standardId, startsAt: s.startsAt, endsAt: s.endsAt });
+      }
+      return active;
+    },
   };
 }

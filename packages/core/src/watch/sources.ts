@@ -33,6 +33,8 @@ export interface SourceFixture {
   source: string;
   block: bigint;
   vault: Address;
+  /** The creation log itself (topics and data), when the file carries it: checked offline as the file is read. */
+  log?: { topics: Hex[]; data: Hex };
 }
 
 export class SourcesError extends Error {
@@ -179,7 +181,9 @@ const sourceSpecSchema = z
 
 /**
  * A `--sources` file: the whole source list of one subject chain (it replaces the built-in list), and
- * optional fixtures for `specfirst watch sources --verify`.
+ * optional fixtures. A fixture with its `log` is decoded as the file is read; one without is read from the
+ * chain when the watcher starts (and by `specfirst watch sources --verify`). Either way a source that does not
+ * decode its fixture is refused.
  */
 export const sourcesFileSchema = z
   .object({
@@ -187,7 +191,18 @@ export const sourcesFileSchema = z
     chainId: z.number().int().positive(),
     description: z.string().optional(),
     sources: z.array(sourceSpecSchema).min(1),
-    fixtures: z.array(z.object({ source: z.string().min(1), block: z.string().regex(/^(0|[1-9]\d*)$/), vault: addressString }).strict()).optional(),
+    fixtures: z
+      .array(
+        z
+          .object({
+            source: z.string().min(1),
+            block: z.string().regex(/^(0|[1-9]\d*)$/),
+            vault: addressString,
+            log: z.object({ topics: z.array(z.string().regex(/^0x[0-9a-fA-F]{64}$/)).min(1), data: z.string().regex(/^0x([0-9a-fA-F]{2})*$/) }).strict().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
   })
   .strict();
 export type SourcesFile = z.infer<typeof sourcesFileSchema>;
@@ -207,9 +222,20 @@ export function sourcesFromFile(json: unknown, chainId: number): { sources: Watc
     if (names.has(s.name)) throw new SourcesError(`two sources are named "${s.name}"`);
     names.add(s.name);
   }
-  const fixtures = (file.fixtures ?? []).map((f) => {
+  const fixtures = (file.fixtures ?? []).map((f): SourceFixture => {
     if (!names.has(f.source)) throw new SourcesError(`fixture names source "${f.source}", which the file does not list`);
-    return { source: f.source, block: BigInt(f.block), vault: checksum(f.vault) };
+    const fixture: SourceFixture = { source: f.source, block: BigInt(f.block), vault: checksum(f.vault), ...(f.log ? { log: { topics: f.log.topics as Hex[], data: f.log.data as Hex } } : {}) };
+    if (fixture.log) {
+      // A source that does not decode its own fixture would watch for nothing (or for the wrong address).
+      const source = sources.find((s) => s.name === f.source)!;
+      const signal = source.address
+        ? decodeSignal({ address: source.address, topics: fixture.log.topics, data: fixture.log.data, blockNumber: fixture.block, transactionHash: `0x${'00'.repeat(32)}`, logIndex: 0 }, [source])
+        : null;
+      if (!signal || signal.subject !== fixture.vault) {
+        throw new SourcesError(`source "${f.source}" does not decode its fixture at block ${f.block}: expected ${fixture.vault}, got ${signal?.subject ?? 'nothing'}`);
+      }
+    }
+    return fixture;
   });
   return { sources, fixtures };
 }

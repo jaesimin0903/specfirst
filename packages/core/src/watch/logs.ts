@@ -94,8 +94,21 @@ export class LogWindow {
   }
 }
 
+/**
+ * The node that answered getLogs is behind the requested range: its own head is `head`. The reader caps the
+ * window at that head instead of taking a missing range for an empty one.
+ */
+export class LogsNodeBehindError extends Error {
+  constructor(readonly head: bigint) {
+    super(`the getLogs node is at block ${head}, behind the requested range`);
+    this.name = 'LogsNodeBehindError';
+  }
+}
+
 export interface ReadLogWindowsInput {
+  /** eth_getLogs over [fromBlock, toBlock] for these topic0 values; may throw LogsNodeBehindError. */
   getLogs(fromBlock: bigint, toBlock: bigint, topics: Hex[]): Promise<SignalLog[]>;
+  /** Asked one at a time, so a flood of one event cannot crowd another out of a node's result limit. */
   topics: Hex[];
   /** First block to read. */
   from: bigint;
@@ -107,29 +120,52 @@ export interface ReadLogWindowsInput {
   /** Called with each window's logs before the next window is read; the caller handles them and moves its cursor. */
   onWindow(w: { fromBlock: bigint; toBlock: bigint; logs: SignalLog[] }): Promise<void>;
   onShrink?(info: { fromBlock: bigint; toBlock: bigint; size: bigint; error: unknown }): void;
+  /**
+   * A block whose logs of `topic` the node refuses even in a one-block window. Without this callback the
+   * error is thrown; with it the block is skipped for that topic and reading goes on.
+   */
+  onUnreadable?(info: { block: bigint; topic: Hex; error: unknown }): Promise<void>;
 }
 
 /**
- * Reads [from, to] in windows of `window.size` blocks, shrinking the window on range errors and retrying the
- * same start. Returns the first block not read. Any other error is thrown after the windows read so far were
- * handed to onWindow, so the caller's cursor is where reading stopped.
+ * Reads [from, to] in windows of `window.size` blocks, one getLogs per topic, shrinking the window on range
+ * errors and retrying the same start. A one-block window that still fails goes to onUnreadable and is passed
+ * over. A node behind the window (LogsNodeBehindError) caps the range at its head, and reading stops there.
+ * Returns the first block not read. Any other error is thrown after the windows read so far were handed to
+ * onWindow, so the caller's cursor is where reading stopped.
  */
 export async function readLogWindows(i: ReadLogWindowsInput): Promise<bigint> {
   let next = i.from;
+  let to = i.to;
   let windows = 0;
-  while (next <= i.to && (i.maxWindows === undefined || windows < i.maxWindows)) {
-    const size = i.window.size;
-    const toBlock = next + size - 1n > i.to ? i.to : next + size - 1n;
-    let logs: SignalLog[];
-    try {
-      logs = await i.getLogs(next, toBlock, i.topics);
-    } catch (err) {
-      if (isRangeError(err) && i.window.shrink(err, toBlock - next + 1n)) {
-        i.onShrink?.({ fromBlock: next, toBlock, size: i.window.size, error: err });
-        continue;
+  while (next <= to && (i.maxWindows === undefined || windows < i.maxWindows)) {
+    const toBlock = next + i.window.size - 1n > to ? to : next + i.window.size - 1n;
+    const logs: SignalLog[] = [];
+    let retry = false;
+    for (const topic of i.topics) {
+      try {
+        logs.push(...(await i.getLogs(next, toBlock, [topic])));
+      } catch (err) {
+        if (err instanceof LogsNodeBehindError || (err as { name?: unknown })?.name === 'LogsNodeBehindError') {
+          const head = (err as LogsNodeBehindError).head;
+          if (head < next) return next;
+          to = head < to ? head : to;
+          retry = true;
+          break;
+        }
+        if (isRangeError(err) && i.window.shrink(err, toBlock - next + 1n)) {
+          i.onShrink?.({ fromBlock: next, toBlock, size: i.window.size, error: err });
+          retry = true;
+          break;
+        }
+        if (isRangeError(err) && toBlock === next && i.onUnreadable) {
+          await i.onUnreadable({ block: next, topic, error: err });
+          continue;
+        }
+        throw err;
       }
-      throw err;
     }
+    if (retry) continue;
     i.window.succeeded();
     await i.onWindow({ fromBlock: next, toBlock, logs });
     next = toBlock + 1n;

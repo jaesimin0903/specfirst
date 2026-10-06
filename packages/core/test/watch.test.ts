@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { encodeAbiParameters, encodeEventTopics, getAddress, toEventSelector, type Address, type Hex } from 'viem';
+import { encodeAbiParameters, encodeEventTopics, getAddress, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -69,271 +69,39 @@ import {
   type WatchSource,
 } from '../src/index.js';
 import * as browserWatch from '../src/watch/index.js';
+import {
+  MORPHO,
+  SIGNALS,
+  DEMO_SOURCES,
+  ERC4626,
+  T0,
+  hash,
+  addr,
+  EVK_FACTORY,
+  V2_FACTORY,
+  IMPL,
+  signalLog,
+  source,
+  factoryLog,
+  depositLog,
+  upgradedLog,
+  setImplementationLog,
+  reportOf,
+  FakeRegistry,
+  rangeError,
+  harness,
+  kinds,
+  attestParams,
+  cleanupHarnesses,
+  trackDir,
+  type Harness,
+  type RecordedLog,
+} from './helpers/watchHarness.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const MORPHO = JSON.parse(readFileSync(path.join(here, 'fixtures/attest/morpho-143-109061472.json'), 'utf8')) as StandardCheckReport;
-interface RecordedLog {
-  address: string;
-  blockNumber: string;
-  transactionHash: string;
-  logIndex: string;
-  topics: string[];
-  data: string;
-}
-const SIGNALS = JSON.parse(readFileSync(path.join(here, 'fixtures/watch/signals-143.json'), 'utf8')) as {
-  factories: Array<{ source: string; block: string; vault: string; log: RecordedLog }>;
-  generic: Record<'deposit' | 'upgraded' | 'implementation', { subject?: string; factory?: string; implementation?: string; log: RecordedLog }>;
-};
-const DEMO_SOURCES = path.resolve(here, '../../../examples/watch/sources-demo.json');
-const ERC4626 = standardIdOf('erc4626');
-const T0 = new Date('2026-10-06T12:00:00.000Z');
-const hash = (n: number): Hex => `0x${n.toString(16).padStart(64, '0')}`;
-const addr = (n: number): Address => getAddress(`0x${n.toString(16).padStart(40, '0')}`);
-const EVK_FACTORY = getAddress('0xba4Dd672062dE8FeeDb665DD4410658864483f1E');
-const V2_FACTORY = getAddress('0x8b2f922162fbb60a6a072cc784a2e4168fb0bb0c');
-const IMPL = addr(0x1111);
 
-function signalLog(l: RecordedLog): SignalLog {
-  return { address: getAddress(l.address), topics: l.topics as Hex[], data: l.data as Hex, blockNumber: BigInt(l.blockNumber), transactionHash: l.transactionHash as Hex, logIndex: Number(l.logIndex) };
-}
+afterEach(cleanupHarnesses);
 
-const source = (name: string): WatchSource => [...MONAD_MAINNET_SOURCES, ...GENERIC_SOURCES].find((s) => s.name === name)!;
-
-/** A CreateVaultV2 log of the Morpho V2 factory naming `vault`. */
-function factoryLog(vault: Address, block: bigint, logIndex = 0): SignalLog {
-  const s = source('Morpho VaultV2Factory');
-  const topics = encodeEventTopics({ abi: [s.event], args: { owner: addr(0xabc), asset: addr(0xa55e7), newVaultV2: vault } } as never) as Hex[];
-  return { address: V2_FACTORY, topics, data: encodeAbiParameters([{ type: 'bytes32' }], [hash(7)]), blockNumber: block, transactionHash: hash(Number(block)), logIndex };
-}
-
-function depositLog(emitter: Address, block: bigint, logIndex = 0): SignalLog {
-  const s = source('ERC-4626 Deposit');
-  const topics = encodeEventTopics({ abi: [s.event], args: { sender: addr(0xbeef), owner: addr(0xbeef) } } as never) as Hex[];
-  return { address: emitter, topics, data: encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }], [5n, 5n]), blockNumber: block, transactionHash: hash(Number(block) + 1), logIndex };
-}
-
-function upgradedLog(emitter: Address, block: bigint): SignalLog {
-  const s = source('EIP-1967 Upgraded');
-  return { address: emitter, topics: encodeEventTopics({ abi: [s.event], args: { implementation: IMPL } } as never) as Hex[], data: '0x', blockNumber: block, transactionHash: hash(Number(block) + 2), logIndex: 0 };
-}
-
-function setImplementationLog(block: bigint): SignalLog {
-  const s = source('Euler EVK GenericFactory implementation');
-  return { address: EVK_FACTORY, topics: encodeEventTopics({ abi: [s.event], args: { newImplementation: IMPL } } as never) as Hex[], data: '0x', blockNumber: block, transactionHash: hash(Number(block) + 3), logIndex: 0 };
-}
-
-/** The Morpho fixture re-pointed at `subject` and `block`, with `fail` properties failing and an optional beacon. */
-function reportOf(
-  subject: Address,
-  block: bigint,
-  o: { fail?: string[]; forkError?: string; implementationKey?: Hex; beacon?: Address; startedAt?: string } = {},
-): StandardCheckReport {
-  const results = MORPHO.results.map((r) =>
-    o.fail?.includes(r.id)
-      ? { ...r, status: 'fail' as const, reason: 'counterexample' }
-      : r.id === o.forkError
-        ? { ...r, status: 'inconclusive' as const, reason: `${FORK_ERROR_NOTE}: EVM error; database error: failed to get account: HTTP error 429` }
-        : r,
-  );
-  const identity = o.beacon
-    ? {
-        ...MORPHO.identity,
-        codeSize: 200,
-        proxy: { kind: 'eip1967-beacon' as const, implementation: IMPL, beacon: o.beacon },
-        implementation: { address: IMPL, codeHash: hash(0x51), metadataHash: null, maskedCodeHash: hash(0x52) },
-        implementationKey: o.implementationKey ?? hash(0x52),
-        implementationKeyKind: { of: 'implementation' as const, hash: 'maskedCodeHash' as const },
-      }
-    : { ...MORPHO.identity, ...(o.implementationKey ? { implementationKey: o.implementationKey } : {}) };
-  return parseCheckReport(
-    JSON.stringify({ ...MORPHO, address: subject, blockNumber: block.toString(), results, summary: summarize(results), identity, startedAt: o.startedAt ?? MORPHO.startedAt }),
-  );
-}
-
-/** Registry stand-in with the rules the watcher relies on: latest per subject, supersede, OlderThanLatest. */
-class FakeRegistry {
-  readonly list: Array<{ subject: Address; attestation: Attestation }> = [];
-  failNext: Error | null = null;
-  /** Runs at the start of the next attest: another issuer acting between the watcher's read and its send. */
-  beforeAttest: ((p: AttestParams) => void) | null = null;
-
-  latest(subject: Address): { id: bigint; attestation: Attestation } | null {
-    for (let i = this.list.length - 1; i >= 0; i--) if (this.list[i]!.subject.toLowerCase() === subject.toLowerCase()) return { id: BigInt(i), attestation: this.list[i]!.attestation };
-    return null;
-  }
-
-  attest(p: AttestParams): { id: bigint; hash: Hex; gasCostWei: bigint } {
-    this.beforeAttest?.(p);
-    if (this.failNext) {
-      const err = this.failNext;
-      this.failNext = null;
-      throw err;
-    }
-    const prev = this.latest(p.subject);
-    if (prev && prev.attestation.status === 1) {
-      if (p.blockNumber < prev.attestation.blockNumber) throw Object.assign(new Error('OlderThanLatest reverted'), { errorName: 'OlderThanLatest' });
-      prev.attestation.status = 2;
-    }
-    const id = BigInt(this.list.length);
-    this.list.push({
-      subject: p.subject,
-      attestation: {
-        ...p,
-        issuedAt: 1n,
-        issuer: addr(0x155),
-        status: 1,
-        supersededBy: 0n,
-        revokeReasonHash: hash(0),
-      } as Attestation,
-    });
-    return { id, hash: hash(0x7000 + Number(id)), gasCostWei: 1n };
-  }
-}
-
-interface Chain {
-  head: bigint;
-  logs: SignalLog[];
-  notVaults: Set<string>;
-  /** Probes of these subjects throw an RPC error this many more times. */
-  probeErrors: Map<string, number>;
-  /** Failing property ids per subject (lowercase). */
-  failing: Map<string, string[]>;
-  /** Checks of these subjects throw this many more times. */
-  checkErrors: Map<string, number>;
-  /** Checks of these subjects leave `deposit` inconclusive on a fork RPC error this many more times. */
-  forkErrors: Map<string, number>;
-  /** Checks of these subjects run out of time. */
-  timeouts: Set<string>;
-  beacons: Map<string, Address>;
-  /** eth_getLogs refuses windows larger than this, like rpc.monad.xyz (-32614 with HTTP 413). */
-  rangeLimit: bigint | null;
-  getLogsCalls: Array<[bigint, bigint]>;
-}
-
-interface Harness {
-  dir: string;
-  chain: Chain;
-  registry: FakeRegistry;
-  clock: { now: Date };
-  effects: WatchEffects;
-  checks: Array<{ subject: Address; block: bigint }>;
-  events: WatchEvent[];
-  store: WatchStore;
-  watcher(config?: Partial<WatchConfig>, hooks?: ConstructorParameters<typeof Watcher>[0]['hooks'], sources?: WatchSource[]): Watcher;
-  feed(): Promise<FeedEvent[]>;
-  reload(): Promise<WatchStore>;
-  /** Report copies saved under certs/checks, by path. */
-  savedReports(): string[];
-}
-
-const dirs: string[] = [];
-afterEach(async () => {
-  for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
-});
-
-function rangeError(limit: bigint): Error {
-  // What viem's http transport throws for rpc.monad.xyz: HTTP 413 with the JSON-RPC error in details.
-  return Object.assign(new Error('HTTP request failed.'), {
-    name: 'HttpRequestError',
-    status: 413,
-    details: JSON.stringify({ code: -32614, message: `eth_getLogs is limited to a ${limit} range` }),
-  });
-}
-
-async function harness(): Promise<Harness> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'specfirst-watch-'));
-  dirs.push(dir);
-  const chain: Chain = {
-    head: 2000n,
-    logs: [],
-    notVaults: new Set(),
-    probeErrors: new Map(),
-    failing: new Map(),
-    checkErrors: new Map(),
-    forkErrors: new Map(),
-    timeouts: new Set(),
-    beacons: new Map(),
-    rangeLimit: null,
-    getLogsCalls: [],
-  };
-  const registry = new FakeRegistry();
-  const clock = { now: T0 };
-  const saved = new Map<string, StandardCheckReport>();
-  const checks: Array<{ subject: Address; block: bigint }> = [];
-  const events: WatchEvent[] = [];
-  const effects: WatchEffects = {
-    subjectChainId: 143,
-    latestBlock: async () => chain.head,
-    getLogs: async (from, to, topics) => {
-      chain.getLogsCalls.push([from, to]);
-      if (chain.rangeLimit !== null && to - from > chain.rangeLimit) throw rangeError(chain.rangeLimit);
-      return chain.logs.filter((l) => l.blockNumber >= from && l.blockNumber <= to && topics.includes(l.topics[0]!));
-    },
-    precheck: async (subject, block) => {
-      const left = chain.probeErrors.get(subject.toLowerCase()) ?? 0;
-      if (left > 0) {
-        chain.probeErrors.set(subject.toLowerCase(), left - 1);
-        throw Object.assign(new Error('missing trie node'), { name: 'RpcRequestError' });
-      }
-      if (chain.notVaults.has(subject.toLowerCase())) return { ok: false, reason: `asset() failed at block ${block}: reverted` };
-      return { ok: true, asset: addr(0xa55e7) };
-    },
-    runCheck: async (subject, block) => {
-      const left = chain.checkErrors.get(subject.toLowerCase()) ?? 0;
-      if (left > 0) {
-        chain.checkErrors.set(subject.toLowerCase(), left - 1);
-        throw new Error('forge exited with code 1: could not fork');
-      }
-      if (chain.timeouts.has(subject.toLowerCase())) throw new StandardCheckTimeoutError(600);
-      checks.push({ subject, block });
-      const forks = chain.forkErrors.get(subject.toLowerCase()) ?? 0;
-      if (forks > 0) chain.forkErrors.set(subject.toLowerCase(), forks - 1);
-      return reportOf(subject, block, {
-        fail: chain.failing.get(subject.toLowerCase()),
-        ...(forks > 0 ? { forkError: 'deposit' } : {}),
-        beacon: chain.beacons.get(subject.toLowerCase()),
-        startedAt: clock.now.toISOString(),
-      });
-    },
-    saveReport: async (report) => {
-      const file = `${report.chainId}/${report.address.toLowerCase()}/${report.blockNumber}-${checkReportHash(report).slice(2, 18)}.json`;
-      saved.set(`certs/checks/${file}`, report);
-      return { reportPath: `certs/checks/${file}`, reportURI: `https://example.org/checks/${file}` };
-    },
-    loadReport: async (p) => {
-      const r = saved.get(p);
-      if (!r) throw new Error(`no report ${p}`);
-      return r;
-    },
-    verifySubject: async (report) => ({ chainId: 143, blockNumber: BigInt(report.blockNumber), codeHash: report.identity.codeHash as Hex, identity: report.identity as never, unknownProxy: false }),
-    latestAttestation: async (subject) => registry.latest(subject),
-    attest: async (params) => registry.attest(params),
-    now: () => clock.now,
-  };
-  const h: Harness = {
-    dir,
-    chain,
-    registry,
-    clock,
-    effects,
-    checks,
-    events,
-    store: await WatchStore.load(dir, 143),
-    watcher: (config = {}, hooks, sources) =>
-      new Watcher({ effects, store: h.store, sources: sources ?? builtinSources(143).sources, config: { sweepPerHour: 0, subscriptionRefreshMs: 0, checkRetryMs: 60_000, ...config }, ...(hooks ? { hooks } : {}), onEvent: (e) => events.push(e) }),
-    feed: async () => {
-      const text = await readFile(path.join(dir, WATCH_DIR, '143', 'feed.ndjson'), 'utf8').catch(() => '');
-      const parsed = parseFeed(text);
-      expect(parsed.invalid).toBe(0);
-      return parsed.events;
-    },
-    reload: async () => (h.store = await WatchStore.load(dir, 143)),
-    savedReports: () => [...saved.keys()],
-  };
-  return h;
-}
-
-const kinds = (events: FeedEvent[]) => events.map((e) => `${e.kind}:${e.source ?? ''}`);
 
 describe('browser-safe @specfirst/core/watch', () => {
   it('imports only viem, zod and its own browser-safe modules', () => {
@@ -477,9 +245,7 @@ describe('signal sources (docs/adr/0006 Signals)', () => {
       ['ERC-4626 Deposit', 'deposit', false],
       ['EIP-1967 Upgraded', 'upgrade', false],
       ['EIP-1967 BeaconUpgraded', 'beacon-upgrade', false],
-      ['DemoVault BrokenSet', 'upgrade', false],
     ]);
-    expect(sources[4]!.topic0).toBe(toEventSelector('BrokenSet(bool)'));
     expect(() => sourcesFromFile(json, 143)).toThrow(/for chain 10143, the subject chain is 143/);
   });
 
@@ -545,7 +311,7 @@ describe('getLogs windows', () => {
         if (to - from > 100n) throw rangeError(100n);
         return [];
       },
-      topics: [],
+      topics: [hash(1)],
       from: 500n,
       to: 799n,
       window,
@@ -571,7 +337,7 @@ describe('getLogs windows', () => {
           if (++n === 3) throw new Error('fetch failed');
           return [];
         },
-        topics: [],
+        topics: [hash(1)],
         from: 0n,
         to: 99n,
         window: new LogWindow(10n),
@@ -670,7 +436,7 @@ describe('WatchStore files', () => {
   let dir: string;
   beforeEach(async () => {
     dir = await mkdtemp(path.join(tmpdir(), 'specfirst-watch-store-'));
-    dirs.push(dir);
+    trackDir(dir);
   });
 
   it('starts empty, saves state, vaults and status atomically, and reloads them', async () => {
@@ -747,7 +513,7 @@ describe('WatchStore files', () => {
 
     const store = await WatchStore.load(dir, 143);
     const out = await seedKnownVaults(dir, store);
-    expect(out).toMatchObject({ added: 2, updated: 0 });
+    expect(out).toMatchObject({ added: 2, adopt: [] });
     expect(out.skipped).toHaveLength(2);
     expect(store.vaults.vaults[addr(1).toLowerCase()]).toEqual({
       firstSeen: { source: 'backfill', block: '100', at: '2026-10-01T00:00:00.000Z' },
@@ -757,10 +523,13 @@ describe('WatchStore files', () => {
       firstDepositBlock: null,
     });
     expect(store.state.beacons).toEqual({ [addr(2).toLowerCase()]: EVK_FACTORY.toLowerCase() });
-    expect(await seedKnownVaults(dir, store)).toMatchObject({ added: 0, updated: 0 });
-    await write(reportOf(addr(1), 300n));
-    expect(await seedKnownVaults(dir, store)).toMatchObject({ added: 0, updated: 1 });
-    expect(store.vaults.vaults[addr(1).toLowerCase()]!.lastCheck!.block).toBe('300');
+    expect(store.state.checkedBlocks).toEqual({ [addr(1).toLowerCase()]: '200', [addr(2).toLowerCase()]: '150' });
+    expect(await seedKnownVaults(dir, store)).toMatchObject({ added: 0, adopt: [] });
+    // A newer report of a known vault (a desk check) is not taken silently: it is handed back for the watcher's
+    // change decision, and the last check stays until then.
+    const desk = await write(reportOf(addr(1), 300n));
+    expect(await seedKnownVaults(dir, store)).toMatchObject({ added: 0, adopt: [{ subject: addr(1).toLowerCase(), reportPath: desk }] });
+    expect(store.vaults.vaults[addr(1).toLowerCase()]!.lastCheck!.block).toBe('200');
     expect(store.vaults.vaults[addr(1).toLowerCase()]!.firstSeen.block).toBe('100');
   });
 });
@@ -784,8 +553,11 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     const feed = await h.feed();
     expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'attested:factory', 'changed:factory']);
     expect(feed[0]).toMatchObject({ seq: 1, chainId: 143, subject: V, block: '1500', txHash: hash(1500), factory: { address: V2_FACTORY, name: 'Morpho VaultV2Factory' } });
-    expect(feed[2]).toMatchObject({ reason: 'attesting: no attestation of the subject yet', check: { block: '1990', summary: { pass: 30, fail: 0 }, failed: [] } });
-    expect(feed[3]!.attestation).toEqual({ id: '0', txHash: hash(0x7000), supersedes: null });
+    expect(feed[2]).toMatchObject({
+      reason: 'attesting [factory]: first check of a vault a factory announced; no attestation of the subject yet',
+      check: { block: '1990', summary: { pass: 30, fail: 0 }, failed: [] },
+    });
+    expect(feed[3]).toMatchObject({ reason: '[factory]', attestation: { id: '0', txHash: hash(0x7000), supersedes: null } });
     expect(feed[4]).toMatchObject({ change: { kind: 'new', from: null }, attestation: { id: '0' } });
     expect(h.checks).toEqual([{ subject: V, block: 1990n }]);
     expect(h.registry.list[0]!.attestation.reportURI).toMatch(/^https:\/\/example\.org\/checks\/143\/0x0+aaa1\/1990-[0-9a-f]{16}\.json$/);
@@ -807,13 +579,23 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
       running: null,
       queue: [],
       counts: { known: 1, detected24h: 1, checked24h: 1, attested24h: 1, changed24h: 1 },
-      attestBudget: { perDay: 40, usedToday: 1 },
+      attestBudget: {
+        perDay: 15,
+        usedToday: 1,
+        unsolicitedPerDay: 10,
+        unsolicitedUsedToday: 1,
+        perSubjectPerDay: 2,
+        minBalanceWei: '300000000000000000',
+        balanceWei: '10000000000000000000',
+        paused: null,
+      },
+      gasCostWei: '1',
     });
     expect(status.sources.find((s) => s.name === 'Morpho VaultV2Factory')).toEqual({ name: 'Morpho VaultV2Factory', address: V2_FACTORY, topic0: '0x341ce009267aa0d78cc12b34155e223904a51ed49d144beb6eb8be87813edb4e', seen: 1 });
     expect(h.events.filter((e) => e.type === 'watch-feed')).toHaveLength(5);
   });
 
-  it('an unchanged re-check (first deposit) records checked without a transaction; a changed outcome attests, supersedes and alerts', async () => {
+  it('an unchanged re-check (first deposit) records checked without a transaction; a confirmed change attests, supersedes and alerts', async () => {
     const h = await harness();
     const delivered: Array<{ kind: string; subs: string[] }> = [];
     const sink: AlertSink = {
@@ -828,8 +610,9 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     h.store.state.cursor = '1400';
     const w = h.watcher({ subscribedMinutes: 600 }, { subscriptions: subs, alerts: sink });
     await w.pass();
-    // A subscribed candidate is raised to the subscribed priority; its first check reaches the sink as a change (new).
-    expect(kinds(await h.feed())).toEqual(['detected:factory', 'queued:factory', 'queued:subscribed', 'checked:subscribed', 'attested:subscribed', 'changed:subscribed', 'alerted:subscribed']);
+    // A subscribed candidate is queued at the subscribed priority; its first check reaches the sink as a change (new).
+    expect(kinds(await h.feed())).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'attested:factory', 'changed:factory', 'alerted:factory']);
+    expect((await h.feed())[2]!.reason).toBe('attesting [subscribed]: first check since a subscription started; no attestation of the subject yet');
     expect(delivered).toEqual([{ kind: 'changed', subs: ['3'] }]);
 
     let mark = (await h.feed()).length;
@@ -838,22 +621,37 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass();
     const afterDeposit = (await h.feed()).slice(mark);
     expect(kinds(afterDeposit)).toEqual(['queued:first-deposit', 'checked:first-deposit']);
-    expect(afterDeposit[1]).toMatchObject({ block: '2005', reason: 'unchanged since attestation 0', check: { block: '2090' } });
+    expect(afterDeposit[1]).toMatchObject({ block: '2005', reason: 'not attested [unchanged]: unchanged since attestation 0', check: { block: '2090' } });
     expect(h.registry.list).toHaveLength(1);
     expect(delivered).toHaveLength(1);
     expect(h.store.vaults.vaults[V.toLowerCase()]!.firstDepositBlock).toBe('2005');
 
+    // The upgrade really changed the implementation slot; the regression waits for a second check at a later block.
     mark = (await h.feed()).length;
     h.chain.head = 2200n;
     h.chain.failing.set(V.toLowerCase(), ['previewDeposit']);
+    h.chain.fingerprints.set(V.toLowerCase(), hash(0xf2));
     h.chain.logs.push(upgradedLog(V, 2150n));
     await w.pass();
+    const pendingCheck = (await h.feed()).slice(mark);
+    expect(kinds(pendingCheck)).toEqual(['queued:upgrade', 'checked:upgrade', 'queued:upgrade']);
+    expect(pendingCheck[1]!.reason).toBe('pending confirmation [confirm]: regressed against the last check; nothing follows until a second check at a later block agrees');
+    expect(h.registry.list).toHaveLength(1);
+    expect(delivered).toHaveLength(1);
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastCheck!.failed).toEqual([]);
+
+    mark = (await h.feed()).length;
+    later(h, 2 * 60_000);
+    h.chain.head = 2300n;
+    await w.pass();
     const afterUpgrade = (await h.feed()).slice(mark);
-    expect(kinds(afterUpgrade)).toEqual(['queued:upgrade', 'checked:upgrade', 'attested:upgrade', 'changed:upgrade', 'alerted:upgrade']);
-    expect(afterUpgrade[1]!.reason).toBe('attesting: counts, failed differ from attestation 0');
-    expect(afterUpgrade[2]!.attestation).toEqual({ id: '1', txHash: hash(0x7001), supersedes: '0' });
-    expect(afterUpgrade[3]).toMatchObject({ change: { kind: 'regressed', from: { failed: [] }, to: { failed: ['previewDeposit'], summary: { pass: 29, fail: 1 } } }, attestation: { id: '1' } });
-    expect(afterUpgrade[4]).toMatchObject({ kind: 'alerted', subject: V, alert: { subscriptionId: '3', channel: 'webhook', ok: true } });
+    expect(kinds(afterUpgrade)).toEqual(['checked:upgrade', 'attested:upgrade', 'changed:upgrade', 'alerted:upgrade']);
+    expect(afterUpgrade[0]!.reason).toBe(
+      'confirmed by a second check at block 2290 after block 2190; attesting [subscribed]: confirmed change of a subscribed subject; counts, failed differ from attestation 0',
+    );
+    expect(afterUpgrade[1]!.attestation).toEqual({ id: '1', txHash: hash(0x7001), supersedes: '0' });
+    expect(afterUpgrade[2]).toMatchObject({ change: { kind: 'regressed', from: { failed: [] }, to: { failed: ['previewDeposit'], summary: { pass: 29, fail: 1 } } }, attestation: { id: '1' } });
+    expect(afterUpgrade[3]).toMatchObject({ kind: 'alerted', subject: V, alert: { subscriptionId: '3', channel: 'webhook', ok: true } });
     expect(delivered).toEqual([
       { kind: 'changed', subs: ['3'] },
       { kind: 'changed', subs: ['3'] },
@@ -931,12 +729,12 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass();
 
     const feed = await h.feed();
-    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'queued:subscribed', 'checked:subscribed', 'attested:subscribed', 'changed:subscribed', 'alerted:']);
-    expect(feed.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    const changed = feed[5]!;
-    expect(feed[6]).toEqual({
+    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'attested:factory', 'changed:factory', 'alerted:']);
+    expect(feed.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+    const changed = feed[4]!;
+    expect(feed[5]).toEqual({
       v: 1,
-      seq: 7,
+      seq: 6,
       at: T0.toISOString(),
       kind: 'alerted',
       chainId: 143,
@@ -966,16 +764,17 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     h.chain.head = 2100n;
     h.chain.logs.push(depositLog(V, 2005n));
     await w.pass();
-    const first = (await h.feed()).slice(7);
+    const first = (await h.feed()).slice(6);
     expect(kinds(first)).toEqual(['queued:first-deposit', 'checked:first-deposit', 'alerted:']);
     expect(first[2]).toMatchObject({ seq: first[1]!.seq + 1, alert: { subscriptionId: '9', subscriber: alice.address, ok: true, status: 204 } });
     expect(posts[1]!.body).toMatchObject({ kind: 'first-check', subscriptionId: '9', subscriptionIds: ['9'], change: null, attestation: null, check: first[1]!.check });
 
     // Another unchanged re-check sends nothing: no change, and no subscription without its first check.
     h.chain.head = 2150n;
+    h.chain.fingerprints.set(V.toLowerCase(), hash(0xf2));
     h.chain.logs.push(upgradedLog(V, 2120n));
     await w.pass();
-    expect(kinds((await h.feed()).slice(10))).toEqual(['queued:upgrade', 'checked:upgrade']);
+    expect(kinds((await h.feed()).slice(9))).toEqual(['queued:upgrade', 'checked:upgrade']);
     expect(posts).toHaveLength(2);
 
     // A failed delivery is an alerted event with a reason, never the URL, and a valid feed line.
@@ -983,7 +782,12 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     const w2 = h.watcher({ subscribedMinutes: 600 }, { subscriptions: { active: async () => [sub(3n, alice.address)] }, alerts: failing });
     h.chain.head = 2200n;
     h.chain.failing.set(V.toLowerCase(), ['previewDeposit']);
+    h.chain.fingerprints.set(V.toLowerCase(), hash(0xf3));
     h.chain.logs.push(upgradedLog(V, 2170n));
+    await w2.pass();
+    // The regression is confirmed by the next check at a later block, then alerted.
+    h.clock.now = new Date(h.clock.now.getTime() + 2 * 60_000);
+    h.chain.head = 2300n;
     await w2.pass();
     const last = (await h.feed()).at(-1)!;
     expect(last).toMatchObject({ kind: 'alerted', alert: { subscriptionId: '3', ok: false, status: 410 }, reason: 'HTTP 410 after 1 attempt' });
@@ -1015,16 +819,25 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass();
     expect(kinds(await h.feed())).toEqual(['detected:deposit', 'probe-rejected:deposit']);
     expect((await h.feed())[1]!.reason).toBe('asset() failed at block 2000: reverted');
-    expect(h.store.state.rejected[X.toLowerCase()]).toEqual({ at: T0.toISOString(), block: '2000', reason: 'asset() failed at block 2000: reverted' });
+    expect(h.store.state.rejected[X.toLowerCase()]).toEqual({ at: T0.toISOString(), block: '2000', reason: 'asset() failed at block 2000: reverted', fingerprint: hash(0xf1) });
     h.chain.logs.push(depositLog(X, 2005n));
     h.chain.head = 2020n;
     await w.pass();
     expect(await h.feed()).toHaveLength(2);
+    // Within the rejection window an Upgraded probes again only when the code or a slot changed.
     h.chain.notVaults.delete(X.toLowerCase());
-    h.chain.logs.push(upgradedLog(X, 2015n));
+    h.chain.logs.push(upgradedLog(X, 2012n));
+    h.chain.head = 2025n;
+    await w.pass();
+    expect(await h.feed()).toHaveLength(2);
+    h.chain.fingerprints.set(X.toLowerCase(), hash(0xf9));
+    h.chain.logs.push(upgradedLog(X, 2017n));
     h.chain.head = 2030n;
     await w.pass();
-    expect(kinds((await h.feed()).slice(2))).toEqual(['detected:upgrade', 'queued:upgrade', 'checked:upgrade', 'attested:upgrade', 'changed:upgrade']);
+    // An unsolicited candidate that passes is checked and recorded, not attested.
+    expect(kinds((await h.feed()).slice(2))).toEqual(['detected:upgrade', 'queued:upgrade', 'checked:upgrade', 'changed:upgrade']);
+    expect((await h.feed())[4]!.reason).toBe('not attested [policy]: an unsolicited candidate that passes is not attested');
+    expect(h.registry.list).toHaveLength(0);
     expect(h.store.state.rejected).toEqual({});
 
     // An RPC or node error in a probe is never "not a vault": the candidate is probed again, the wait doubling.
@@ -1090,7 +903,11 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     const w = h.watcher({ maxAttestPerDay: 1 });
     await w.pass({ drain: true });
     const checked = (await h.feed()).filter((e) => e.kind === 'checked');
-    expect(checked.map((e) => e.reason)).toEqual(['attesting: no attestation of the subject yet', 'attestation deferred, 1 of 1 made today: no attestation of the subject yet']);
+    expect(checked.map((e) => e.reason)).toEqual([
+      'attesting [factory]: first check of a vault a factory announced; no attestation of the subject yet',
+      'attestation deferred [factory]: 1 of 1 attestations made today; no attestation of the subject yet',
+    ]);
+    expect(h.store.state.deferred[W.toLowerCase()]).toMatchObject({ cls: 'factory', notBefore: '2026-10-07T00:00:00.000Z' });
     expect(h.registry.list).toHaveLength(1);
     expect(Object.keys(h.store.state.deferred)).toEqual([W.toLowerCase()]);
     await w.pass();
@@ -1100,7 +917,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     expect(h.registry.list.map((a) => a.subject)).toEqual([V, W]);
     expect((await h.feed()).at(-1)).toMatchObject({ kind: 'attested', subject: W, attestation: { id: '1', supersedes: null } });
     expect(h.store.state.deferred).toEqual({});
-    expect((await statusOf(h)).attestBudget).toEqual({ perDay: 1, usedToday: 1 });
+    expect((await statusOf(h)).attestBudget).toMatchObject({ perDay: 1, usedToday: 1, unsolicitedUsedToday: 1 });
 
     const dry = await harness();
     dry.effects.attest = null;
@@ -1109,7 +926,8 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     dry.chain.head = 2010n;
     await dry.watcher().pass();
     expect(kinds(await dry.feed())).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'changed:factory']);
-    expect((await dry.feed())[2]!.reason).toBe('not attested (--no-attest): no attestation of the subject yet');
+    expect((await dry.feed())[2]!.reason).toBe('not attested [no-attest]: would attest as factory (first check of a vault a factory announced); no attestation of the subject yet');
+    expect((await statusOf(dry)).attestBudget.paused).toBe('attesting is off (--no-attest)');
     expect(dry.store.state.deferred).toEqual({});
   });
 
@@ -1123,7 +941,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass({ drain: true });
     expect(kinds(await h.feed())).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'queued:factory']);
     const feed = await h.feed();
-    expect(feed[2]!.reason).toBe('attestation 0 is for a later block (2005) than this check (2000)');
+    expect(feed[2]!.reason).toBe('not attested [newer]: attestation 0 is for a later block (2005) than this check (2000)');
     expect(feed[3]!.reason).toBe('superseded by attestation 0 of block 2005, a later block than this check; checking again at a new block');
     const vault = h.store.vaults.vaults[V.toLowerCase()]!;
     expect(vault).toMatchObject({ lastAttestationId: '0', lastCheck: null });
@@ -1135,7 +953,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass();
     const after = (await h.feed()).slice(4);
     expect(kinds(after)).toEqual(['checked:factory', 'changed:factory']);
-    expect(after[0]).toMatchObject({ reason: 'unchanged since attestation 0', check: { block: '2090' } });
+    expect(after[0]).toMatchObject({ reason: 'not attested [unchanged]: unchanged since attestation 0', check: { block: '2090' } });
     expect(h.registry.list).toHaveLength(1);
     expect(vault.lastCheck!.block).toBe('2090');
   });
@@ -1154,7 +972,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass();
     const feed = await h.feed();
     expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'queued:factory']);
-    expect(feed[2]!.reason).toBe('attesting: no attestation of the subject yet');
+    expect(feed[2]!.reason).toBe('attesting [factory]: first check of a vault a factory announced; no attestation of the subject yet');
     expect(feed[3]!.reason).toMatch(/^superseded by attestation 0 of block 2004/);
     expect(feed.some((e) => e.kind === 'error')).toBe(false);
     expect(h.store.state.deferred).toEqual({});
@@ -1178,17 +996,26 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass({ drain: true });
     const feed = await h.feed();
     const byW = feed.filter((e) => e.subject === W && e.kind === 'error');
-    expect(byW[0]!.reason).toBe('attest failed, tried again in a later pass: fetch failed');
-    expect(Object.keys(h.store.state.deferred)).toEqual([W.toLowerCase()]);
+    expect(byW[0]!.reason).toBe('attest failed, tried again from 2026-10-06T12:01:00.000Z: fetch failed');
+    expect(h.store.state.deferred[W.toLowerCase()]).toMatchObject({ cls: 'factory', failures: 1, notBefore: '2026-10-06T12:01:00.000Z' });
     expect(feed.filter((e) => e.subject === X).map((e) => e.kind)).toContain('attested');
+    // Not before its retry time: the next pass at once sends nothing.
+    await w.pass();
+    expect(h.registry.list).toHaveLength(1);
+    later(h, 60_000);
     await w.pass();
     expect((await h.feed()).at(-1)).toMatchObject({ kind: 'attested', subject: W });
     expect((await statusOf(h)).gasCostWei).toBe('2');
 
+    // X starts failing a property after a real upgrade: confirmed by a second check, then the send reverts.
     h.registry.failNext = Object.assign(new Error('InvalidCounts reverted'), { errorName: 'InvalidCounts' });
     h.chain.failing.set(X.toLowerCase(), ['deposit']);
+    h.chain.fingerprints.set(X.toLowerCase(), hash(0xf2));
     h.chain.logs.push(upgradedLog(X, 2005n));
     h.chain.head = 2020n;
+    await w.pass();
+    later(h, 2 * 60_000);
+    h.chain.head = 2040n;
     await w.pass();
     expect((await h.feed()).filter((e) => e.kind === 'error').at(-1)!.reason).toBe('attest failed: InvalidCounts reverted');
     expect(h.store.state.deferred).toEqual({});
@@ -1225,7 +1052,8 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass({ drain: true });
     const feed = await h.feed();
     expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'error:factory']);
-    expect(feed[2]!.reason).toBe('check stopped, not attested and not retried until the next signal or sweep: forge timed out after 600s');
+    expect(feed[2]!.reason).toBe('check stopped, not attested and not retried; no check of it before 2026-10-06T13:00:00.000Z (timeout 1): forge timed out after 600s');
+    expect(h.store.state.cooldowns[V.toLowerCase()]).toEqual({ until: '2026-10-06T13:00:00.000Z', timeouts: 1 });
     expect(h.store.state.queue).toEqual([]);
     later(h, 3_600_000);
     await w.pass({ drain: true });
@@ -1335,26 +1163,6 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     expect(h.checks.map((c) => c.subject)).toEqual([V, W]);
   });
 });
-
-function attestParams(subject: Address, block: bigint): AttestParams {
-  return {
-    subjectChainId: 143n,
-    subject,
-    standardId: ERC4626,
-    blockNumber: block,
-    implementationKey: MORPHO.identity.implementationKey as Hex,
-    subjectCodeHash: hash(1),
-    suiteHash: hash(2),
-    reportHash: hash(3),
-    passCount: 30,
-    failCount: 0,
-    inconclusiveCount: 0,
-    notApplicableCount: 0,
-    passedBitmap: (1n << 30n) - 1n,
-    failedBitmap: 0n,
-    reportURI: 'https://example.org/r.json',
-  };
-}
 
 describe('bundled demo artifact', () => {
   const contracts = path.resolve(here, '../../contracts');

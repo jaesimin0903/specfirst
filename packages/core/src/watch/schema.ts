@@ -131,8 +131,10 @@ export type FeedEvent = z.infer<typeof feedEventSchema>;
  * whose logs have not been read yet. lagBlocks: how far below head the watcher reads and checks.
  * counts are over the last 24 hours except known (vaults.json). sources: one entry per signal source, seen
  * = signals of that source since the watcher's state was created. attestBudget: attestations made on the
- * current UTC day against --max-attest-per-day. gasCostWei (optional): gasUsed x effectiveGasPrice summed over
- * the watcher's attestations since its state was created, for the web's spend figures.
+ * current UTC day against --max-attest-per-day, and (optional) the unsolicited part of them against its own
+ * smaller budget, the cap per subject, the balance floor, the issuer's last read balance and, when nothing is
+ * sent, why (paused). gasCostWei (optional): gasUsed x effectiveGasPrice summed over the watcher's
+ * attestations since its state was created, for the web's spend figures.
  */
 export const watchStatusSchema = z
   .object({
@@ -150,7 +152,18 @@ export const watchStatusSchema = z
     queue: z.array(z.object({ subject: checksummed, source: z.enum(FEED_SOURCES), enqueuedAt: iso }).strict()),
     counts: z.object({ known: count, detected24h: count, checked24h: count, attested24h: count, changed24h: count }).strict(),
     sources: z.array(z.object({ name: z.string().min(1), address: checksummed.nullable(), topic0: hex32, seen: count }).strict()),
-    attestBudget: z.object({ perDay: count, usedToday: count }).strict(),
+    attestBudget: z
+      .object({
+        perDay: count,
+        usedToday: count,
+        unsolicitedPerDay: count.optional(),
+        unsolicitedUsedToday: count.optional(),
+        perSubjectPerDay: count.optional(),
+        minBalanceWei: decimal.optional(),
+        balanceWei: decimal.nullable().optional(),
+        paused: z.string().nullable().optional(),
+      })
+      .strict(),
     gasCostWei: decimal.optional(),
   })
   .strict();

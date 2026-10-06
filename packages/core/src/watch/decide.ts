@@ -106,3 +106,64 @@ export function changeOf(prev: CheckOutcome | null, next: CheckOutcome): FeedCha
   if ((prev.implementationKey ?? '').toLowerCase() !== (next.implementationKey ?? '').toLowerCase()) return { kind: 'implementation', from, to };
   return null;
 }
+
+/** Whether two outcomes agree in counts, failed ids and implementation key. */
+export function sameOutcome(a: CheckOutcome, b: CheckOutcome): boolean {
+  return outcomeDiff(a, b).length === 0;
+}
+
+/**
+ * Change kinds a second check at a later block must confirm before they are attested or alerted: a fuzz run
+ * can miss a counterexample once, and a single RPC hiccup can make a property flip. A first check that fails
+ * a property is confirmed the same way. implementation (only the key moved) needs none.
+ */
+export function needsConfirmation(change: FeedChange | null, outcome: CheckOutcome): boolean {
+  if (!change) return false;
+  if (change.kind === 'regressed' || change.kind === 'recovered' || change.kind === 'changed') return true;
+  return change.kind === 'new' && outcome.summary.fail > 0;
+}
+
+/**
+ * Why a check may be attested (docs/adr/0006, "Attestation policy"). subscribed: a subject with an active
+ * subscription, at its first check after the subscription started or at a confirmed change. factory: a vault a
+ * factory announced, at its first check and at its first-deposit re-check. fail: a confirmed check with a
+ * failed property. attested-change: a confirmed change of a subject that already has a Valid attestation.
+ */
+export const ATTEST_CLASSES = ['subscribed', 'factory', 'fail', 'attested-change'] as const;
+export type AttestClass = (typeof ATTEST_CLASSES)[number];
+
+export interface AttestPolicyInput {
+  /** The subject has an active subscription. */
+  subscribed: boolean;
+  /** This is the first check since one of its subscriptions started. */
+  firstSinceSubscription: boolean;
+  /** The check confirms a change against the subject's previous check (or is its confirmed first check). */
+  confirmedChange: boolean;
+  /** A factory source announced the vault. */
+  factoryVault: boolean;
+  /** The vault had no check before this one. */
+  firstCheck: boolean;
+  /** The check is the first-deposit re-check. */
+  firstDeposit: boolean;
+  /** Some property failed (confirmed: an unconfirmed fail never reaches the policy). */
+  hasFail: boolean;
+  /** The registry holds a Valid attestation of the subject, from any issuer. */
+  hasValidAttestation: boolean;
+}
+
+/**
+ * The class that allows attesting this check, or null with the reason none does. Subscribed comes first, so a
+ * subscriber's attestation is counted against the subscribed budget rather than the unsolicited one.
+ */
+export function attestClassOf(i: AttestPolicyInput): { cls: AttestClass; why: string } | { cls: null; why: string } {
+  if (i.subscribed && i.firstSinceSubscription) return { cls: 'subscribed', why: 'first check since a subscription started' };
+  if (i.subscribed && i.confirmedChange) return { cls: 'subscribed', why: 'confirmed change of a subscribed subject' };
+  if (i.factoryVault && i.firstCheck) return { cls: 'factory', why: 'first check of a vault a factory announced' };
+  if (i.factoryVault && i.firstDeposit) return { cls: 'factory', why: 'first-deposit re-check of a vault a factory announced' };
+  if (i.hasFail) return { cls: 'fail', why: 'a property fails, confirmed by a second check' };
+  if (i.confirmedChange && i.hasValidAttestation) return { cls: 'attested-change', why: 'confirmed change of a subject with a Valid attestation' };
+  if (i.firstDeposit) return { cls: null, why: 'the first-deposit re-check of a vault no factory announced is not attested' };
+  if (i.firstCheck) return { cls: null, why: 'an unsolicited candidate that passes is not attested' };
+  if (i.confirmedChange) return { cls: null, why: 'a change of a subject without a Valid attestation and without a failed property is not attested' };
+  return { cls: null, why: 'an unchanged re-check is not attested' };
+}
