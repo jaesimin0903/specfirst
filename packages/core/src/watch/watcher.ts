@@ -4,10 +4,12 @@ import { attestationParamsFromReport, AttestationError, checkReportHash, standar
 import { ATTESTATION_STATUS, type Attestation, type AttestationRegistryClient, type AttestTxState } from '../attest/registry.js';
 import {
   checkBlockOf,
+  classifiedErrorText,
   countsAsFailure,
   errorNameOf,
   errorText,
   isCheckTimeout,
+  isNodeFailure,
   loadReportCopy,
   precheckErc4626,
   runSubjectCheck,
@@ -427,7 +429,7 @@ export class Watcher {
       this.running = null;
       this.emit({ type: 'watch-error', step: 'pass', error: errorText(err) });
       try {
-        await this.errorLine('pass', { chainId: this.chainId, subject: CHAIN_SUBJECT, reason: `pass failed, backing off: ${errorText(err)}` });
+        await this.errorLine('pass', { chainId: this.chainId, subject: CHAIN_SUBJECT, reason: `pass failed, backing off: ${classifiedErrorText(err)}` });
         await this.save();
       } catch {
         /* the files themselves fail: the log line above is all there is */
@@ -488,7 +490,7 @@ export class Watcher {
               chainId: this.chainId,
               subject,
               block: block.toString(),
-              reason: `block ${block}: the node refuses getLogs of ${named.map((s) => s.name).join(', ') || topic} even for one block, passed over: ${errorText(error)}`,
+              reason: `block ${block}: the node refuses getLogs of ${named.map((s) => s.name).join(', ') || topic} even for one block, passed over: ${classifiedErrorText(error)}`,
             });
           },
         });
@@ -716,7 +718,7 @@ export class Watcher {
       const delay = Math.min(this.config.probeRetryMs * 2 ** Math.min(failures - 1, 20), HOUR_MS);
       const notBefore = new Date(this.effects.now().getTime() + delay).toISOString();
       st.probing[lower] = { source: at.source, block: at.block.toString(), ...(at.txHash ? { txHash: at.txHash } : {}), ...(at.factory ? { factory: at.factory } : {}), failures, notBefore };
-      await this.feed([{ ...base, at: this.nowIso(), kind: 'error', reason: `probe failed (attempt ${failures}), not a verdict, probing again from ${notBefore}: ${errorText(err)}` }]);
+      await this.feed([{ ...base, at: this.nowIso(), kind: 'error', reason: `probe failed (attempt ${failures}), not a verdict, probing again from ${notBefore}: ${classifiedErrorText(err)}` }]);
       return;
     }
     this.running = null;
@@ -940,14 +942,14 @@ export class Watcher {
       try {
         if (await this.effects.attest.hasPending()) return { ok: false, why: 'the issuer has transactions the node has not mined', retryAt, stopsAll: true };
       } catch (err) {
-        return { ok: false, why: `the issuer's pending transactions could not be read: ${errorText(err)}`, retryAt, stopsAll: true };
+        return { ok: false, why: `the issuer's pending transactions could not be read: ${classifiedErrorText(err)}`, retryAt, stopsAll: true };
       }
     }
     if (this.effects.balance) {
       try {
         this.balanceWei = await this.effects.balance();
       } catch (err) {
-        return { ok: false, why: `the issuer balance could not be read: ${errorText(err)}`, retryAt, stopsAll: true };
+        return { ok: false, why: `the issuer balance could not be read: ${classifiedErrorText(err)}`, retryAt, stopsAll: true };
       }
       if (this.balanceWei < this.config.minBalanceWei) {
         this.paused = `issuer balance ${mon(this.balanceWei)} is below the floor of ${mon(this.config.minBalanceWei)}: nothing is sent`;
@@ -995,20 +997,20 @@ export class Watcher {
       report = await this.effects.runCheck(subject, block);
     } catch (err) {
       if (isCheckTimeout(err)) await this.checkTimedOut(entry, err);
-      else await this.checkFailed(entry, err);
+      else await this.checkFailed(entry, classifiedErrorText(err));
       return;
     }
     // A property the fork could not read says nothing about the vault: no attestation, check again later.
     const forkErrors = forkRpcErrorsOf(report);
     if (forkErrors.length > 0) {
-      await this.checkFailed(entry, new Error(`${forkErrors.length} of ${report.results.length} properties inconclusive on a fork RPC error (${forkErrors[0]!.id}: ${forkErrors[0]!.reason})`));
+      await this.checkFailed(entry, `${forkErrors.length} of ${report.results.length} properties inconclusive on a fork RPC error (${forkErrors[0]!.id}: ${forkErrors[0]!.reason})`);
       return;
     }
     let saved: { reportPath: string; reportURI: string };
     try {
       saved = await this.effects.saveReport(report);
     } catch (err) {
-      await this.checkFailed(entry, err);
+      await this.checkFailed(entry, errorText(err));
       return;
     }
     removeEntry(st.queue as QueueEntry[], subject);
@@ -1118,7 +1120,7 @@ export class Watcher {
       if (latest && latestValid) vault.lastAttestationId = latest.id.toString();
       decision = attestDecision(outcome, latest, BigInt(report.blockNumber));
     } catch (err) {
-      registryError = errorText(err);
+      registryError = classifiedErrorText(err);
     }
     if (decision && !decision.attest && decision.newer) {
       await this.feed([{ ...base, at: this.nowIso(), kind: 'checked', check, reason: `${prefix}${confirmation}not attested [newer]: ${decision.reason}` }]);
@@ -1172,7 +1174,7 @@ export class Watcher {
         return;
       } else if (out.kind === 'refused' && out.why === 'identity') {
         // The identity on the chain is not the report's: this report is not the vault's last check.
-        await this.checkFailed({ ...entry, priority: entry.priority ?? priorityOf(entry.source, false), enqueuedAt: this.nowIso() } as QueueEntry, new Error(`identity check refused the report: ${out.error}`));
+        await this.checkFailed({ ...entry, priority: entry.priority ?? priorityOf(entry.source, false), enqueuedAt: this.nowIso() } as QueueEntry, `identity check refused the report: ${out.error}`);
         return;
       } else if (out.kind === 'retry') {
         defer(attestAs, new Date(this.effects.now().getTime() + this.config.deferredRetryMs).toISOString(), 1);
@@ -1207,7 +1209,7 @@ export class Watcher {
     await this.save();
   }
 
-  private async checkFailed(entry: QueueEntry, err: unknown): Promise<void> {
+  private async checkFailed(entry: QueueEntry, why: string): Promise<void> {
     const st = this.state;
     this.running = null;
     const queued = (st.queue as QueueEntry[]).find((q) => q.subject.toLowerCase() === entry.subject.toLowerCase());
@@ -1215,7 +1217,7 @@ export class Watcher {
     const base = { at: this.nowIso(), kind: 'error' as const, chainId: this.chainId, subject: entry.subject, source: entry.source };
     if (attempts >= this.config.maxCheckAttempts) {
       removeEntry(st.queue as QueueEntry[], entry.subject);
-      await this.feed([{ ...base, reason: `check failed ${attempts} times, dropped until the next signal or sweep: ${errorText(err)}` }]);
+      await this.feed([{ ...base, reason: `check failed ${attempts} times, dropped until the next signal or sweep: ${why}` }]);
     } else {
       const notBefore = new Date(this.effects.now().getTime() + this.config.checkRetryMs * attempts).toISOString();
       if (queued) {
@@ -1224,7 +1226,7 @@ export class Watcher {
       } else {
         enqueue(st.queue as QueueEntry[], { subject: entry.subject, source: entry.source, priority: entry.priority, enqueuedAt: this.nowIso(), attempts, notBefore });
       }
-      await this.feed([{ ...base, reason: `check failed (attempt ${attempts} of ${this.config.maxCheckAttempts}), retrying from ${notBefore}: ${errorText(err)}` }]);
+      await this.feed([{ ...base, reason: `check failed (attempt ${attempts} of ${this.config.maxCheckAttempts}), retrying from ${notBefore}: ${why}` }]);
     }
     await this.save();
   }
@@ -1321,7 +1323,7 @@ export class Watcher {
       try {
         mined = await attester.wait(sent.hash);
       } catch (err) {
-        await this.errorLine(lower, { ...base, check, reason: `attest tx ${sent.hash} was sent, its receipt is looked up in the next pass: ${errorText(err)}` });
+        await this.errorLine(lower, { ...base, check, reason: `attest tx ${sent.hash} was sent, its receipt is looked up in the next pass: ${classifiedErrorText(err)}` });
         return { kind: 'sent', hash: sent.hash };
       }
       delete this.state.attesting[lower];
@@ -1335,12 +1337,13 @@ export class Watcher {
         // The registry did not answer the second read: decide again in a later pass, which finds the newer one.
         return { kind: 'retry', error: errorText(err) };
       }
-      if (countsAsFailure(err)) {
-        await this.errorLine(lower, { ...base, check, reason: `attest failed: ${errorText(err)}` });
+      // A node that failed under the simulation reads like a revert to viem: tried again, not refused.
+      if (countsAsFailure(err) && !isNodeFailure(err)) {
+        await this.errorLine(lower, { ...base, check, reason: `attest failed: ${classifiedErrorText(err)}` });
         return { kind: 'refused', why: 'revert', error: errorText(err) };
       }
       const retryAt = new Date(this.effects.now().getTime() + this.config.deferredRetryMs).toISOString();
-      await this.errorLine(lower, { ...base, check, reason: `attest failed, tried again from ${retryAt}: ${errorText(err)}` });
+      await this.errorLine(lower, { ...base, check, reason: `attest failed, tried again from ${retryAt}: ${classifiedErrorText(err)}` });
       return { kind: 'retry', error: errorText(err) };
     } finally {
       this.running = null;

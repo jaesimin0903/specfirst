@@ -463,6 +463,8 @@ export {
   runSubjectCheck,
   saveReportCopy,
   loadReportCopy,
+  classifiedErrorText,
+  isNodeFailure,
   type SubjectCheckInput,
 } from './attest/subjectCheck.js';
 export {

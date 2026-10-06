@@ -996,7 +996,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     await w.pass({ drain: true });
     const feed = await h.feed();
     const byW = feed.filter((e) => e.subject === W && e.kind === 'error');
-    expect(byW[0]!.reason).toBe('attest failed, tried again from 2026-10-06T12:01:00.000Z: fetch failed');
+    expect(byW[0]!.reason).toBe('attest failed, tried again from 2026-10-06T12:01:00.000Z: transport failure: fetch failed');
     expect(h.store.state.deferred[W.toLowerCase()]).toMatchObject({ cls: 'factory', failures: 1, notBefore: '2026-10-06T12:01:00.000Z' });
     expect(feed.filter((e) => e.subject === X).map((e) => e.kind)).toContain('attested');
     // Not before its retry time: the next pass at once sends nothing.

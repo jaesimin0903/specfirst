@@ -90,8 +90,44 @@ export function errorNameOf(err: unknown): string | undefined {
 export function errorText(err: unknown): string {
   const e = err as { shortMessage?: string; message?: string };
   const text = e?.shortMessage ?? e?.message ?? String(err);
+  return oneLine(text);
+}
+
+function oneLine(text: string): string {
   const line = text.split('\n')[0] ?? text;
   return line.length > 300 ? `${line.slice(0, 297)}...` : line;
+}
+
+/**
+ * errorText led by what failed, for public text: `revert` or `contract answer` (no data, data that does not
+ * decode) only when isContractAnswer says the contract answered; otherwise `rate limit`, `transport failure`
+ * or `RPC node error` with the node's own words. viem files a JSON-RPC -32603 under "The contract function
+ * ... reverted" whatever the node said, so errorText alone would blame the contract for a node failure. The
+ * contract function viem names follows the class; anything else is errorText.
+ */
+export function classifiedErrorText(err: unknown): string {
+  const links: Array<{ name?: unknown; functionName?: unknown; details?: unknown }> = [];
+  const seen = new Set<unknown>();
+  for (let cur: unknown = err; cur && typeof cur === 'object' && !seen.has(cur); cur = (cur as { cause?: unknown }).cause) {
+    seen.add(cur);
+    links.push(cur as (typeof links)[number]);
+  }
+  const fn = links.map((e) => e.functionName).find((f): f is string => typeof f === 'string' && f !== '');
+  const on = fn ? ` on ${fn}()` : '';
+  const words = oneLine(links.map((e) => e.details).find((d): d is string => typeof d === 'string' && d !== '') ?? errorText(err));
+  if (isContractAnswer(err)) return `${links.some((e) => /Revert/.test(String(e.name))) ? 'revert' : 'contract answer'}${on}: ${errorText(err)}`;
+  if (isRateLimited(err)) return `rate limit${on}: ${words}`;
+  if (isTransportFailure(err)) return `transport failure${on}: ${words}`;
+  if (isNodeError(err) || isRpcServerError(err)) return `RPC node error${on}: ${words}`;
+  return errorText(err);
+}
+
+/**
+ * True when the node failed (a node error or a JSON-RPC server error) and the contract did not answer, so a
+ * step that failed this way is tried again rather than counted as the contract's refusal.
+ */
+export function isNodeFailure(err: unknown): boolean {
+  return !isContractAnswer(err) && (isNodeError(err) || isRpcServerError(err));
 }
 
 const erc4626ProbeAbi = [

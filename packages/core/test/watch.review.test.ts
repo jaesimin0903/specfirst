@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   acquireIssuerLock,
   AttestationError,
+  AttestationRegistryClient,
   attestClassOf,
   batchedLogsReader,
   CHAIN_SUBJECT,
   checkReportHash,
+  classifiedErrorText,
   liveWatchEffects,
   LogsNodeBehindError,
   precheckErc4626,
@@ -617,43 +619,100 @@ describe('M3 to M6, L1 to L8', { timeout: 60_000 }, () => {
 });
 
 describe('M1, M2 and L1 on the shared primitives', { timeout: 60_000 }, () => {
-  it('M2: a probe the node answers with -32603 "Error getting block by number" is probed again, not rejected', async () => {
-    let served = false;
+  /** A JSON-RPC stub: eth_call gets `call()` (an error or a result), eth_getCode some code, the rest a number. */
+  const stubRpc = async (call: () => { error: { code: number; message: string; data?: Hex } } | { result: Hex }, run: (url: string) => Promise<void>) => {
     const server: Server = createServer((req, res) => {
       let body = '';
       req.on('data', (c: Buffer) => (body += c.toString('utf8')));
       req.on('end', () => {
         const { id, method } = JSON.parse(body) as { id: number; method: string };
-        const answer =
-          method === 'eth_call' && !served
-            ? { error: { code: -32603, message: 'Error getting block by number' } }
-            : { result: method === 'eth_getCode' ? '0x6001' : `0x${'0a55e7'.padStart(64, '0')}` };
+        const answer = method === 'eth_call' ? call() : { result: method === 'eth_getCode' ? '0x6001' : '0x8f' };
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id, ...answer }));
       });
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     try {
-      const h = await harness();
-      const client = createPublicClient({ transport: http(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, { retryCount: 0 }) });
-      h.effects.precheck = (subject, block) => precheckErc4626(client, subject, block);
-      h.chain.logs.push(factoryLog(V, 1995n));
-      h.store.state.cursor = '1991';
-      h.chain.head = 2010n;
-      const w = h.watcher();
-      await w.pass();
-      const feed = await h.feed();
-      expect(kinds(feed)).toEqual(['detected:factory', 'error:factory']);
-      expect(feed[1]!.reason).toMatch(/^probe failed \(attempt 1\), not a verdict, probing again from 2026-10-06T12:05:00\.000Z: /);
-      expect(h.store.state.rejected).toEqual({});
-      expect(h.store.state.probing[V.toLowerCase()]).toMatchObject({ failures: 1 });
-      served = true;
-      later(h, 5 * 60_000);
-      await w.pass();
-      expect(h.store.state.probing).toEqual({});
-      expect(kinds((await h.feed()).slice(2, 4))).toEqual(['queued:factory', 'checked:factory']);
+      await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
     } finally {
       server.close();
     }
+  };
+  const viemClient = (url: string) => createPublicClient({ transport: http(url, { retryCount: 0 }) });
+  const nodeError = { error: { code: -32603, message: 'Error getting block by number' } };
+
+  it('M2: a probe the node answers with -32603 "Error getting block by number" is probed again, not rejected, and the feed blames the node', async () => {
+    let served = false;
+    await stubRpc(
+      () => (served ? { result: `0x${'0a55e7'.padStart(64, '0')}` } : nodeError),
+      async (url) => {
+        const h = await harness();
+        const client = viemClient(url);
+        h.effects.precheck = (subject, block) => precheckErc4626(client, subject, block);
+        h.chain.logs.push(factoryLog(V, 1995n));
+        h.store.state.cursor = '1991';
+        h.chain.head = 2010n;
+        const w = h.watcher();
+        await w.pass();
+        const feed = await h.feed();
+        expect(kinds(feed)).toEqual(['detected:factory', 'error:factory']);
+        expect(feed[1]!.reason).toBe('probe failed (attempt 1), not a verdict, probing again from 2026-10-06T12:05:00.000Z: RPC node error on asset(): Error getting block by number');
+        expect(h.store.state.rejected).toEqual({});
+        expect(h.store.state.probing[V.toLowerCase()]).toMatchObject({ failures: 1 });
+        served = true;
+        later(h, 5 * 60_000);
+        await w.pass();
+        expect(h.store.state.probing).toEqual({});
+        expect(kinds((await h.feed()).slice(2, 4))).toEqual(['queued:factory', 'checked:factory']);
+      },
+    );
+  });
+
+  it('feed text names what failed first: a revert only when the contract answered, else the node, a rate limit or the transport', async () => {
+    const textOf = async (answer: Parameters<typeof stubRpc>[0]) => {
+      let text = '';
+      await stubRpc(answer, async (url) => {
+        text = classifiedErrorText(await precheckErc4626(viemClient(url), V, 7n).then(() => null, (e: unknown) => e));
+      });
+      return text;
+    };
+    // What errorText says for the first: "The contract function "asset" reverted with the following reason:".
+    expect(await textOf(() => nodeError)).toBe('RPC node error on asset(): Error getting block by number');
+    expect(await textOf(() => ({ error: { code: -32000, message: 'header not found' } }))).toBe('RPC node error on asset(): header not found');
+    expect(await textOf(() => ({ error: { code: 429, message: 'Too many requests' } }))).toBe('rate limit on asset(): Too many requests');
+    expect(classifiedErrorText(await precheckErc4626(viemClient('http://127.0.0.1:1'), V, 7n).then(() => null, (e: unknown) => e))).toBe('transport failure: fetch failed');
+    // A revert, also one sent with -32603, is the contract's answer; precheck turns it into a reason, the text says revert.
+    await stubRpc(
+      () => ({ error: { code: -32603, message: 'execution reverted', data: '0x' } }),
+      async (url) => {
+        const err = await viemClient(url)
+          .readContract({ address: V, abi: [{ type: 'function', name: 'asset', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] }], functionName: 'asset' })
+          .then(() => null, (e: unknown) => e);
+        expect(classifiedErrorText(err)).toMatch(/^revert on asset\(\): The contract function "asset" reverted/);
+      },
+    );
+  });
+
+  it('a node error under the attest simulation is tried again with a line that blames the node, not refused as a revert', async () => {
+    await stubRpc(
+      () => nodeError,
+      async (url) => {
+        const h = await harness();
+        const viemRegistry = new AttestationRegistryClient(addr(0x7e9), viemClient(url) as never, { account: { address: addr(0x155) } } as never);
+        h.registry.failNext = await viemRegistry.sendAttest(attestParams(V, 2000n)).then(() => null, (e: Error) => e);
+        expect(h.registry.failNext!.message).toMatch(/^attest failed: The contract function "attest" reverted/);
+        h.chain.logs.push(factoryLog(V, 1995n));
+        h.store.state.cursor = '1991';
+        h.chain.head = 2010n;
+        const w = h.watcher();
+        await w.pass({ drain: true });
+        const feed = await h.feed();
+        expect(feed.find((e) => e.kind === 'error')!.reason).toBe('attest failed, tried again from 2026-10-06T12:01:00.000Z: RPC node error on attest(): Error getting block by number');
+        expect(h.store.state.deferred[V.toLowerCase()]).toMatchObject({ failures: 1 });
+        later(h, 60_000);
+        await w.pass();
+        expect((await h.feed()).at(-1)).toMatchObject({ kind: 'attested', subject: V });
+      },
+    );
   });
 
   it('L1: an attestation mined although its receipt errored is found in the next pass and counted against the budgets and the gas', async () => {
