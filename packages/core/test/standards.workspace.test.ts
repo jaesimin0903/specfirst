@@ -11,6 +11,7 @@ import {
   ERC4626_CONTROL_PATH,
   ERC4626_CONTROL_VAULT_PATH,
   ERC4626_FOUNDRY_TOML,
+  FORGE_GAS_LIMIT,
   ERC4626_HARNESS_PATH,
   ERC4626_SF_PROPERTIES_PATH,
   erc4626SourceFile,
@@ -55,7 +56,7 @@ describe('prepareErc4626Workspace (local repositories, no network)', () => {
     const { up, std, cacheDir, pins } = await setup();
     const first = await prepareErc4626Workspace({ cacheDir, ...pins() });
     expect(first.dir).toBe(erc4626WorkspaceDir(cacheDir, pins().upstream, pins().forgeStd));
-    expect(path.basename(first.dir)).toBe(`erc4626-${up.shas[1]!.slice(0, 12)}-${std.shas[0]!.slice(0, 12)}`);
+    expect(path.basename(first.dir)).toBe(`erc4626-${up.shas[1]!.slice(0, 12)}-${std.shas[0]!.slice(0, 12)}-${sha256Hex(ERC4626_FOUNDRY_TOML).slice(2, 10)}`);
     expect(first.fetched).toEqual([up.url, std.url]);
     expect(await git(path.join(first.dir, 'lib/erc4626-tests'), 'rev-parse', 'HEAD')).toBe(up.shas[1]);
     const harness = await readFile(erc4626SourceFile('SpecfirstERC4626.t.sol'), 'utf8');
@@ -64,6 +65,9 @@ describe('prepareErc4626Workspace (local repositories, no network)', () => {
     expect(first.foundryTomlSha256).toBe(sha256Hex(ERC4626_FOUNDRY_TOML));
     expect(ERC4626_FOUNDRY_TOML).toContain(`fs_permissions = [{ access = "write", path = "./${EVENTS_DIR}" }]`);
     expect(ERC4626_FOUNDRY_TOML).toContain('[profile.default.fuzz]\nmax_test_rejects = 4096\n');
+    // A vault burning gas in its view functions gets 100 million per test call, not foundry's 2^30.
+    expect(ERC4626_FOUNDRY_TOML).toContain(`\ngas_limit = ${FORGE_GAS_LIMIT}\n`);
+    expect(FORGE_GAS_LIMIT).toBe(100_000_000);
     const sf = await readFile(erc4626SourceFile('SpecfirstMaxHonored.t.sol'), 'utf8');
     expect(sf.startsWith('// SPDX-License-Identifier: MIT')).toBe(true);
     // It imports forge-std only, never the upstream suite.

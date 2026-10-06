@@ -297,7 +297,7 @@ describe('runStandardCheck with a stand-in forge (M6, M7, L3, L6, L7)', () => {
     expect(keys).not.toContain('UNRELATED_SECRET');
     expect(env).toMatchObject({ SF_VAULT: VAULT, SF_DELTA: '0' });
     expect(env.SF_RUN_ID).toMatch(/^\d+-\d+-[0-9a-f]{8}$/);
-    expect(path.basename(cwd)).toMatch(/^erc4626-[0-9a-f]{12}-[0-9a-f]{12}$/);
+    expect(path.basename(cwd)).toMatch(/^erc4626-[0-9a-f]{12}-[0-9a-f]{12}-[0-9a-f]{8}$/);
   });
 
   it('L3 + L6 + L7: counts deposit reverts, masks the RPC everywhere, stores only the JSON document next to the report', async () => {

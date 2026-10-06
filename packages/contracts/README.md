@@ -4,8 +4,9 @@ Foundry project for `CertificateRegistry.sol`, the onchain certificate registry 
 `docs/plan.md` section 3.4 (tests follow section 6.1), `CheckAttestationRegistry.sol`, which records
 `specfirst check` results for contracts on any chain (docs/adr/0004), and `CheckRequestDesk.sol`, where
 anyone pays a fee for such a check and the worker is paid when it fulfills the request with a matching
-attestation (docs/adr/0005), and `CheckSubscriptions.sol`, where a subscriber prepays per day for alerts
-about one subject and the fee of each started day becomes earned (docs/adr/0006).
+attestation (docs/adr/0005), `CheckSubscriptions.sol`, where a subscriber prepays per day for alerts
+about one subject and the fee of each started day becomes earned (docs/adr/0006), and the demo contracts
+of the watcher (docs/adr/0006, `src/demo/`).
 
 ## Layout
 
@@ -23,6 +24,9 @@ about one subject and the fee of each started day becomes earned (docs/adr/0006)
 | `src/CheckSubscriptions.sol` | Prepaid alert subscriptions: subscribe and extend (exact fee per day, escrowed), settle of started days, cancel with a refund of the days not started, withdraw of earned fees only |
 | `test/CheckSubscriptions.t.sol` | Unit and fuzz tests: exact value, 1 to 365 days, no fee of 0, uint96 limits, ids from 0 and UnknownSubscription, day boundaries, extend of an active and of an expired subscription, cancel refunds, withdraw never reaching escrow, refused transfers, reentrancy |
 | `test/CheckSubscriptions.invariant.t.sol` | Handler based invariants against the handler's own model of every subscription: balance == escrowed + earned - withdrawn, escrowed and earned match the subscriptions, paid and the run match the model, settled <= the fee of the model's started days, a cancel refunds exactly the rest, earned, withdrawn and settled never go down; adversarial calls (a coin-refusing subscriber, stranger cancels, wrong values, a fee of 0) fail as they must |
+| `src/demo/DemoVaultFactory.sol` | Watcher demo (docs/adr/0006): DemoVaultFactory deploys DemoVaults and emits `VaultDeployed(vault, asset)`; DemoVault is a minimal ERC-4626 with the positive control's previewDeposit bug behind an operator switch (`setBroken`, `BrokenSet`) |
+| `src/demo/DemoToken.sol` | ERC-20 anyone can mint, the asset of demo vaults |
+| `test/DemoVaultFactory.t.sol` | Deploy event and operator, deposit and redeem with events, previewDeposit equal to deposit unless broken (and a fuzz of it), setBroken by the operator only, allowances |
 | `lib/forge-std` | forge-std v1.16.2, vendored as plain files (no submodule) |
 
 ## Commands
@@ -44,6 +48,8 @@ CLI sends from a guarded wallet that refuses mainnet and checks the RPC chain id
 `packages/core/src/attest/artifact.ts` bundles its ABI and creation code; regenerate it with
 `node packages/core/scripts/gen-attest-artifact.mjs` after `forge build` whenever the contract changes;
 `packages/core/test/attest.test.ts` runs `forge build` and fails when the bundle differs.
+
+The demo contracts are bundled the same way in `packages/core/src/watch/demoArtifact.ts` (`node packages/core/scripts/gen-demo-artifact.mjs` after `forge build`; `packages/core/test/watch.test.ts` compares). DemoVaultFactory's CREATE2 address follows from its creation code, so a change to `src/demo/DemoVaultFactory.sol` (comments included, through the metadata hash) moves it: update `examples/watch/sources-demo.json` with the new `DEMO_FACTORY_ADDRESS`; the same test fails until they agree.
 
 ## Results (2026-09-29, forge 1.5.1)
 

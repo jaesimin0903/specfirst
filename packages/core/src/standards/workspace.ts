@@ -28,6 +28,15 @@ export const EVENTS_DIR = 'sf-events';
  */
 export const FUZZ_MAX_TEST_REJECTS = 4096;
 
+/**
+ * Gas forge gives each test call (foundry's default is 2^30). A vault whose view functions burn gas until
+ * little is left (`while (gasleft() > 10_000_000) {}`) passes an eth_call pre-check under the node's gas cap
+ * and then burns the whole limit on every call of every fuzz run. The largest mean gas of a test in 291
+ * Monad mainnet checks was 5.8 million, so 100 million leaves room and cuts such a burn tenfold; the
+ * watcher's wall-clock budget bounds the rest.
+ */
+export const FORGE_GAS_LIMIT = 100_000_000;
+
 /** The Foundry project every ERC-4626 check runs in. Pinned solc keeps compiles reproducible. */
 export const ERC4626_FOUNDRY_TOML = `[profile.default]
 src = "src"
@@ -37,6 +46,7 @@ solc_version = "0.8.28"
 evm_version = "prague"
 remappings = ["forge-std/=lib/forge-std/src/", "erc4626-tests/=lib/erc4626-tests/"]
 fs_permissions = [{ access = "write", path = "./${EVENTS_DIR}" }]
+gas_limit = ${FORGE_GAS_LIMIT}
 
 [profile.default.fuzz]
 max_test_rejects = ${FUZZ_MAX_TEST_REJECTS}
@@ -49,9 +59,14 @@ export function defaultCacheDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(homedir(), '.cache', 'specfirst');
 }
 
-/** `<cacheDir>/standards/erc4626-<upstream 12>-<forge-std 12>`: one workspace per pin pair. */
+/**
+ * `<cacheDir>/standards/erc4626-<upstream 12>-<forge-std 12>-<foundry.toml sha256 8>`: one workspace per pin
+ * pair and foundry.toml, so two versions of specfirst sharing a cache (a desk worker and a watcher of another
+ * build) never rewrite each other's foundry.toml under a running forge.
+ */
 export function erc4626WorkspaceDir(cacheDir: string, upstream: PinnedRepo, forgeStd: PinnedRepo): string {
-  return path.join(cacheDir, 'standards', `erc4626-${upstream.commit.slice(0, 12)}-${forgeStd.commit.slice(0, 12)}`);
+  const toml = sha256Hex(ERC4626_FOUNDRY_TOML).slice(2, 10);
+  return path.join(cacheDir, 'standards', `erc4626-${upstream.commit.slice(0, 12)}-${forgeStd.commit.slice(0, 12)}-${toml}`);
 }
 
 export interface StandardWorkspace {

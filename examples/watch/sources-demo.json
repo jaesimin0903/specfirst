@@ -1,0 +1,47 @@
+{
+  "v": 1,
+  "chainId": 10143,
+  "description": "Watcher demo on Monad testnet (docs/adr/0006): DemoVaultFactory at its CREATE2 address announces new vaults; Deposit, Upgraded and BeaconUpgraded only re-check vaults the watcher already knows, so other testnet contracts do not become candidates. DemoVault's BrokenSet (its operator switching the deliberate previewDeposit bug) counts as an upgrade of a known vault, so the switch is re-checked at once.",
+  "sources": [
+    {
+      "name": "Specfirst DemoVaultFactory",
+      "signal": "factory",
+      "address": "0x27eFcf4d95B8AB853b31b65EFB3Adb1cAd93D432",
+      "event": "event VaultDeployed(address indexed vault, address indexed asset)",
+      "vault": "vault",
+      "topic0": "0x09d75e12e349f79020715b0ea7b2c707e8acf1889b6d6f1337fce7f4e1b9e5c7"
+    },
+    {
+      "name": "ERC-4626 Deposit",
+      "signal": "deposit",
+      "address": null,
+      "event": "event Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares)",
+      "vault": null,
+      "candidates": false
+    },
+    {
+      "name": "EIP-1967 Upgraded",
+      "signal": "upgrade",
+      "address": null,
+      "event": "event Upgraded(address indexed implementation)",
+      "vault": null,
+      "candidates": false
+    },
+    {
+      "name": "EIP-1967 BeaconUpgraded",
+      "signal": "beacon-upgrade",
+      "address": null,
+      "event": "event BeaconUpgraded(address indexed beacon)",
+      "vault": null,
+      "candidates": false
+    },
+    {
+      "name": "DemoVault BrokenSet",
+      "signal": "upgrade",
+      "address": null,
+      "event": "event BrokenSet(bool broken)",
+      "vault": null,
+      "candidates": false
+    }
+  ]
+}

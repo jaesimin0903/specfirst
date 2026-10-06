@@ -11,6 +11,7 @@ import { registerRunCommand } from './commands/run.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerSubsCommand } from './commands/subs.js';
 import { registerVerifyCommand } from './commands/verify.js';
+import { registerWatchCommand } from './commands/watch.js';
 
 const program = new Command();
 
@@ -33,5 +34,6 @@ registerAttestRegistryCommand(program);
 registerDeskCommand(program);
 registerWorkerCommand(program);
 registerSubsCommand(program);
+registerWatchCommand(program);
 
 await program.parseAsync(process.argv);

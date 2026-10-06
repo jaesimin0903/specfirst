@@ -22,6 +22,10 @@
     "./subs": {
       "types": "./dist/subs/index.d.ts",
       "import": "./dist/subs/index.js"
+    },
+    "./watch": {
+      "types": "./dist/watch/index.d.ts",
+      "import": "./dist/watch/index.js"
     }
   },
   "files": [

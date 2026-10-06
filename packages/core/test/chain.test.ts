@@ -5,6 +5,7 @@ import {
   anvilChain,
   chainFor,
   createChainClients,
+  isNodeError,
   isRateLimited,
   isWriteForbidden,
   monadMainnet,
@@ -81,7 +82,7 @@ describe('TokenBucket', () => {
 /** JSON-RPC stub: answers eth_chainId and eth_blockNumber, returning HTTP 429 for the first `fail429` requests. */
 function stub(
   fail429: number,
-  opts: { down?: boolean; chainId?: string } = {},
+  opts: { down?: boolean; chainId?: string; nodeError?: boolean } = {},
 ): Promise<{ server: Server; url: string; hits: () => number; methods: string[] }> {
   let hits = 0;
   const methods: string[] = [];
@@ -100,6 +101,10 @@ function stub(
       }
       const { id, method } = JSON.parse(body) as { id: number; method: string };
       methods.push(method);
+      if (opts.nodeError) {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message: 'Internal error: Error getting block by number' } }));
+        return;
+      }
       const result = method === 'eth_chainId' ? (opts.chainId ?? '0x7a69') : method === 'eth_sendRawTransaction' ? `0x${'ab'.repeat(32)}` : '0x2a';
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id, result }));
     });
@@ -151,6 +156,21 @@ describe('rpcTransport', () => {
     expect(await publicClient.getBlockNumber({ cacheTime: 0 })).toBe(42n);
     expect(reasons).toEqual(['down:failover', 'limited:429', 'limited:429', 'limited:failover']);
     expect(good.hits()).toBe(1);
+  });
+
+  it('a node error is an answer, unless failoverIf sends it to the next RPC (the watcher passes isNodeError)', async () => {
+    const broken = await stub(0, { nodeError: true });
+    const good = await stub(0);
+    servers.push(broken.server, good.server);
+    const plain = createChainClients({ chain: anvilChain, rpcUrls: [broken.url, good.url] });
+    await expect(plain.publicClient.getBlockNumber({ cacheTime: 0 })).rejects.toThrow(/Error getting block by number/);
+    expect(good.hits()).toBe(0);
+    const watching = createChainClients({ chain: anvilChain, rpcUrls: [broken.url, good.url], failoverIf: isNodeError });
+    expect(await watching.publicClient.getBlockNumber({ cacheTime: 0 })).toBe(42n);
+    expect(good.hits()).toBe(1);
+    expect(isNodeError({ code: -32603, message: 'boom' })).toBe(true);
+    expect(isNodeError(new Error('missing trie node 0xabc'))).toBe(true);
+    expect(isNodeError(Object.assign(new Error('execution reverted'), { code: 3 }))).toBe(false);
   });
 
   const RAW = `0x${'02'.repeat(40)}` as const;
