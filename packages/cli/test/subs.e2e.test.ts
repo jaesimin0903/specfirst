@@ -75,7 +75,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst subs on anvil', { timeout: 300_000 }, () 
       ['subs', 'withdraw'],
     ]) {
       const r = await cli(...args, '--network', 'monad-mainnet', '--rpc', NOWHERE);
-      expect(r.code, args.join(' ')).toBe(19);
+      expect(r.code, args.join(' ')).toBe(20);
       expect(r.err).toMatch(/--network monad-mainnet is read-only/);
     }
   });
@@ -91,14 +91,14 @@ describe.skipIf(SKIP_ANVIL)('specfirst subs on anvil', { timeout: 300_000 }, () 
     expect(await client().summary()).toMatchObject({ owner: DEPLOYER, feePerDay: FEE, subscriptionCount: 0n });
     for (const fee of ['0', '0.0']) {
       const free = await cli('subs', 'deploy', '--network', 'anvil', '--fee-per-day', fee);
-      expect(free.code).toBe(19);
+      expect(free.code).toBe(20);
       expect(free.err).toMatch(/--fee-per-day must be above 0/);
     }
   });
 
   it('subscribe and extend pay from REQUESTER_PRIVATE_KEY and refuse to run without it', async () => {
     const none = await cli('subs', 'subscribe', VAULT, '--days', '5', '--network', 'anvil', '--subs', subs);
-    expect(none.code).toBe(19);
+    expect(none.code).toBe(20);
     expect(none.err).toMatch(/REQUESTER_PRIVATE_KEY is not set/);
     process.env.REQUESTER_PRIVATE_KEY = REQUESTER_KEY;
     const missing = await cli('subs', 'subscribe', VAULT, '--days', '5', '--network', 'anvil');
@@ -148,7 +148,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst subs on anvil', { timeout: 300_000 }, () 
   it('cancel: only the subscriber; refunds the days not started and ends the subscription', async () => {
     process.env.REQUESTER_PRIVATE_KEY = STRANGER_KEY;
     const notMine = await cli('subs', 'cancel', '0', '--network', 'anvil');
-    expect(notMine.code).toBe(19);
+    expect(notMine.code).toBe(20);
     expect(notMine.err).toMatch(new RegExp(`REQUESTER_PRIVATE_KEY is ${privateKeyToAccount(STRANGER_KEY).address}, subscription #0 belongs to ${REQUESTER}`));
     process.env.REQUESTER_PRIVATE_KEY = REQUESTER_KEY;
 
@@ -161,7 +161,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst subs on anvil', { timeout: 300_000 }, () 
     expect(await client().isActive(0n)).toBe(false);
     expect(await client().escrowed()).toBe(0n);
     const twice = await cli('subs', 'cancel', '0', '--network', 'anvil');
-    expect(twice.code).toBe(19);
+    expect(twice.code).toBe(20);
     expect(twice.err).toMatch(/cancel failed \(AlreadyCancelled\)/);
   });
 
@@ -180,7 +180,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst subs on anvil', { timeout: 300_000 }, () 
   it('withdraw pays only earned fees, to the owner by default; escrowed fees stay', async () => {
     process.env.DEPLOYER_PRIVATE_KEY = STRANGER_KEY;
     const notOwner = await cli('subs', 'withdraw', '--network', 'anvil');
-    expect(notOwner.code).toBe(19);
+    expect(notOwner.code).toBe(20);
     expect(notOwner.err).toMatch(new RegExp(`DEPLOYER_PRIVATE_KEY is ${privateKeyToAccount(STRANGER_KEY).address}, the owner is ${DEPLOYER}`));
     process.env.DEPLOYER_PRIVATE_KEY = DEPLOYER_KEY;
 
@@ -192,7 +192,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst subs on anvil', { timeout: 300_000 }, () 
     expect(await balance(subs)).toBe(3n * FEE);
 
     const nothing = await cli('subs', 'withdraw', '--network', 'anvil');
-    expect(nothing.code).toBe(19);
+    expect(nothing.code).toBe(20);
     expect(nothing.err).toMatch(/nothing to withdraw: earned 0\.15 MON, withdrawn 0\.15 MON; 0\.15 MON escrowed for days not settled yet/);
     await cli('subs', 'settle', '--network', 'anvil');
     const owner = await cli('subs', 'withdraw', '--network', 'anvil');
@@ -201,7 +201,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst subs on anvil', { timeout: 300_000 }, () 
 
   it('status of one id, an unknown id, and the human output', async () => {
     const unknown = await cli('subs', 'status', '99', '--network', 'anvil');
-    expect(unknown.code).toBe(19);
+    expect(unknown.code).toBe(20);
     expect(unknown.err).toMatch(/no subscription with id 99 \(UnknownSubscription\)/);
     process.exitCode = undefined;
     const r = await capture(() => buildProgram(registerSubsCommand).parseAsync(['node', 'specfirst', '--project', dir, 'subs', 'status', '--network', 'anvil']));

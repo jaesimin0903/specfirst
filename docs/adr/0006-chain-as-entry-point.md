@@ -124,7 +124,7 @@ Accounting, as implemented in `packages/contracts/src/CheckSubscriptions.sol` (t
 
 Code: `@specfirst/core/subs` (browser-safe: viem and zod only) exports the bundled ABI and bytecode (`checkSubscriptionsAbi`, regenerated with `packages/core/scripts/gen-subs-artifact.mjs`), the same day accounting offchain (`startedDaysAt`, `settleableAt`, `refundAt`, `isActiveAt`), `SubscriptionsClient` and `listActive(subjectChainId)`. listActive reads `subscriptionCount()`, the latest block's timestamp and `subscriptionOf(id)` for every id, never getLogs: 10 reads at a time through a token bucket of 10 reads per second (the testnet public RPC allows 15), so n subscriptions cost n + 2 requests. `createSubscriptionSource(client)` is the watcher's `SubscriptionSource`; it does not read again an id it has seen cancelled (expired ones are read every time, an extend can start them again).
 
-CLI, monad-testnet or anvil (`--network monad-mainnet` is refused for every command that sends; `status` only reads), address from `--subs` or `SPECFIRST_SUBS_<chainId>`, failures exit 19:
+CLI, monad-testnet or anvil (`--network monad-mainnet` is refused for every command that sends; `status` only reads), address from `--subs` or `SPECFIRST_SUBS_<chainId>`, failures exit 20:
 
     specfirst subs deploy [--fee-per-day 0.05]          DEPLOYER_PRIVATE_KEY is the owner; refuses a fee of 0
     specfirst subs subscribe <address> --days <n> [--subject-chain 143] [--standard erc4626]

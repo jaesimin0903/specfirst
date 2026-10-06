@@ -8,7 +8,7 @@ import type { ActiveSubscription, SubscriptionSource } from '../watch/hooks.js';
 import { isActiveAt, MAX_SUBSCRIPTION_DAYS, type Subscription } from './subscription.js';
 
 /** Exit code of the subs commands when a subscriptions action fails or is refused. */
-export const SUBS_FAILED_EXIT_CODE = 19;
+export const SUBS_FAILED_EXIT_CODE = 20;
 
 /** keccak256 of the bundled creation code; `subs deploy` prints it so a deploy can be matched to a build. */
 export const checkSubscriptionsCreationCodeHash: Hex = keccak256(checkSubscriptionsBytecode);

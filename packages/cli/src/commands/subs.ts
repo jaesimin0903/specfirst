@@ -118,7 +118,7 @@ async function settleableIds(subs: SubscriptionsClient, now: bigint): Promise<bi
  * resolveNetwork without readOnly, so monad-mainnet is refused before a key is read, and through the guarded wallet
  * whose transport checks eth_chainId before the first send. DEPLOYER_PRIVATE_KEY is the owner (deploy, settle,
  * withdraw); REQUESTER_PRIVATE_KEY is the test subscriber (subscribe, extend, cancel) and never falls back to an
- * anvil key. Exit 0, or 19 on any subscriptions failure.
+ * anvil key. Exit 0, or 20 on any subscriptions failure.
  */
 export function registerSubsCommand(program: Command): void {
   const group = program.command('subs').description('CheckSubscriptions: prepaid per-day alert subscriptions (ADR 0006).');
