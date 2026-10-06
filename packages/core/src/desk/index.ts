@@ -29,7 +29,7 @@ export type RejectReason = (typeof REJECT_REASONS)[number];
 /** One line per reject reason, for people reading a rejected request. */
 export const REJECT_REASON_TEXT: Readonly<Record<RejectReason, string>> = {
   'not-erc4626': 'the subject has no code, or asset() or totalAssets() does not answer at the check block',
-  'check-failed': 'the check could not run (RPC or forge failure) after retries, or its report did not match the subject',
+  'check-failed': 'no usable report in time: forge failed or ran out of its time budget, fork RPC errors persisted, the request was too close to its timeout, or the report did not match the subject',
   'unsupported-chain': 'the worker does not read the subject chain of the request',
   'unsupported-standard': 'the standardId is not a standard the worker checks (only erc4626)',
   'unknown-proxy': 'the subject is proxy-shaped but its implementation could not be resolved',

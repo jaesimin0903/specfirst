@@ -21,11 +21,16 @@ export class WorkerError extends Error {
 
 const decimal = z.string().regex(/^(0|[1-9]\d*)$/);
 
+const iso = z.string().datetime();
+
 /**
  * What the worker must remember about a request it has started but not closed, so a restart resumes at the
  * failed step instead of paying for the check again: the saved report (block, reportPath, reportURI), the
+ * attest transaction once sent (attestTx: hash and nonce, written before its receipt is awaited), the
  * attestation id once attested, or the reject decision. failures counts passes in a row whose transaction
  * step failed; gaveUp stops the worker from touching the request (the requester can still refundExpired).
+ * retryAt holds a request back after a subject RPC failure (deferrals in a row set the wait) or between
+ * reruns; checkRuns counts checks that ran but could not be attested (fork RPC errors, a newer attestation).
  */
 export const workerStateEntrySchema = z
   .object({
@@ -33,17 +38,23 @@ export const workerStateEntrySchema = z
     block: decimal.optional(),
     reportPath: z.string().min(1).optional(),
     reportURI: z.string().min(1).optional(),
+    attestTx: z.object({ hash: z.string().regex(/^0x[0-9a-fA-F]{64}$/), nonce: z.number().int().nonnegative() }).strict().optional(),
     attestationId: decimal.optional(),
     reject: z.enum(REJECT_REASONS).optional(),
     detail: z.string().optional(),
     gaveUp: z.boolean().optional(),
+    retryAt: iso.optional(),
+    deferrals: z.number().int().nonnegative().optional(),
+    checkRuns: z.number().int().nonnegative().optional(),
   })
   .strict();
 export type WorkerStateEntry = z.infer<typeof workerStateEntrySchema>;
 
 /**
  * state.json. cursor: every request id below it is closed onchain or given up, so a pass reads
- * requestOf(cursor .. requestCount - 1) only. desk and chainId bind the file to one desk.
+ * requestOf(cursor .. requestCount - 1) only. desk and chainId bind the file to one desk. timedOut: subjects
+ * (lowercase) whose check ran out of its time budget, with when and at which block; their requests are
+ * rejected without a check until the cool-off has passed.
  */
 export const workerStateSchema = z
   .object({
@@ -52,6 +63,7 @@ export const workerStateSchema = z
     chainId: z.number().int().positive(),
     cursor: decimal,
     requests: z.record(decimal, workerStateEntrySchema),
+    timedOut: z.record(z.string().regex(/^0x[0-9a-f]{40}$/), z.object({ at: iso, block: decimal }).strict()).optional(),
   })
   .strict();
 export type WorkerState = z.infer<typeof workerStateSchema>;
