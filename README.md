@@ -6,7 +6,7 @@ Plan of record: see docs/plan.md. Status: week 1, scaffolding.
 
 ## Keys
 
-Commands that send transactions read `DEPLOYER_PRIVATE_KEY` and `ISSUER_PRIVATE_KEY` (and `REQUESTER_PRIVATE_KEY` for `desk request`) from the environment; they do not read `.env` on their own. Copy `.env.example` to `.env`, fill it in, and run with Node's env loader:
+Commands that send transactions read `DEPLOYER_PRIVATE_KEY` and `ISSUER_PRIVATE_KEY` (and `REQUESTER_PRIVATE_KEY` for `desk request` and the test subscriber of `subs`) from the environment; they do not read `.env` on their own. Copy `.env.example` to `.env`, fill it in, and run with Node's env loader:
 
 ```
 node --env-file=.env packages/cli/dist/index.js <command>
@@ -47,6 +47,27 @@ node --env-file=.env packages/cli/dist/index.js desk withdraw --to 0x...        
 ```
 
 The worker keeps its cursor in `.specfirst/worker/state.json` and writes each request's progress to `.specfirst/worker/status.json` (schema `workerStatusSchema` in `@specfirst/core/desk`). Its report copies go to `certs/checks/` with `reportURI` under `--report-base-url` (default `$SPECFIRST_REPORT_BASE_URL`, else the raw GitHub URL above); commit and push them so the URIs resolve.
+
+## Alert subscriptions
+
+`CheckSubscriptions` sells delivery and freshness, not results: a subscriber prepays a fee per day in testnet MON for one vault and gets a webhook POST when its check result changes, plus a faster re-check cadence from the watcher. A day that has started counts as used; `settle` moves the fee of started days to earned, `cancel` refunds the days not started, and extending an expired subscription starts it again from now, so days without service are never charged. See `docs/adr/0006-chain-as-entry-point.md` (CheckSubscriptions, Alerts) for the accounting and the webhook rules.
+
+```
+# owner = DEPLOYER_PRIVATE_KEY, 0.05 MON per day unless --fee-per-day
+node --env-file=.env packages/cli/dist/index.js subs deploy --network monad-testnet
+export SPECFIRST_SUBS_10143=0x...                       # printed by subs deploy
+
+# a test subscription paid from REQUESTER_PRIVATE_KEY (users subscribe from the web)
+node --env-file=.env packages/cli/dist/index.js subs subscribe 0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E --days 7 --subject-chain 143
+node --env-file=.env packages/cli/dist/index.js subs extend 0 --days 7
+node --env-file=.env packages/cli/dist/index.js subs cancel 0                   # refunds the days not started
+
+node --env-file=.env packages/cli/dist/index.js subs status                     # books, settleable now, latest subscriptions
+node --env-file=.env packages/cli/dist/index.js subs settle                     # every subscription with something due
+node --env-file=.env packages/cli/dist/index.js subs withdraw                   # owner: earned fees only, to the owner
+```
+
+A webhook is registered off chain: the subscriber signs `Specfirst alerts webhook\nsubscriber: <address>\nurl: <https url>\nissued: <unix seconds>` and the web API stores it in the watch directory's `webhooks.json` with `registerWebhook` from `@specfirst/core`. The watcher's sink (`createWebhookAlertSink`) POSTs `{ v: 1, subscriptionId, subject, chainId, change, check, attestation, reportURL }` to every active subscriber of a vault whose result changed, up to 3 attempts. The ABI, the day accounting, the client, `listActive` and the webhook message and verification are browser-safe in `@specfirst/core/subs`.
 
 ## Board
 
