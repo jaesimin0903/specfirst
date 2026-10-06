@@ -62,7 +62,9 @@ async function run(over: Partial<FixLoopInput> & Pick<FixLoopInput, 'agent' | 'b
 
 const iterDir = (n: number) => path.join(repo, '.specfirst/runs/r1', `iter-${n}`);
 
-describe('runFixLoop', () => {
+// Each test works in a real git repository with a stubbed judge; about 2.5 s alone, past vitest's 5 s default when
+// the whole suite runs at once.
+describe('runFixLoop', { timeout: 30_000 }, () => {
   it('one counterexample, one fix, then pass: 2 iterations, exit 0', async () => {
     const patches = await buildPatches(repo, [{ files: { 'src/StakingVault.sol': vaultWith('fixed') } }]);
     const agent = new ReplayAgent(patches, { costUsd: 0.4 });
