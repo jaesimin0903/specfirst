@@ -75,7 +75,7 @@ export async function ensureTestnet(provider: EIP1193Provider, rpc: string): Pro
   }
 }
 
-function walletClientFor(signer: DeskSigner, rpc: string) {
+export function walletClientFor(signer: DeskSigner, rpc: string) {
   return signer.kind === 'injected'
     ? createWalletClient({ account: signer.address, chain: chainFor(rpc), transport: custom(signer.provider) })
     : createWalletClient({ account: privateKeyToAccount(signer.privateKey), chain: chainFor(rpc), transport: http(rpc) });
