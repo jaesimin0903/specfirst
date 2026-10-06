@@ -11,14 +11,9 @@ import { shortAddress, shortHash } from '../../lib/format';
 import { useDeskWallet } from '../desk/useDeskWallet';
 import { WalletPanel } from '../desk/WalletPanel';
 import { FeedItem } from './FeedItem';
+import { inboxNote } from '../../lib/watch/words';
 
 const POLL_MS = 10_000;
-
-const ITEM_NOTE: Record<InboxJson['items'][number]['kind'], string> = {
-  change: 'Alert',
-  'first-check': 'First check since you subscribed',
-  delivery: 'Delivery',
-};
 
 function until(iso: string): string {
   return `${iso.slice(0, 16).replace('T', ' ')} UTC`;
@@ -228,7 +223,7 @@ export function InboxView({ contract, rpc, faucet }: { contract: string | null; 
                   <FeedItem
                     key={`${it.subscriptionId}:${it.event.chainId}:${it.event.seq}`}
                     e={it.event}
-                    note={`${ITEM_NOTE[it.kind]}, subscription #${it.subscriptionId}`}
+                    note={`${inboxNote(it.kind, it.event.change?.kind)}, subscription #${it.subscriptionId}`}
                   />
                 ))}
               </ol>
@@ -334,8 +329,8 @@ function WebhookForm({
         <button type="button" className="sb-linkbtn" onClick={() => setUrl(demoUrl)}>
           Use this site&apos;s demo receiver
         </button>{' '}
-        to see a delivery without a server of your own, then watch it arrive on <a href="/watch/demo-hook">the demo receiver page</a>. The URL must be https;
-        this server may allow http for localhost only.
+        to see a delivery without a server of your own, then watch it arrive on <a href="/watch/demo-hook">the demo receiver page</a>. The URL must be https to
+        a public host (a local server may allow its own address); you need an active subscription first.
       </p>
       {state.signed && <pre className="sw-signed">{state.signed}</pre>}
       <p className="sb-status-line" data-tone={state.phase === 'error' ? 'error' : undefined} role={state.phase === 'error' ? 'alert' : undefined}>

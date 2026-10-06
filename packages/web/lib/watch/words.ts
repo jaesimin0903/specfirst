@@ -95,3 +95,12 @@ export function foundSentence(f: {
   if (f.firstDepositBlock && f.source !== 'deposit') s += ` First deposit seen in block ${blockText(f.firstDepositBlock)}.`;
   return s;
 }
+
+/**
+ * The title of an inbox item: "First result" for a vault's first outcome (change kind new), "Result changed" only
+ * for a real change, then the first check since the subscription started and deliveries.
+ */
+export function inboxNote(kind: 'change' | 'first-check' | 'delivery', changeKind: ChangeKind | null | undefined): string {
+  if (kind === 'change') return changeKind === 'new' ? 'First result' : 'Result changed';
+  return kind === 'first-check' ? 'First check since you subscribed' : 'Delivery';
+}
