@@ -1184,3 +1184,67 @@ describe('the re-review repros, as regressions', { timeout: 60_000 }, () => {
     expect(calls).toBe(1);
   });
 });
+
+describe('the final check, as regressions', { timeout: 60_000 }, () => {
+  it('an unstable outcome without a failing property is recorded and alerted, not attested', async () => {
+    const h = await harness();
+    const delivered: string[] = [];
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    const w = h.watcher({}, { subscriptions: { active: async () => [sub(1n, V)] }, alerts: { deliver: async (event) => (delivered.push(`${event.kind}:${event.change?.kind ?? ''}`), []) } });
+    await w.pass({ drain: true });
+    // Every later check leaves another number of properties inconclusive, none failing: the counts never agree.
+    const run = h.effects.runCheck;
+    let n = 0;
+    h.effects.runCheck = async (subject, block, opts) => {
+      const r = await run(subject, block, opts);
+      n++;
+      const results = r.results.map((x, i) => (i < n ? { ...x, status: 'inconclusive' as const, reason: '`vm.assume` rejected too many inputs (4096 allowed)' } : x));
+      return parseCheckReport(JSON.stringify({ ...r, results, summary: summarize(results) }));
+    };
+    let block = 2010n;
+    for (let i = 0; i < 4; i++) {
+      h.chain.fingerprints.set(V.toLowerCase(), hash(0x100 + i));
+      block += 20n;
+      h.chain.logs.push(upgradedLog(V, block - 15n));
+      h.chain.head = block;
+      later(h, 3 * 60_000);
+      await w.pass({ drain: true });
+    }
+    const feed = (await h.feed()).filter((e) => e.subject === V);
+    expect(feed.filter((e) => e.kind === 'checked').at(-1)!.reason).toBe(
+      'unstable: 4 checks in a row did not agree on the counts, the latest is recorded; not attested [policy]: an unstable outcome without a failing property is not attested',
+    );
+    expect(feed.at(-1)).toMatchObject({ kind: 'changed', change: { kind: 'changed' } });
+    expect(delivered).toEqual(['changed:new', 'changed:changed']);
+    expect(h.registry.list).toHaveLength(1);
+  });
+
+  it('fails of candidates no factory announced use at most 3 of the 10 unsolicited attestations a day; factory vaults keep the rest', async () => {
+    const h = await harness();
+    const candidates = [0, 1, 2, 3].map((i) => addr(0x6000 + i));
+    for (const [i, c] of candidates.entries()) {
+      h.chain.failing.set(c.toLowerCase(), ['deposit']);
+      h.chain.logs.push(depositLog(c, 1995n, i));
+    }
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    const w = h.watcher({ confirmDelayMs: 0 });
+    await w.pass({ drain: true });
+    h.chain.head = 2020n;
+    await w.pass({ drain: true });
+    const reasons = (await h.feed()).filter((e) => e.kind === 'checked' && e.reason!.startsWith('confirmed')).map((e) => e.reason!.split('; ')[1]);
+    expect(reasons.filter((r) => r.startsWith('attesting [fail]'))).toHaveLength(3);
+    expect(reasons.filter((r) => r.startsWith('attestation deferred [fail]: 3 of 3 attestations of fails of candidates no factory announced made today'))).toHaveLength(1);
+    expect(h.store.state.attestDay).toMatchObject({ used: 3, unsolicited: 3, candidateFails: 3 });
+    expect(Object.values(h.store.state.deferred)).toEqual([expect.objectContaining({ cls: 'fail', candidate: true, notBefore: '2026-10-07T00:00:00.000Z' })]);
+    // A factory vault the same day still has the unsolicited budget.
+    h.chain.logs.push(factoryLog(W, 2025n));
+    h.chain.head = 2040n;
+    await w.pass({ drain: true });
+    expect((await h.feed()).filter((e) => e.kind === 'attested').map((e) => e.subject)).toEqual([...candidates.slice(0, 3), W]);
+    expect((await statusOf(h)).attestBudget).toMatchObject({ candidateFailsPerDay: 3, candidateFailsUsedToday: 3, unsolicitedUsedToday: 4 });
+  });
+});
+

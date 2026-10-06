@@ -106,7 +106,7 @@ export const watchStateSchema = z
     attempted: z.record(lowerAddress, iso),
     subscriptions: z.record(decimal, z.object({ firstCheckAt: iso }).strict()),
     sweeps: z.array(iso),
-    attestDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), used: count, unsolicited: count.default(0) }).strict(),
+    attestDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), used: count, unsolicited: count.default(0), candidateFails: count.default(0) }).strict(),
     recent: z.array(z.object({ kind: z.enum(FEED_KINDS), at: iso }).strict()),
     sourcesSeen: z.record(z.string(), count),
     deferred: z.record(
@@ -121,6 +121,8 @@ export const watchStateSchema = z
           failures: count.default(0),
           notBefore: iso.optional(),
           nonce: count.optional(),
+          /** A fail of a candidate no factory announced and nobody attested: counted against maxCandidateFailsPerDay. */
+          candidate: z.boolean().optional(),
         })
         .strict(),
     ),
@@ -174,6 +176,7 @@ export const watchStateSchema = z
             supersedes: decimal.nullable().optional(),
             replaced: z.array(hex32).default([]),
             bumps: count.default(0),
+            candidate: z.boolean().optional(),
           })
           .strict(),
       )
@@ -206,7 +209,7 @@ export function emptyWatchState(chainId: number): WatchState {
     attempted: {},
     subscriptions: {},
     sweeps: [],
-    attestDay: { day: '1970-01-01', used: 0, unsolicited: 0 },
+    attestDay: { day: '1970-01-01', used: 0, unsolicited: 0, candidateFails: 0 },
     recent: [],
     sourcesSeen: {},
     deferred: {},

@@ -125,6 +125,11 @@ export interface WatchConfig {
   maxAttestPerDay: number;
   /** Of those, the unsolicited classes (factory, fail, attested-change); subscribed ones only count against the total. */
   maxUnsolicitedPerDay: number;
+  /**
+   * Of the unsolicited ones, fails of candidates no factory announced and nobody attested: anyone can deploy
+   * those, so they cannot take the rest of the unsolicited budget from factory vaults and attested subjects.
+   */
+  maxCandidateFailsPerDay: number;
   /** Attestations of one subject per UTC day. */
   maxAttestPerSubjectPerDay: number;
   /** Below this issuer balance (wei) nothing is sent; status.json says so. */
@@ -175,6 +180,7 @@ export const DEFAULT_WATCH_CONFIG: WatchConfig = {
   subscribedMinutes: 60,
   maxAttestPerDay: 15,
   maxUnsolicitedPerDay: 10,
+  maxCandidateFailsPerDay: 3,
   maxAttestPerSubjectPerDay: 2,
   minBalanceWei: 300_000_000_000_000_000n,
   maxCheckAttempts: 3,
@@ -398,6 +404,8 @@ export class Watcher {
         usedToday: sameDay ? this.state.attestDay.used : 0,
         unsolicitedPerDay: this.config.maxUnsolicitedPerDay,
         unsolicitedUsedToday: sameDay ? this.state.attestDay.unsolicited : 0,
+        candidateFailsPerDay: this.config.maxCandidateFailsPerDay,
+        candidateFailsUsedToday: sameDay ? this.state.attestDay.candidateFails : 0,
         perSubjectPerDay: this.config.maxAttestPerSubjectPerDay,
         minBalanceWei: this.config.minBalanceWei.toString(),
         balanceWei: this.balanceWei === null ? null : this.balanceWei.toString(),
@@ -1018,16 +1026,17 @@ export class Watcher {
 
   private rollDay(): void {
     const day = this.today();
-    if (this.state.attestDay.day !== day) this.state.attestDay = { day, used: 0, unsolicited: 0 };
+    if (this.state.attestDay.day !== day) this.state.attestDay = { day, used: 0, unsolicited: 0, candidateFails: 0 };
   }
 
   /**
    * Whether an attestation of class `cls` for `lower` may be sent now: the per-subject cap, the daily total,
-   * the smaller daily budget of the unsolicited classes, no attest transaction of the watcher's unresolved and
-   * none of the issuer's pending on the node, and the issuer's balance against the floor (read now). When
-   * not, why and when to try again; `stopsAll` when nothing else can be sent either.
+   * the smaller daily budget of the unsolicited classes and within it that of a `candidate`'s fail, no attest
+   * transaction of the watcher's unresolved and none of the issuer's pending on the node, and the issuer's
+   * balance against the floor (read now). When not, why and when to try again; `stopsAll` when nothing else
+   * can be sent either.
    */
-  private async budgetFor(cls: AttestClass, lower: string): Promise<{ ok: true } | { ok: false; why: string; retryAt: string; stopsAll: boolean }> {
+  private async budgetFor(cls: AttestClass, lower: string, candidate = false): Promise<{ ok: true } | { ok: false; why: string; retryAt: string; stopsAll: boolean }> {
     this.rollDay();
     const day = this.today();
     const tomorrow = nextUtcDay(this.effects.now());
@@ -1041,6 +1050,10 @@ export class Watcher {
     }
     if (cls !== 'subscribed' && this.state.attestDay.unsolicited >= this.config.maxUnsolicitedPerDay) {
       return { ok: false, why: `${this.state.attestDay.unsolicited} of ${this.config.maxUnsolicitedPerDay} unsolicited attestations made today`, retryAt: tomorrow, stopsAll: false };
+    }
+    if (candidate && this.state.attestDay.candidateFails >= this.config.maxCandidateFailsPerDay) {
+      const why = `${this.state.attestDay.candidateFails} of ${this.config.maxCandidateFailsPerDay} attestations of fails of candidates no factory announced made today`;
+      return { ok: false, why, retryAt: tomorrow, stopsAll: false };
     }
     const retryAt = new Date(this.effects.now().getTime() + this.config.deferredRetryMs).toISOString();
     const [sent] = Object.values(this.state.attesting);
@@ -1071,11 +1084,12 @@ export class Watcher {
     return { ok: true };
   }
 
-  private countAttestation(cls: AttestClass, lower: string, gasCostWei: bigint): void {
+  private countAttestation(cls: AttestClass, lower: string, gasCostWei: bigint, candidate: boolean): void {
     this.rollDay();
     const day = this.today();
     this.state.attestDay.used += 1;
     if (cls !== 'subscribed') this.state.attestDay.unsolicited += 1;
+    if (candidate) this.state.attestDay.candidateFails += 1;
     const subj = this.state.perSubject[lower];
     this.state.perSubject[lower] = { day, used: subj && subj.day === day ? subj.used + 1 : 1 };
     for (const [k, v] of Object.entries(this.state.perSubject)) if (v.day !== day) delete this.state.perSubject[k];
@@ -1210,6 +1224,7 @@ export class Watcher {
     const pending = st.pending[lower];
     let firstCheck = vault.lastCheck === null;
     let confirmation = '';
+    let unstable = false;
 
     if (needsConfirmation(change, outcome)) {
       const agrees = !!pending && confirmsChange(pending.kind, pending.outcome as CheckOutcome, outcome);
@@ -1225,6 +1240,7 @@ export class Watcher {
         delete st.pending[lower];
         const what = pending?.kind === 'changed' ? 'the counts' : 'the failed properties';
         confirmation = `unstable: ${attempts} checks in a row did not agree on ${what}, the latest is recorded; `;
+        unstable = true;
       } else {
         this.running = null;
         st.pending[lower] = {
@@ -1251,7 +1267,7 @@ export class Watcher {
     }
 
     const defer = (cls: AttestClass, notBefore: string, failures = 0) => {
-      st.deferred[lower] = { reportPath: saved.reportPath, reportURI: saved.reportURI, source: entry.source, at: this.nowIso(), cls, failures, notBefore };
+      st.deferred[lower] = { reportPath: saved.reportPath, reportURI: saved.reportURI, source: entry.source, at: this.nowIso(), cls, failures, notBefore, ...(candidate ? { candidate } : {}) };
     };
     let decision: AttestDecision | null = null;
     let latestValid = false;
@@ -1272,16 +1288,21 @@ export class Watcher {
 
     const subs = this.activeSubsFor(subject);
     const fresh = subs.filter((s) => !st.subscriptions[s.id.toString()]);
-    const policy = attestClassOf({
-      subscribed: subs.length > 0,
-      firstSinceSubscription: fresh.length > 0,
-      confirmedChange: change !== null && change.kind !== 'new',
-      factoryVault: vault.firstSeen.source === 'factory',
-      firstCheck,
-      firstDeposit: entry.source === 'first-deposit',
-      hasFail: outcome.summary.fail > 0,
-      hasValidAttestation: latestValid,
-    });
+    // An unstable outcome is recorded and alerted; only one with a failing property is attested.
+    const policy =
+      unstable && outcome.summary.fail === 0
+        ? { cls: null, why: 'an unstable outcome without a failing property is not attested' }
+        : attestClassOf({
+            subscribed: subs.length > 0,
+            firstSinceSubscription: fresh.length > 0,
+            confirmedChange: change !== null && change.kind !== 'new',
+            factoryVault: vault.firstSeen.source === 'factory',
+            firstCheck,
+            firstDeposit: entry.source === 'first-deposit',
+            hasFail: outcome.summary.fail > 0,
+            hasValidAttestation: latestValid,
+          });
+    const candidate = policy.cls === 'fail' && vault.firstSeen.source !== 'factory' && !latestValid;
     let reason: string;
     let attestAs: AttestClass | null = null;
     if (!decision) {
@@ -1294,7 +1315,7 @@ export class Watcher {
     } else if (!this.effects.attest) {
       reason = `not attested [no-attest]: would attest as ${policy.cls} (${policy.why}); ${decision.reason}`;
     } else {
-      const budget = await this.budgetFor(policy.cls, lower);
+      const budget = await this.budgetFor(policy.cls, lower, candidate);
       if (!budget.ok) {
         defer(policy.cls, budget.retryAt);
         reason = `attestation deferred [${policy.cls}]: ${budget.why}; ${decision.reason}`;
@@ -1307,7 +1328,7 @@ export class Watcher {
 
     let attestation: FeedAttestation | undefined;
     if (attestAs && decision?.attest) {
-      const out = await this.attestReport(subject, entry.source, report, saved, attestAs, base, check, { identity });
+      const out = await this.attestReport(subject, entry.source, report, saved, attestAs, base, check, { identity, candidate });
       if (out.kind === 'attested') {
         attestation = out.attestation;
         vault.lastAttestationId = attestation.id;
@@ -1410,7 +1431,8 @@ export class Watcher {
    * without a revert is `retry` (the next try decides again from the registry); OlderThanLatest means another
    * issuer attested a later block meanwhile (`newer`, read again from the registry, null when that read
    * fails); an identity mismatch, an unknown proxy, a report the registry would refuse and any other revert
-   * are `refused`. `opts.nonce` resends with the nonce of a dropped transaction.
+   * are `refused`. `opts.nonce` resends with the nonce of a dropped transaction; `opts.candidate` counts it as
+   * a candidate's fail.
    */
   private async attestReport(
     subject: Address,
@@ -1420,7 +1442,7 @@ export class Watcher {
     cls: AttestClass,
     base: Omit<FeedEventInput, 'at' | 'kind'>,
     check: FeedCheck,
-    opts: { identity?: SubjectCodeCheck; nonce?: number } = {},
+    opts: { identity?: SubjectCodeCheck; nonce?: number; candidate?: boolean } = {},
   ): Promise<AttestResult> {
     const lower = subject.toLowerCase();
     this.setRunning(subject, source, 'attesting');
@@ -1463,6 +1485,7 @@ export class Watcher {
         cls,
         replaced: [],
         bumps: 0,
+        ...(opts.candidate ? { candidate: true } : {}),
       };
       await this.save();
       let mined: { id: bigint; gasCostWei: bigint; supersedes: bigint | null };
@@ -1473,7 +1496,8 @@ export class Watcher {
         return { kind: 'sent', hash: sent.hash };
       }
       delete this.state.attesting[lower];
-      const attestation = await this.recordAttested(lower, cls, { id: mined.id, hash: sent.hash, gasCostWei: mined.gasCostWei, supersedes: mined.supersedes }, base, check);
+      const tx = { id: mined.id, hash: sent.hash, gasCostWei: mined.gasCostWei, supersedes: mined.supersedes, candidate: !!opts.candidate };
+      const attestation = await this.recordAttested(lower, cls, tx, base, check);
       await this.save();
       return { kind: 'attested', attestation };
     } catch (err) {
@@ -1500,12 +1524,12 @@ export class Watcher {
   private async recordAttested(
     lower: string,
     cls: AttestClass,
-    tx: { id: bigint; hash: Hex; gasCostWei: bigint; supersedes: bigint | null },
+    tx: { id: bigint; hash: Hex; gasCostWei: bigint; supersedes: bigint | null; candidate: boolean },
     base: Omit<FeedEventInput, 'at' | 'kind'>,
     check: FeedCheck | undefined,
     note = '',
   ): Promise<FeedAttestation> {
-    this.countAttestation(cls, lower, tx.gasCostWei);
+    this.countAttestation(cls, lower, tx.gasCostWei, tx.candidate);
     const attestation: FeedAttestation = { id: tx.id.toString(), txHash: tx.hash, supersedes: tx.supersedes === null ? null : tx.supersedes.toString() };
     await this.feed([{ ...base, at: this.nowIso(), kind: 'attested', ...(check ? { check } : {}), attestation, reason: `[${cls}]${note}` }]);
     return attestation;
@@ -1559,7 +1583,8 @@ export class Watcher {
       );
       const d = st.deferred[lower];
       if (tx.state === 'mined') {
-        const attestation = await this.recordAttested(lower, a.cls, { id: tx.id, hash: found.hash, gasCostWei: tx.gasCostWei, supersedes: tx.supersedes }, base, check, '; its receipt was found in a later pass');
+        const mined = { id: tx.id, hash: found.hash, gasCostWei: tx.gasCostWei, supersedes: tx.supersedes, candidate: !!a.candidate };
+        const attestation = await this.recordAttested(lower, a.cls, mined, base, check, '; its receipt was found in a later pass');
         const vault = this.store.vaults.vaults[lower];
         if (vault) vault.lastAttestationId = attestation.id;
         if (d?.reportPath === a.reportPath) delete st.deferred[lower];
@@ -1578,7 +1603,8 @@ export class Watcher {
         await this.errorLine(lower, { ...base, ...(check ? { check } : {}), reason: `attest tx ${found.hash} reverted (${failures} of ${this.config.maxCheckAttempts}), decided again from ${notBefore}` });
       }
       const resend = tx.state === 'dropped' && !tx.nonceUsed ? { nonce: a.nonce } : {};
-      st.deferred[lower] = { reportPath: a.reportPath, reportURI: a.reportURI, source: a.source, at: this.nowIso(), cls: a.cls, failures, notBefore, ...resend };
+      const candidate = a.candidate ? { candidate: true } : {};
+      st.deferred[lower] = { reportPath: a.reportPath, reportURI: a.reportURI, source: a.source, at: this.nowIso(), cls: a.cls, failures, notBefore, ...resend, ...candidate };
     }
     await this.save();
   }
@@ -1603,16 +1629,17 @@ export class Watcher {
 
   /**
    * Attestations that wait (a budget, the balance floor, an RPC failure), the classes that matter most first
-   * (subscribed, a change of an attested subject, a fail, a factory's vault) so throwaway vaults cannot push
-   * them to the next day, then each from its own retry time, the wait after a failure doubling from
+   * (subscribed, a change of an attested subject, a fail, a factory's vault, a candidate's fail) so throwaway
+   * vaults cannot push them to the next day, then each from its own retry time, the wait after a failure doubling from
    * deferredRetryMs up to an hour. Each is decided again first; one whose vault was checked again since is
    * dropped (the newer check decides), one a later attestation superseded is checked again. Below the balance
    * floor nothing is tried.
    */
   private async attestDeferred(): Promise<void> {
     const st = this.state;
-    const rank = (cls: AttestClass | undefined) => (cls ? DEFERRED_ORDER.indexOf(cls) : DEFERRED_ORDER.length);
-    const entries = Object.entries(st.deferred).sort((a, b) => rank(a[1].cls) - rank(b[1].cls) || (a[1].notBefore ?? '').localeCompare(b[1].notBefore ?? ''));
+    // A candidate's fail goes last: anyone can deploy one.
+    const rank = (d: (typeof st.deferred)[string]) => (d.cls && !d.candidate ? DEFERRED_ORDER.indexOf(d.cls) : DEFERRED_ORDER.length);
+    const entries = Object.entries(st.deferred).sort((a, b) => rank(a[1]) - rank(b[1]) || (a[1].notBefore ?? '').localeCompare(b[1].notBefore ?? ''));
     for (const [lower, d] of entries) {
       const vault = this.store.vaults.vaults[lower];
       if (!this.effects.attest || !vault?.lastCheck || vault.lastCheck.reportPath !== d.reportPath || !d.cls) {
@@ -1642,14 +1669,17 @@ export class Watcher {
         if (decision.newer) await this.superseded({ subject, source: d.source, attempts: 0 }, vault, decision.newer);
         continue;
       }
-      const budget = await this.budgetFor(d.cls, lower);
+      const budget = await this.budgetFor(d.cls, lower, !!d.candidate);
       if (!budget.ok) {
         st.deferred[lower] = { ...d, notBefore: budget.retryAt };
         if (budget.stopsAll) return;
         continue;
       }
       const base = { chainId: this.chainId, subject, source: d.source };
-      const out = await this.attestReport(subject, d.source, report, d, d.cls, base, feedCheckOf(report, d.reportPath), d.nonce !== undefined ? { nonce: d.nonce } : {});
+      const out = await this.attestReport(subject, d.source, report, d, d.cls, base, feedCheckOf(report, d.reportPath), {
+        ...(d.nonce !== undefined ? { nonce: d.nonce } : {}),
+        candidate: !!d.candidate,
+      });
       if (out.kind === 'retry') {
         backoff(out.error);
         // Its recorded nonce may be taken by the next try: that one takes the issuer's next nonce.

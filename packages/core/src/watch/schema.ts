@@ -132,8 +132,8 @@ export type FeedEvent = z.infer<typeof feedEventSchema>;
  * counts are over the last 24 hours except known (vaults.json). sources: one entry per signal source, seen
  * = signals of that source since the watcher's state was created. attestBudget: attestations made on the
  * current UTC day against --max-attest-per-day, and (optional) the unsolicited part of them against its own
- * smaller budget, the cap per subject, the balance floor, the issuer's last read balance and, when nothing is
- * sent, why (paused). gasCostWei (optional): gasUsed x effectiveGasPrice summed over the watcher's
+ * smaller budget, the fails of candidates no factory announced and nobody attested within that, the cap per
+ * subject, the balance floor, the issuer's last read balance and, when nothing is sent, why (paused). gasCostWei (optional): gasUsed x effectiveGasPrice summed over the watcher's
  * attestations since its state was created, for the web's spend figures.
  */
 export const watchStatusSchema = z
@@ -158,6 +158,8 @@ export const watchStatusSchema = z
         usedToday: count,
         unsolicitedPerDay: count.optional(),
         unsolicitedUsedToday: count.optional(),
+        candidateFailsPerDay: count.optional(),
+        candidateFailsUsedToday: count.optional(),
         perSubjectPerDay: count.optional(),
         minBalanceWei: decimal.optional(),
         balanceWei: decimal.nullable().optional(),
