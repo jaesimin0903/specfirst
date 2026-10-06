@@ -84,6 +84,7 @@ import {
 import { StageError } from '../lib/pipeline.js';
 import { cont, stage } from '../lib/runLog.js';
 import { runStage } from '../lib/stageRunner.js';
+import { registerWatchDemoGate } from './gate.js';
 
 /** rpc1 takes 10,000-block getLogs windows (and archive reads); rpc.monad.xyz is the fallback with 100. */
 export const MONAD_MAINNET_WATCH_RPCS = ['https://rpc1.monad.xyz', 'https://rpc.monad.xyz'] as const;
@@ -768,4 +769,6 @@ function registerWatchDemo(watch: Command): void {
         }
       });
     });
+
+  registerWatchDemoGate(demo);
 }
