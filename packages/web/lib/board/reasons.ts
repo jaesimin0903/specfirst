@@ -1,4 +1,4 @@
-import type { PropertyStatus, ReasonCategory, ReportResultView, SkipReason, StatusCounts, VaultStatus } from './types';
+import type { PropertyStatus, ReasonCategory, ReportResultView, SkipReason, StatusCounts, VaultStatus, VaultTraitView } from './types';
 
 /*
  * Turns the reasons forge and the harness write into sentences for people. Pure and dependency free, so the
@@ -246,6 +246,39 @@ export function explainSkip(skip: SkipReason): string {
     case 'setup-reverted':
       return 'No property applies. The suites could not start on this contract because setUp reverted. The reason is listed with each property below.';
   }
+}
+
+/** "requestRedeem(uint256,address,address)" -> "requestRedeem". */
+function functionName(signature: string): string {
+  const i = signature.indexOf('(');
+  return i === -1 ? signature : signature.slice(0, i);
+}
+
+/** The label of a trait, shown next to the verdict and in the vault's board row. Context, never a verdict. */
+export function traitLabel(trait: VaultTraitView): string {
+  const via = trait.evidence.requestFunctions[0];
+  return `Asynchronous withdrawals: exits go through ${via ? functionName(via) : 'a request function'}`;
+}
+
+/** What the label rests on, for a tooltip or a line under it. */
+export function traitBasis(trait: VaultTraitView): string {
+  const e = trait.evidence;
+  const code = `${e.requestFunctions.join(' and ')} in the code at ${e.codeAddress}`;
+  const erc165 = e.erc165 ? (e.erc165.asyncRedeem ? 'ERC-165 declares ERC-7540 asynchronous redemption' : 'ERC-165 does not declare ERC-7540 asynchronous redemption') : null;
+  const run =
+    e.run === 'exits-rejected'
+      ? 'in this check deposits worked while every withdraw and redeem reverted'
+      : 'this check could not run the vault on the fork, so the run says nothing about exits';
+  return [code, erc165, run].filter(Boolean).join('; ') + '.';
+}
+
+/** The sentence added to a failed maxWithdraw or maxRedeem property of a vault with the async-redeem trait. */
+export const ASYNC_MAX_NOTE = 'For an asynchronous vault, ERC-7540 still requires maxWithdraw and maxRedeem to report what can be claimed now.';
+
+/** ASYNC_MAX_NOTE for a failed sf-maxWithdraw-honored or sf-maxRedeem-honored of an async-redeem vault, else null. */
+export function asyncFailureNote(result: Pick<ReportResultView, 'id' | 'status'>, traits: ReadonlyArray<VaultTraitView> | undefined): string | null {
+  if (result.status !== 'fail' || !traits?.some((t) => t.id === 'async-redeem')) return null;
+  return result.id === 'sf-maxWithdraw-honored' || result.id === 'sf-maxRedeem-honored' ? ASYNC_MAX_NOTE : null;
 }
 
 /** The one-line verdict at the top of a vault page. */

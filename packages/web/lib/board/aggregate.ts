@@ -138,6 +138,7 @@ export function buildRow({ candidate, meta, attestation, reportPath }: BuildRowI
     groupSize: 1,
     failed: r.results.filter((x) => x.status === 'fail').map((x) => ({ id: x.id, reason: x.reason ?? '' })),
     reasonCategories: [...reasonCountsOf(r.results).keys()],
+    traits: r.traits ? r.traits.map((t) => ({ id: t.id, evidence: { ...t.evidence, requestFunctions: [...t.evidence.requestFunctions] } })) : [],
     attestation,
     reportPath,
   };

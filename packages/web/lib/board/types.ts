@@ -85,6 +85,20 @@ export type AttestationLite =
   | { kind: 'none' }
   | { kind: 'attested'; id: string; status: AttestationStatusName; matchesReport: boolean; blockNumber: string };
 
+/**
+ * A capability of the vault with its evidence (report `traits`, schemaVersion 4). Context only: a trait never
+ * changes a status or the verdict. async-redeem: exits go through a request function (ERC-7540 style).
+ */
+export interface VaultTraitView {
+  id: 'async-redeem';
+  evidence: {
+    codeAddress: string;
+    requestFunctions: string[];
+    erc165: { asyncRedeem: boolean; asyncDeposit: boolean; operator: boolean } | null;
+    run: 'exits-rejected' | 'not-exercised';
+  };
+}
+
 export interface FailedProperty {
   id: string;
   reason: string;
@@ -114,6 +128,8 @@ export interface VaultRow {
   groupSize: number;
   failed: FailedProperty[];
   reasonCategories: ReasonCategory[];
+  /** From the report (empty for reports before schemaVersion 4). */
+  traits: VaultTraitView[];
   attestation: AttestationView;
   /** Public path of the report file this row was built from, e.g. /reports/143/0xabc.../109195820.json. */
   reportPath: string;
@@ -215,6 +231,7 @@ export interface ReportView {
   standard: string;
   vaultKind?: 'erc4626' | 'erc7535' | 'erc7575';
   skipReason?: SkipReason | null;
+  traits?: VaultTraitView[];
   upstream: { repo: string; commit: string };
   harnessSha256: string;
   sfPropertiesSha256: string;

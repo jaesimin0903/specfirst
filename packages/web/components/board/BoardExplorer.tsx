@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { VaultStatus } from '../../lib/board/types';
-import { describeKeyKind, VAULT_STATUS_LABEL } from '../../lib/board/reasons';
+import { describeKeyKind, traitBasis, traitLabel, VAULT_STATUS_LABEL } from '../../lib/board/reasons';
 import {
   ALL,
   filterRows,
@@ -224,6 +224,11 @@ export function BoardExplorer({ rows, protocols, split }: BoardExplorerProps) {
                       {r.assetSymbol ? `${r.assetSymbol}, ` : ''}
                       {r.name ? <span className="mono">{shortAddress(r.address)}</span> : 'no name in metadata'}
                     </span>
+                    {r.traits?.map((t) => (
+                      <span key={t.id} className="sb-trait-mark" title={traitBasis(t)}>
+                        {traitLabel(t)}
+                      </span>
+                    ))}
                     {r.found && (
                       <span className="sw-found-mark" title={`Found by the watcher ${r.found.sourceText}${r.found.block ? ` at block ${r.found.block}` : ''}, ${r.found.at.slice(0, 10)}`}>
                         Found by the watcher

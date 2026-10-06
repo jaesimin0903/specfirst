@@ -10,6 +10,10 @@ import {
   minAmountNote,
 } from '@specfirst/core';
 import {
+  ASYNC_MAX_NOTE,
+  asyncFailureNote,
+  traitBasis,
+  traitLabel,
   KNOWN_ERROR_SELECTORS,
   MISSING_PRECOMPILE_NOTE,
   RESTRICTED_ASSET_NOTE,
@@ -182,5 +186,37 @@ describe('verdictSentence and formatting', () => {
       'Implementation behind the proxy: same compiler metadata and same code with immutables masked',
     );
     expect(describeKeyKind({ of: 'self', hash: 'maskedCodeHash' })).toBe("The vault's own code: same code with immutables masked, no compiler metadata");
+  });
+});
+
+describe('vault traits', () => {
+  const trait = {
+    id: 'async-redeem' as const,
+    evidence: {
+      codeAddress: '0xA1f511E1442c61931ca5ace7616d2cC78497aFd2',
+      requestFunctions: ['requestRedeem(uint256,address,address)', 'requestRedeemGVault(uint256,address,address,uint64)'],
+      erc165: { asyncRedeem: true, asyncDeposit: false, operator: true },
+      run: 'not-exercised' as const,
+    },
+  };
+
+  it('label names the first request function; the basis says what it rests on', () => {
+    expect(traitLabel(trait)).toBe('Asynchronous withdrawals: exits go through requestRedeem');
+    expect(traitBasis(trait)).toBe(
+      'requestRedeem(uint256,address,address) and requestRedeemGVault(uint256,address,address,uint64) in the code at 0xA1f511E1442c61931ca5ace7616d2cC78497aFd2; ERC-165 declares ERC-7540 asynchronous redemption; this check could not run the vault on the fork, so the run says nothing about exits.',
+    );
+    expect(traitBasis({ ...trait, evidence: { ...trait.evidence, requestFunctions: ['requestRedeem(uint256,address,address)'], erc165: null, run: 'exits-rejected' } })).toBe(
+      'requestRedeem(uint256,address,address) in the code at 0xA1f511E1442c61931ca5ace7616d2cC78497aFd2; in this check deposits worked while every withdraw and redeem reverted.',
+    );
+  });
+
+  it('the ERC-7540 sentence goes on failed max-withdraw and max-redeem properties of async vaults only', () => {
+    expect(ASYNC_MAX_NOTE).toBe('For an asynchronous vault, ERC-7540 still requires maxWithdraw and maxRedeem to report what can be claimed now.');
+    expect(asyncFailureNote({ id: 'sf-maxWithdraw-honored', status: 'fail' }, [trait])).toBe(ASYNC_MAX_NOTE);
+    expect(asyncFailureNote({ id: 'sf-maxRedeem-honored', status: 'fail' }, [trait])).toBe(ASYNC_MAX_NOTE);
+    expect(asyncFailureNote({ id: 'sf-maxDeposit-honored', status: 'fail' }, [trait])).toBeNull();
+    expect(asyncFailureNote({ id: 'sf-maxRedeem-honored', status: 'inconclusive' }, [trait])).toBeNull();
+    expect(asyncFailureNote({ id: 'sf-maxRedeem-honored', status: 'fail' }, [])).toBeNull();
+    expect(asyncFailureNote({ id: 'sf-maxRedeem-honored', status: 'fail' }, undefined)).toBeNull();
   });
 });

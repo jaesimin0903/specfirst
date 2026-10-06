@@ -1,11 +1,14 @@
-import type { AttestationView, ReportResultView, VaultDetail } from '../../lib/board/types';
+import type { AttestationView, ReportResultView, VaultDetail, VaultTraitView } from '../../lib/board/types';
 import {
+  asyncFailureNote,
   describeKeyKind,
   effectiveSkipReason,
   describeFailure,
   explainResult,
   explainSkip,
   formatBlock,
+  traitBasis,
+  traitLabel,
   verdictSentence,
 } from '../../lib/board/reasons';
 import { addressUrl, txUrl } from '../../lib/board/attestations';
@@ -186,6 +189,7 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
   const split = report.results.filter((r) => !r.id.startsWith('sf-')).length;
   const skip = effectiveSkipReason(report);
   const failed = report.results.filter((r) => r.status === 'fail');
+  const traits: VaultTraitView[] = report.traits ?? [];
   const cmd = reproduceCommandMultiline(report);
   const title = row.name ?? row.address;
   const upstreamShort = report.upstream.commit.slice(0, 7);
@@ -211,6 +215,12 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
           <span>{chainName(row.chainId)}</span>
         </p>
         <p className="sb-verdict">{verdictSentence(row.status, report.summary, report.blockNumber)}</p>
+        {traits.map((t) => (
+          <p key={t.id} className="sb-trait" title={traitBasis(t)}>
+            {traitLabel(t)}
+            <span className="sb-trait-basis">{traitBasis(t)}</span>
+          </p>
+        ))}
         {skip && <p className="sb-skip">{explainSkip(skip)}</p>}
         {watch?.found && (
           <p className="sw-vault-found">
@@ -250,6 +260,7 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
                       </a>
                       <p>{describeFailure(r.reason).finding}</p>
                       {describeFailure(r.reason).rule && <p className="sb-rule">{describeFailure(r.reason).rule}</p>}
+                      {asyncFailureNote(r, traits) && <p className="sb-rule">{asyncFailureNote(r, traits)}</p>}
                       {r.counterexample && r.counterexample.calls.length > 0 && (
                         <p className="soft" style={{ fontSize: 13, marginTop: 6 }}>
                           Counterexample: <code className="break">{r.counterexample.calls[0]}</code>
@@ -291,7 +302,7 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
                     </td>
                   </tr>
                   {report.results.map((r, i) => (
-                    <FragmentRow key={r.id} r={r} i={i} divider={i === split && split < report.results.length} />
+                    <FragmentRow key={r.id} r={r} i={i} divider={i === split && split < report.results.length} traits={traits} />
                   ))}
                 </tbody>
               </table>
@@ -427,7 +438,7 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
   );
 }
 
-function FragmentRow({ r, i, divider }: { r: ReportResultView; i: number; divider: boolean }) {
+function FragmentRow({ r, i, divider, traits }: { r: ReportResultView; i: number; divider: boolean; traits: VaultTraitView[] }) {
   const raw = rawText(r);
   return (
     <>
@@ -447,6 +458,7 @@ function FragmentRow({ r, i, divider }: { r: ReportResultView; i: number; divide
         </td>
         <td>
           <p>{explainResult(r)}</p>
+          {asyncFailureNote(r, traits) && <p>{asyncFailureNote(r, traits)}</p>}
           <p className="desc">Checks: {r.description}</p>
           {raw && r.status !== 'pass' && (
             <details className="sb-raw">

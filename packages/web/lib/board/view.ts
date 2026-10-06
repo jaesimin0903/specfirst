@@ -1,4 +1,4 @@
-import type { AttestationLite, VaultRow, VaultStatus } from './types';
+import type { AttestationLite, VaultRow, VaultStatus, VaultTraitView } from './types';
 
 /* Filtering and sorting for the vault table. Client-safe: no Node imports. */
 
@@ -15,7 +15,7 @@ export interface WatchFoundMark {
 export type ExplorerRow = Pick<
   VaultRow,
   'id' | 'address' | 'name' | 'protocol' | 'assetSymbol' | 'status' | 'summary' | 'cells' | 'implementationKey' | 'implementationKeyKind' | 'implementationAddress' | 'groupSize'
-> & { failed: { id: string }[]; attestation: AttestationLite; found?: WatchFoundMark };
+> & { failed: { id: string }[]; attestation: AttestationLite; found?: WatchFoundMark; traits?: VaultTraitView[] };
 
 export type ExplorerView = 'vaults' | 'implementations';
 
@@ -35,6 +35,7 @@ export function toExplorerRow(r: VaultRow): ExplorerRow {
     implementationAddress: r.implementationAddress,
     groupSize: r.groupSize,
     failed: r.failed.map((f) => ({ id: f.id })),
+    ...(r.traits.length > 0 ? { traits: r.traits } : {}),
     attestation: a.kind === 'attested' ? { kind: 'attested', id: a.id, status: a.status, matchesReport: a.matchesReport, blockNumber: a.blockNumber } : a,
   };
 }

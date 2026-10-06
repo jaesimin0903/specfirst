@@ -967,6 +967,26 @@ th[aria-sort] .sb-sort svg {
   max-width: 62ch;
   margin: 22px 0 0;
 }
+/* A vault trait (async-redeem): context next to the verdict, never a verdict of its own. */
+.sb-trait {
+  margin: 12px 0 0;
+  max-width: 70ch;
+  padding-left: 14px;
+  border-left: 3px solid var(--rule-strong);
+  font-weight: 600;
+}
+.sb-trait-basis {
+  display: block;
+  font-weight: 400;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+.sb-trait-mark {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
 .sb-skip {
   margin: 12px 0 0;
   max-width: 70ch;
