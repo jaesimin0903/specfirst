@@ -148,7 +148,7 @@ describe('GET /api/v1/watch/status', () => {
       behindBlocks: 30,
       behindSeconds: 12,
       queueLength: 2,
-      gasCostWei: null,
+      gasCostWei: '208000000000000000',
     });
     expect(s.now).toMatchObject({ stage: 'checking', label: { protocol: 'Morpho MetaMorpho V1.1', onList: false } });
     expect(s.sources).toHaveLength(8);
@@ -376,12 +376,12 @@ describe('revenue on /desk', () => {
     expect(r).toMatchObject({
       earnedWei: (2n * 10n ** 17n + 3n * FEE).toString(),
       escrowedWei: (10n ** 17n + 90n * FEE).toString(),
-      watcherGasWei: '52000000000000000',
-      watcherGasChains: [10143],
-      gasWei: (5n * 10n ** 16n + 52n * 10n ** 15n).toString(),
+      watcherGasWei: (208n * 10n ** 15n + 52n * 10n ** 15n).toString(),
+      watcherGasChains: [143, 10143],
+      gasWei: (5n * 10n ** 16n + 260n * 10n ** 15n).toString(),
       missing: [],
     });
-    expect(BigInt(r.netWei!)).toBe(2n * 10n ** 17n + 3n * FEE - 5n * 10n ** 16n - 52n * 10n ** 15n);
+    expect(BigInt(r.netWei!)).toBe(2n * 10n ** 17n + 3n * FEE - 5n * 10n ** 16n - 260n * 10n ** 15n);
   });
 });
 

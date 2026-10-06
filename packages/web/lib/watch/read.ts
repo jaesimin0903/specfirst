@@ -193,23 +193,12 @@ export interface StatusSnapshot {
   gasCostWei: bigint | null;
 }
 
-/**
- * The ADR's status.json, plus an optional top-level gasCostWei (decimal string, what the watcher spent on
- * attestations) that is read beside the schema rather than through it: the ADR does not define it, so a watcher
- * that adds it neither breaks the strict schema here nor needs this page changed.
- */
+/** status.json against the strict schema; gasCostWei, optional in it, is what the watcher reports it spent. */
 export function parseWatchStatus(raw: unknown): { status: WatchStatus | null; detail: string | null; gasCostWei: bigint | null } {
-  let body = raw;
-  let gasCostWei: bigint | null = null;
-  if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'gasCostWei' in raw) {
-    const { gasCostWei: gas, ...rest } = raw as Record<string, unknown>;
-    body = rest;
-    gasCostWei = typeof gas === 'string' && /^\d+$/.test(gas) ? BigInt(gas) : null;
-  }
-  const r = watchStatusSchema.safeParse(body);
-  if (r.success) return { status: r.data, detail: null, gasCostWei };
+  const r = watchStatusSchema.safeParse(raw);
+  if (r.success) return { status: r.data, detail: null, gasCostWei: r.data.gasCostWei !== undefined ? BigInt(r.data.gasCostWei) : null };
   const issue = r.error.issues[0];
-  return { status: null, detail: issue ? `${issue.path.join('.') || '(root)'}: ${issue.message}` : 'invalid', gasCostWei };
+  return { status: null, detail: issue ? `${issue.path.join('.') || '(root)'}: ${issue.message}` : 'invalid', gasCostWei: null };
 }
 
 export async function readStatus(chainId: number | string): Promise<StatusSnapshot> {

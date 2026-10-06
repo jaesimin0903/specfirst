@@ -249,6 +249,7 @@ const status = {
     { name: 'EIP-1967 BeaconUpgraded', address: null, topic0: '0x1cf3b03a6cf19fa2baba4df148e9dcabedea7f8a5c07840e207e5c089be95d3e', seen: 0 },
   ],
   attestBudget: { perDay: 40, usedToday: 4 },
+  gasCostWei: '208000000000000000',
 };
 
 const lines = events.map((e) => JSON.stringify(e));

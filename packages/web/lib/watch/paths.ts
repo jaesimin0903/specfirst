@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { checksDir, isInside, repoRoot } from '../desk/paths';
+import { WATCH_DIR, WATCH_DIR_ENV, WATCH_FEED_NDJSON, WATCH_STATUS_JSON, WATCH_VAULTS_JSON } from './core';
 
 /*
  * Server-only locations of the watcher's files (ADR 0006): <watch dir>/<subjectChainId>/{feed.ndjson,status.json,
@@ -8,8 +9,8 @@ import { checksDir, isInside, repoRoot } from '../desk/paths';
 
 /** SPECFIRST_WATCH_DIR, relative paths against the repository root; default <repo>/.specfirst/watch. */
 export function watchDir(env: Record<string, string | undefined> = process.env): string {
-  const v = env.SPECFIRST_WATCH_DIR?.trim();
-  return v ? path.resolve(repoRoot(env), v) : path.join(repoRoot(env), '.specfirst', 'watch');
+  const v = env[WATCH_DIR_ENV]?.trim();
+  return path.resolve(repoRoot(env), v || WATCH_DIR);
 }
 
 const CHAIN_RE = /^\d{1,12}$/;
@@ -25,9 +26,9 @@ export function chainDir(chainId: number | string, env: Record<string, string | 
 }
 
 export const watchFile = {
-  feed: (chainId: number | string, env?: Record<string, string | undefined>) => path.join(chainDir(chainId, env), 'feed.ndjson'),
-  status: (chainId: number | string, env?: Record<string, string | undefined>) => path.join(chainDir(chainId, env), 'status.json'),
-  vaults: (chainId: number | string, env?: Record<string, string | undefined>) => path.join(chainDir(chainId, env), 'vaults.json'),
+  feed: (chainId: number | string, env?: Record<string, string | undefined>) => path.join(chainDir(chainId, env), WATCH_FEED_NDJSON),
+  status: (chainId: number | string, env?: Record<string, string | undefined>) => path.join(chainDir(chainId, env), WATCH_STATUS_JSON),
+  vaults: (chainId: number | string, env?: Record<string, string | undefined>) => path.join(chainDir(chainId, env), WATCH_VAULTS_JSON),
   webhooks: (env?: Record<string, string | undefined>) => path.join(watchDir(env), 'webhooks.json'),
   demoHook: (env?: Record<string, string | undefined>) => path.join(watchDir(env), 'demo-hook.json'),
 };

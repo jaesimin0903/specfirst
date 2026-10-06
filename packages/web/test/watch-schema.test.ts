@@ -92,14 +92,14 @@ describe('feed.ndjson events', () => {
 });
 
 describe('status.json', () => {
-  it('the fixture matches; an optional gasCostWei is read beside the strict schema, any other extra field is refused', () => {
+  it('the fixture matches; gasCostWei is optional in the strict schema, any other extra field is refused', () => {
     expect(watchStatusSchema.safeParse(status).success).toBe(true);
     const p = parseWatchStatus(status);
     expect(p.status?.running?.stage).toBe('checking');
-    expect(p.gasCostWei).toBeNull();
-    const withGas = parseWatchStatus({ ...status, gasCostWei: '208000000000000000' });
-    expect(withGas.status).not.toBeNull();
-    expect(withGas.gasCostWei).toBe(208000000000000000n);
+    expect(p.gasCostWei).toBe(208000000000000000n);
+    const { gasCostWei: _gas, ...withoutGas } = status;
+    expect(parseWatchStatus(withoutGas)).toMatchObject({ gasCostWei: null, detail: null });
+    expect(parseWatchStatus({ ...status, gasCostWei: '0x10' }).detail).toMatch(/^gasCostWei:/);
     expect(parseWatchStatus({ ...status, extra: 1 }).status).toBeNull();
     expect(parseWatchStatus({ ...status, running: { ...status.running, source: 'rumor' } }).detail).toMatch(/^running\.source:/);
   });
