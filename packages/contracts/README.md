@@ -6,7 +6,8 @@ Foundry project for `CertificateRegistry.sol`, the onchain certificate registry 
 anyone pays a fee for such a check and the worker is paid when it fulfills the request with a matching
 attestation (docs/adr/0005), `CheckSubscriptions.sol`, where a subscriber prepays per day for alerts
 about one subject and the fee of each started day becomes earned (docs/adr/0006), and the demo contracts
-of the watcher (docs/adr/0006, `src/demo/`).
+of the watcher (docs/adr/0006, `src/demo/`), with `AllocationGate.sol`, a demo integrator that reads the attestations
+(docs/adr/0007).
 
 ## Layout
 
@@ -27,6 +28,9 @@ of the watcher (docs/adr/0006, `src/demo/`).
 | `src/demo/DemoVaultFactory.sol` | Watcher demo (docs/adr/0006): DemoVaultFactory deploys DemoVaults and emits `VaultDeployed(vault, asset)`; DemoVault is a minimal ERC-4626 with the positive control's previewDeposit bug behind an operator switch (`setBroken`, `BrokenSet`) |
 | `src/demo/DemoToken.sol` | ERC-20 anyone can mint, the asset of demo vaults |
 | `test/DemoVaultFactory.t.sol` | Deploy event and operator, deposit and redeem with events, previewDeposit equal to deposit unless broken (and a fuzz of it), setBroken by the operator only, allowances |
+| `src/demo/AllocationGate.sol` | Allocation gate (docs/adr/0007): allocates only into vaults whose latest attestation is compliant, fresh, from a current issuer and about their code; anyone can exit a vault once it is not; hostile vaults end in ExitFailed or VaultOutOfGas |
+| `test/AllocationGate.t.sol` | Unit and fuzz tests: every verdict, the demo scenario with a DemoVault switched broken and re-attested, exit refused while compliant or stale, hostile vaults (refusals, partial withdraw, re-entry, gas burner, 1 MB revert), gas estimation never ending an honest exit in ExitFailed, a starved registry read, odd tokens, the books |
+| `test/AllocationGate.invariant.t.sol` | Handler based invariants: idle == funded - allocated + exited - withdrawn, positions equal the vaults' balances, no approval left, a refused verdict never allocates |
 | `lib/forge-std` | forge-std v1.16.2, vendored as plain files (no submodule) |
 
 ## Commands
