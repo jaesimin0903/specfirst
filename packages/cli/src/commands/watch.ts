@@ -320,6 +320,9 @@ function logWatchEvent(ctx: CliContext, e: WatchEvent): void {
     case 'watch-error':
       printLine(ctx, cont(pc.red(`${e.step} failed: ${e.error}`)));
       return;
+    case 'watch-attest-replaced':
+      printLine(ctx, cont(pc.yellow(`attest tx ${e.replaces} still pending, sent again with a higher fee (${e.bump}): ${e.hash}`)));
+      return;
     case 'watch-pass-done':
       if (e.checked > 0) printLine(ctx, cont(pc.dim(`head ${e.head}  cursor ${e.cursor}  queue ${e.queue}`)));
       return;

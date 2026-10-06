@@ -28,7 +28,7 @@ import {
   changeOf,
   needsConfirmation,
   outcomeOfReport,
-  sameOutcome,
+  confirmsChange,
   type AttestClass,
   type AttestDecision,
   type CheckOutcome,
@@ -38,7 +38,7 @@ import { DEFAULT_LOG_WINDOW, LogsNodeBehindError, LogWindow, readLogWindows } fr
 import { enqueue, nextEntry, priorityOf, QUEUE_PRIORITY, queueOrder, removeEntry, type QueueEntry } from './queue.js';
 import { WATCH_DIR, type FeedAttestation, type FeedCheck, type FeedEvent, type FeedSource, type WatchStage, type WatchStatus, type WatchVault } from './schema.js';
 import { decodeSignal, signalTopics, type Signal, type SignalLog, type WatchSource } from './sources.js';
-import { beaconOf, lastCheckOf, type FeedEventInput, type WatchStore } from './store.js';
+import { beaconOf, implementationOf, lastCheckOf, type FeedEventInput, type WatchState, type WatchStore } from './store.js';
 
 const ERC4626_ID = standardIdOf('erc4626');
 const MINUTE_MS = 60_000;
@@ -66,7 +66,8 @@ export interface WatchEffects {
    * Upgraded of a known vault counts as "nothing changed" (the cooldown applies).
    */
   fingerprint?(subject: Address, block: bigint): Promise<Hex>;
-  runCheck(subject: Address, block: bigint): Promise<StandardCheckReport>;
+  /** The suite at `block` with the fuzz seed the watcher picked (live effects fall back to the subject's own). */
+  runCheck(subject: Address, block: bigint, run?: { seed: bigint }): Promise<StandardCheckReport>;
   /** Writes the report copy under certs/checks; returns its repository relative path and its public URI. */
   saveReport(report: StandardCheckReport): Promise<{ reportPath: string; reportURI: string }>;
   loadReport(reportPath: string): Promise<StandardCheckReport>;
@@ -83,8 +84,14 @@ export interface WatchEffects {
   now(): Date;
 }
 
-/** Where an attest sent earlier stands; dropped: the node does not know it, and whether its nonce was used since. */
-export type WatchAttestTxStatus = Exclude<AttestTxState, { state: 'unknown' }> | { state: 'dropped'; nonceUsed: boolean };
+/**
+ * Where an attest sent earlier stands; mined carries the attestation it superseded (from the receipt's
+ * Superseded event, null when none); dropped: the node does not know it, and whether its nonce was used since.
+ */
+export type WatchAttestTxStatus =
+  | { state: 'mined'; id: bigint; gasCostWei: bigint; supersedes: bigint | null }
+  | Exclude<AttestTxState, { state: 'unknown' } | { state: 'mined' }>
+  | { state: 'dropped'; nonceUsed: boolean };
 
 /**
  * Attesting in steps, so the watcher records the transaction between sending it and awaiting its receipt and
@@ -93,10 +100,12 @@ export type WatchAttestTxStatus = Exclude<AttestTxState, { state: 'unknown' }> |
 export interface WatchAttester {
   /** Simulates and sends attest without waiting; `nonce` resends with the nonce of a transaction the node dropped. */
   send(params: AttestParams, opts: { nonce?: number }): Promise<{ hash: Hex; nonce: number }>;
-  /** Waits for the receipt of a sent attest and reads the id from it; a revert or a lost receipt throws. */
-  wait(hash: Hex): Promise<{ id: bigint; gasCostWei: bigint }>;
+  /** Waits for the receipt of a sent attest and reads the id (and what it superseded) from it; a revert or a lost receipt throws. */
+  wait(hash: Hex): Promise<{ id: bigint; gasCostWei: bigint; supersedes: bigint | null }>;
   /** Looks a sent attest up without waiting. */
   status(sent: { hash: Hex; nonce: number }): Promise<WatchAttestTxStatus>;
+  /** Sends a pending attest again with its nonce and a higher fee; either of the two can be mined, never both. */
+  replace(sent: { hash: Hex; nonce: number }): Promise<{ hash: Hex; nonce: number }>;
   /** Whether the issuer has transactions the node holds but has not mined. */
   hasPending(): Promise<boolean>;
 }
@@ -128,16 +137,22 @@ export interface WatchConfig {
   probeRetryMs: number;
   /** A non-factory signal from an address the probe rejected probes it again only after this long, unless its code changed. */
   probeRetryAfterMs: number;
-  /** Probes (and fingerprint reads) per pass; candidates beyond it are carried to the next pass. */
+  /** Probes (and fingerprint reads of rejected emitters) per pass; candidates beyond it are carried to the next pass. */
   maxProbesPerPass: number;
+  /** Fingerprint reads of known vaults per pass, apart from the probes; an Upgraded beyond it is carried to the next pass. */
+  maxFingerprintsPerPass: number;
   /** An Upgraded or BeaconUpgraded that changed neither the code nor the EIP-1967 slots re-checks at most this often. */
   upgradeCooldownMs: number;
   /** Wait before the second check that confirms a change. */
   confirmDelayMs: number;
-  /** Checks in a row that each disagree with the pending one before the vault is left to the next signal or sweep. */
+  /** Checks in a row that each disagree with the pending one before the latest is recorded as unstable. */
   maxConfirmAttempts: number;
   /** First wait before a deferred attestation that failed is tried again; it doubles up to an hour. */
   deferredRetryMs: number;
+  /** An attest transaction pending this long is sent again with its nonce and a higher fee... */
+  replaceAfterMs: number;
+  /** ...at most this many times. */
+  maxFeeBumps: number;
   /** First cooldown of a vault whose check timed out; it doubles with each timeout. */
   timeoutCooldownMs: number;
   /** One error line per key (a subject, a source) at most this often; the rest go to the log only. */
@@ -167,10 +182,13 @@ export const DEFAULT_WATCH_CONFIG: WatchConfig = {
   probeRetryMs: 5 * MINUTE_MS,
   probeRetryAfterMs: 24 * HOUR_MS,
   maxProbesPerPass: 20,
+  maxFingerprintsPerPass: 50,
   upgradeCooldownMs: 6 * HOUR_MS,
   confirmDelayMs: 2 * MINUTE_MS,
   maxConfirmAttempts: 3,
   deferredRetryMs: MINUTE_MS,
+  replaceAfterMs: 10 * MINUTE_MS,
+  maxFeeBumps: 3,
   timeoutCooldownMs: HOUR_MS,
   errorEveryMs: HOUR_MS,
   subscriptionRefreshMs: MINUTE_MS,
@@ -201,6 +219,7 @@ export type WatchEvent =
   | { type: 'watch-window-shrunk'; fromBlock: string; toBlock: string; size: string; error: string }
   | { type: 'watch-feed'; event: FeedEvent }
   | { type: 'watch-error'; step: 'head' | 'logs' | 'subscriptions' | 'deferred' | 'process' | 'pass' | 'rate-limited'; error: string }
+  | { type: 'watch-attest-replaced'; subject: Address; hash: Hex; replaces: Hex; bump: number }
   | { type: 'watch-pass-done'; head: string; cursor: string; checked: number; queue: number; caughtUp: boolean; done: boolean };
 
 export interface WatchPassResult {
@@ -250,10 +269,14 @@ interface CheckedEntry {
 
 type AttestResult =
   | { kind: 'attested'; attestation: FeedAttestation }
-  | { kind: 'newer'; newer: { id: bigint; block: bigint } }
+  /** newer: null when the registry refused the check as older (OlderThanLatest) but could not be read again. */
+  | { kind: 'newer'; newer: { id: bigint; block: bigint } | null }
   | { kind: 'retry'; error: string }
   | { kind: 'refused'; why: 'identity' | 'unknown-proxy' | 'report' | 'revert'; error: string }
   | { kind: 'sent'; hash: Hex };
+
+/** The order deferred attestations are served in when several are due. */
+const DEFERRED_ORDER: readonly AttestClass[] = ['subscribed', 'attested-change', 'fail', 'factory'];
 
 function nextUtcDay(now: Date): string {
   const d = new Date(now.getTime());
@@ -299,12 +322,18 @@ export class Watcher {
   private subs: ActiveSubscription[] = [];
   private subsReadAt = Number.NEGATIVE_INFINITY;
   private subsInFlight: Promise<void> | null = null;
+  /** The subscription source's own read, which a time box gives up on but never starts twice. */
+  private subsCall: Promise<ActiveSubscription[]> | null = null;
+  /** The first read was waited for (once, within its time box). */
+  private subsFirstWaited = false;
   /** Subjects probed in the current pass: a probe that failed here is retried in a later pass, not at once. */
   private probedThisPass = new Set<string>();
   /** Signals handled in the current pass, by kind and emitter: one Upgraded flood is one signal. */
   private signalsThisPass = new Set<string>();
-  /** Probes and fingerprint reads left in the current pass. */
+  /** Probes and fingerprint reads of rejected emitters left in the current pass. */
   private probesLeft = 0;
+  /** Fingerprint reads of known vaults left in the current pass. */
+  private fingerprintsLeft = 0;
 
   constructor(i: WatcherInput) {
     this.effects = i.effects;
@@ -372,10 +401,18 @@ export class Watcher {
         perSubjectPerDay: this.config.maxAttestPerSubjectPerDay,
         minBalanceWei: this.config.minBalanceWei.toString(),
         balanceWei: this.balanceWei === null ? null : this.balanceWei.toString(),
-        paused: this.effects.attest ? this.paused : 'attesting is off (--no-attest)',
+        paused: this.effects.attest ? (this.inFlight() ?? this.paused) : 'attesting is off (--no-attest)',
       },
       gasCostWei: this.state.gasCostWei,
     };
+  }
+
+  /** Why nothing is sent while an attest transaction of the watcher's is not mined, or null. */
+  private inFlight(): string | null {
+    const [a] = Object.values(this.state.attesting);
+    if (!a) return null;
+    const fee = a.bumps ? ` (fee raised ${a.bumps} time${a.bumps === 1 ? '' : 's'}${a.bumps >= this.config.maxFeeBumps ? ', the most it is' : ''})` : '';
+    return `attest tx ${a.hash} sent at ${a.at} is not mined yet${fee}: nothing else is sent until it is`;
   }
 
   /** Writes vaults.json, state.json and status.json. */
@@ -444,6 +481,7 @@ export class Watcher {
     this.probedThisPass = new Set();
     this.signalsThisPass = new Set();
     this.probesLeft = this.config.maxProbesPerPass;
+    this.fingerprintsLeft = this.config.maxFingerprintsPerPass;
     this.pruneRejected();
     this.startSubscriptionRefresh();
     await this.resolveAttesting();
@@ -500,6 +538,7 @@ export class Watcher {
       }
     }
     await this.save();
+    await this.retryUpgrades(safe);
     await this.retryProbes(safe);
     await this.settleSubscriptionRefresh();
     await this.scheduleSubscribed(safe);
@@ -618,7 +657,7 @@ export class Watcher {
         return this.detect(s.subject, at, probeBlock);
       case 'upgrade':
       case 'beacon-upgrade':
-        if (vault) return this.upgradeSignal(s, at, probeBlock);
+        if (vault) return this.upgradeSignal(s.subject, at, probeBlock, s.target);
         if (!s.source.candidates || st.probing[lower]) return;
         if (this.recentlyRejected(lower)) {
           // Within the rejection window only a contract whose code or EIP-1967 slots changed is probed again.
@@ -641,21 +680,80 @@ export class Watcher {
   }
 
   /**
-   * Upgraded or BeaconUpgraded of a known vault: checked again only when the code hash or an EIP-1967 slot
-   * changed since its last check, otherwise at most once per upgradeCooldownMs. A vault that logs Upgraded
-   * without upgrading anything buys no checks that way.
+   * A known vault's fingerprint, from a budget of its own so unknown emitters cannot use it up: `unread` when
+   * the budget is spent or the read failed, never taken for "nothing changed". fp null without the effect.
    */
-  private async upgradeSignal(s: Signal, at: SignalAt, probeBlock: bigint): Promise<void> {
-    const lower = s.subject.toLowerCase();
-    const stored = this.state.fingerprints[lower];
-    const fp = await this.fingerprintNow(s.subject, probeBlock);
-    if (fp !== null && fp !== stored) {
-      await this.queueCheck(s.subject, s.source.signal, false, at, 'the code or an EIP-1967 slot changed since the last check');
+  private async knownFingerprint(subject: Address, block: bigint): Promise<{ fp: Hex | null } | { unread: 'budget' } | { unread: 'error'; error: unknown }> {
+    if (!this.effects.fingerprint) return { fp: null };
+    if (this.fingerprintsLeft <= 0) return { unread: 'budget' };
+    this.fingerprintsLeft--;
+    try {
+      return { fp: await this.effects.fingerprint(subject, block) };
+    } catch (err) {
+      return { unread: 'error', error: err };
+    }
+  }
+
+  /**
+   * Upgraded or BeaconUpgraded of a known vault. An event that names an implementation (or beacon) other than
+   * the one the last check ran is a change at once, without a read. Otherwise the vault is checked again only
+   * when the code hash or an EIP-1967 slot changed since its last check, else at most once per
+   * upgradeCooldownMs: a vault that logs Upgraded without upgrading anything buys no checks that way. A
+   * fingerprint that could not be read carries the signal to a later pass (state.upgrades).
+   */
+  private async upgradeSignal(subject: Address, at: SignalAt, probeBlock: bigint, target?: Address): Promise<void> {
+    const st = this.state;
+    const lower = subject.toLowerCase();
+    const ran = at.source === 'upgrade' ? st.implementations[lower] : st.beacons[lower];
+    if (target && ran && target.toLowerCase() !== ran) {
+      delete st.upgrades[lower];
+      await this.queueCheck(subject, at.source, false, at, `the event names ${at.source === 'upgrade' ? 'an implementation' : 'a beacon'} the last check did not run`);
+      return;
+    }
+    const read = await this.knownFingerprint(subject, probeBlock);
+    if ('unread' in read) {
+      const failures = (st.upgrades[lower]?.failures ?? 0) + (read.unread === 'error' ? 1 : 0);
+      const wait = read.unread === 'error' ? Math.min(this.config.probeRetryMs * 2 ** Math.min(failures - 1, 20), HOUR_MS) : 0;
+      const notBefore = new Date(this.effects.now().getTime() + wait).toISOString();
+      st.upgrades[lower] = { source: at.source, block: at.block.toString(), ...(at.txHash ? { txHash: at.txHash } : {}), failures, notBefore };
+      if (read.unread === 'error') {
+        await this.errorLine(lower, {
+          chainId: this.chainId,
+          subject,
+          source: at.source,
+          block: at.block.toString(),
+          reason: `fingerprint not read, the signal is looked at again from ${notBefore}: ${classifiedErrorText(read.error)}`,
+        });
+      }
+      return;
+    }
+    delete st.upgrades[lower];
+    if (read.fp !== null && read.fp !== st.fingerprints[lower]) {
+      await this.queueCheck(subject, at.source, false, at, 'the code or an EIP-1967 slot changed since the last check');
       return;
     }
     const last = this.lastTouched(lower);
     const cutoff = new Date(this.effects.now().getTime() - this.config.upgradeCooldownMs).toISOString();
-    if (!last || last <= cutoff) await this.queueCheck(s.subject, s.source.signal, false, at, 'nothing changed since the last check; re-checked at most every 6 hours');
+    if (!last || last <= cutoff) await this.queueCheck(subject, at.source, false, at, 'nothing changed since the last check; re-checked at most every 6 hours');
+  }
+
+  /**
+   * Upgrade signals carried from earlier passes, while the fingerprint budget lasts. One whose vault is queued
+   * or was checked at or after the signal's block is done: that check sees the upgrade.
+   */
+  private async retryUpgrades(probeBlock: bigint): Promise<void> {
+    const now = this.nowIso();
+    for (const [lower, u] of Object.entries(this.state.upgrades)) {
+      const vault = this.store.vaults.vaults[lower];
+      const queued = this.state.queue.some((q) => q.subject.toLowerCase() === lower);
+      if (!vault || queued || (vault.lastCheck && BigInt(vault.lastCheck.block) >= BigInt(u.block))) {
+        delete this.state.upgrades[lower];
+        continue;
+      }
+      if (this.fingerprintsLeft <= 0) return;
+      if (u.notBefore && u.notBefore > now) continue;
+      await this.upgradeSignal(getAddress(lower), { source: u.source, block: BigInt(u.block), ...(u.txHash ? { txHash: u.txHash as Hex } : {}) }, probeBlock);
+    }
   }
 
   /** A known vault's first observed deposit: re-checked once when all its checks predate it (first-deposit). */
@@ -830,7 +928,11 @@ export class Watcher {
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`subscriptions not read within ${this.config.subscriptionTimeoutMs} ms`)), this.config.subscriptionTimeoutMs);
     });
-    const read = Promise.race([this.subscriptionSource.active(this.chainId), timeout])
+    // A read the time box gave up on may still be running: it is waited on again, never started twice.
+    const call = (this.subsCall ??= this.subscriptionSource.active(this.chainId).finally(() => {
+      this.subsCall = null;
+    }));
+    const read = Promise.race([call, timeout])
       .then((all) => {
         this.subs = all.filter((s) => s.subjectChainId === BigInt(this.chainId) && s.standardId.toLowerCase() === ERC4626_ID);
         this.subsReadAt = t;
@@ -847,10 +949,14 @@ export class Watcher {
 
   /**
    * Lets a read that is already done land before the subscribed schedule; never waits for a slow one, except
-   * the very first read, without which the watcher knows no subscription at all (it is time-boxed like any).
+   * the very first read, without which the watcher knows no subscription at all (waited for once, within its
+   * time box).
    */
   private async settleSubscriptionRefresh(): Promise<void> {
-    if (this.subsReadAt === Number.NEGATIVE_INFINITY && this.subsInFlight) await this.subsInFlight;
+    if (!this.subsFirstWaited && this.subsInFlight) {
+      this.subsFirstWaited = true;
+      await this.subsInFlight;
+    }
     await new Promise<void>((r) => setImmediate(r));
   }
 
@@ -878,7 +984,8 @@ export class Watcher {
         await this.detect(subject, { source: 'subscribed', block: probeBlock }, probeBlock);
         continue;
       }
-      if (this.state.pending[lower]) continue;
+      // A queued check (a confirmation, say) comes first; a pending change without one never stops the cadence.
+      if (this.state.queue.some((q) => q.subject.toLowerCase() === lower)) continue;
       const last = this.lastTouched(lower);
       if (!last || last <= cutoff) await this.queueCheck(subject, 'subscribed', false);
     }
@@ -940,7 +1047,11 @@ export class Watcher {
     if (sent) return { ok: false, why: `attest tx ${sent.hash} sent earlier is not mined yet`, retryAt, stopsAll: true };
     if (this.effects.attest) {
       try {
-        if (await this.effects.attest.hasPending()) return { ok: false, why: 'the issuer has transactions the node has not mined', retryAt, stopsAll: true };
+        if (await this.effects.attest.hasPending()) {
+          this.paused = 'the issuer has transactions the node has not mined: nothing is sent until they are';
+          return { ok: false, why: 'the issuer has transactions the node has not mined', retryAt, stopsAll: true };
+        }
+        this.paused = null;
       } catch (err) {
         return { ok: false, why: `the issuer's pending transactions could not be read: ${classifiedErrorText(err)}`, retryAt, stopsAll: true };
       }
@@ -977,12 +1088,30 @@ export class Watcher {
 
   // ---------------------------------------------------------------- checks
 
+  /**
+   * The fuzz seed of a check: derived from the subject, the standard and the sweep cycle (sweepHours), so each
+   * cycle tries other inputs while forge's failure corpus keeps what an earlier one found; a confirmation reuses
+   * the seed of the check it confirms.
+   */
+  private seedFor(subject: Address): bigint {
+    const pending = this.state.pending[subject.toLowerCase()];
+    if (pending?.seed) return BigInt(pending.seed);
+    const cycle = this.config.sweepHours > 0 ? Math.floor(this.effects.now().getTime() / (this.config.sweepHours * HOUR_MS)) : 0;
+    return watchFuzzSeedOf(subject, 'erc4626', cycle);
+  }
+
+  /** Removes the subject's queue entry without a check; a change pending on that check is forgotten with it. */
+  private dropEntry(subject: Address): void {
+    removeEntry(this.state.queue as QueueEntry[], subject);
+    delete this.state.pending[subject.toLowerCase()];
+  }
+
   private async process(entry: QueueEntry): Promise<void> {
     const st = this.state;
     const subject = entry.subject;
     const lower = subject.toLowerCase();
     if (this.cooldownOf(lower)) {
-      removeEntry(st.queue as QueueEntry[], subject);
+      this.dropEntry(subject);
       return;
     }
     const startedAt = this.nowIso();
@@ -994,7 +1123,7 @@ export class Watcher {
     let report: StandardCheckReport;
     try {
       const block = checkBlockOf(await this.effects.latestBlock(), this.config.lagBlocks);
-      report = await this.effects.runCheck(subject, block);
+      report = await this.effects.runCheck(subject, block, { seed: this.seedFor(subject) });
     } catch (err) {
       if (isCheckTimeout(err)) await this.checkTimedOut(entry, err);
       else await this.checkFailed(entry, classifiedErrorText(err));
@@ -1044,9 +1173,11 @@ export class Watcher {
   }
 
   /**
-   * What follows a saved report: the change against the vault's last confirmed check (a change waits for a
-   * second check at a later block), the attest rule against the registry, the attestation policy and the
-   * budgets, the attestation, the last check, the change event and the alerts.
+   * What follows a saved report: the identity of the subject at the report's block (a report the chain does
+   * not bear out never becomes the last check, a change or an alert), the change against the vault's last
+   * confirmed check (a change waits for a second check at a later block that agrees on what changed), the
+   * attest rule against the registry, the attestation policy and the budgets, the attestation, the last
+   * check, the change event and the alerts.
    */
   private async afterCheck(entry: CheckedEntry, report: StandardCheckReport, saved: { reportPath: string; reportURI: string }, note?: string): Promise<void> {
     const st = this.state;
@@ -1059,6 +1190,15 @@ export class Watcher {
       lastAttestationId: null,
       firstDepositBlock: null,
     });
+    let identity: SubjectCodeCheck;
+    try {
+      identity = await this.effects.verifySubject(report);
+    } catch (err) {
+      this.running = null;
+      const why = err instanceof AttestationError ? `identity check refused the report: ${errorText(err)}` : `identity check failed: ${classifiedErrorText(err)}`;
+      await this.checkFailed({ ...entry, priority: entry.priority ?? priorityOf(entry.source, false), enqueuedAt: this.nowIso() } as QueueEntry, why);
+      return;
+    }
     // A newer check replaces an attestation still waiting for an older one.
     delete st.deferred[lower];
     const outcome = outcomeOfReport(report);
@@ -1072,21 +1212,21 @@ export class Watcher {
     let confirmation = '';
 
     if (needsConfirmation(change, outcome)) {
-      const agrees = !!pending && sameOutcome(pending.outcome as CheckOutcome, outcome);
+      const agrees = !!pending && confirmsChange(pending.kind, pending.outcome as CheckOutcome, outcome);
+      // Agreeing at the same block confirms nothing and counts nothing; disagreeing counts toward the limit.
+      const attempts = !pending ? 1 : agrees ? pending.attempts : pending.attempts + 1;
       if (agrees && BigInt(report.blockNumber) > BigInt(pending!.block)) {
         firstCheck = pending!.firstCheck;
         delete st.pending[lower];
         confirmation = `confirmed by a second check at block ${report.blockNumber} after block ${pending!.block}; `;
+      } else if (attempts > this.config.maxConfirmAttempts) {
+        // Never two in a row agreeing on what changed: the latest is recorded, marked unstable, not dropped.
+        firstCheck = pending?.firstCheck ?? firstCheck;
+        delete st.pending[lower];
+        const what = pending?.kind === 'changed' ? 'the counts' : 'the failed properties';
+        confirmation = `unstable: ${attempts} checks in a row did not agree on ${what}, the latest is recorded; `;
       } else {
-        // Agreeing at the same block confirms nothing and counts nothing; disagreeing counts toward the limit.
-        const attempts = !pending ? 1 : agrees ? pending.attempts : pending.attempts + 1;
         this.running = null;
-        if (attempts > this.config.maxConfirmAttempts) {
-          delete st.pending[lower];
-          await this.feed([{ ...base, at: this.nowIso(), kind: 'checked', check, reason: `${prefix}not attested [confirm]: ${attempts} checks in a row without two agreeing; left to the next signal or sweep` }]);
-          await this.save();
-          return;
-        }
         st.pending[lower] = {
           reportPath: saved.reportPath,
           reportURI: saved.reportURI,
@@ -1096,6 +1236,8 @@ export class Watcher {
           source: entry.source,
           firstCheck: pending?.firstCheck ?? firstCheck,
           attempts,
+          kind: change!.kind,
+          ...(report.seed ? { seed: report.seed } : {}),
         };
         const what = change!.kind === 'new' ? 'a failed property in a first check' : `${change!.kind} against the last check`;
         await this.feed([{ ...base, at: this.nowIso(), kind: 'checked', check, reason: `${prefix}pending confirmation [confirm]: ${what}; nothing follows until a second check at a later block agrees` }]);
@@ -1165,16 +1307,12 @@ export class Watcher {
 
     let attestation: FeedAttestation | undefined;
     if (attestAs && decision?.attest) {
-      const out = await this.attestReport(subject, entry.source, report, saved, decision.supersedes, attestAs, base, check);
+      const out = await this.attestReport(subject, entry.source, report, saved, attestAs, base, check, { identity });
       if (out.kind === 'attested') {
         attestation = out.attestation;
         vault.lastAttestationId = attestation.id;
       } else if (out.kind === 'newer') {
         await this.superseded(entry, vault, out.newer);
-        return;
-      } else if (out.kind === 'refused' && out.why === 'identity') {
-        // The identity on the chain is not the report's: this report is not the vault's last check.
-        await this.checkFailed({ ...entry, priority: entry.priority ?? priorityOf(entry.source, false), enqueuedAt: this.nowIso() } as QueueEntry, `identity check refused the report: ${out.error}`);
         return;
       } else if (out.kind === 'retry') {
         defer(attestAs, new Date(this.effects.now().getTime() + this.config.deferredRetryMs).toISOString(), 1);
@@ -1184,6 +1322,9 @@ export class Watcher {
     const beacon = beaconOf(report);
     if (beacon) st.beacons[lower] = beacon;
     else delete st.beacons[lower];
+    const implementation = implementationOf(report);
+    if (implementation) st.implementations[lower] = implementation;
+    else delete st.implementations[lower];
     let changed: FeedEvent | undefined;
     if (change) [changed] = await this.feed([{ ...base, at: this.nowIso(), kind: 'changed', check, change, ...(attestation ? { attestation } : {}) }]);
     this.running = null;
@@ -1195,13 +1336,17 @@ export class Watcher {
    * Another issuer (the desk worker, say) attested a later block while this check ran: the check is
    * superseded, not failed. It does not become the vault's last check, gives no change event and no alert;
    * the vault is checked again at a new block after the retry delay, counted so two issuers cannot ping-pong.
+   * `newer` is null when the registry refused the send as older (OlderThanLatest) and could not be read again.
    */
-  private async superseded(entry: CheckedEntry, vault: WatchVault, newer: { id: bigint; block: bigint }): Promise<void> {
-    vault.lastAttestationId = newer.id.toString();
+  private async superseded(entry: CheckedEntry, vault: WatchVault, newer: { id: bigint; block: bigint } | null): Promise<void> {
+    if (newer) vault.lastAttestationId = newer.id.toString();
     this.running = null;
     const attempts = entry.attempts + 1;
-    const reason = `superseded by attestation ${newer.id} of block ${newer.block}, a later block than this check`;
+    const reason = newer
+      ? `superseded by attestation ${newer.id} of block ${newer.block}, a later block than this check`
+      : 'superseded: the registry refused this check as older than its latest attestation (OlderThanLatest), which could not be read again';
     if (attempts >= this.config.maxCheckAttempts) {
+      delete this.state.pending[entry.subject.toLowerCase()];
       await this.feed([{ at: this.nowIso(), kind: 'error', chainId: this.chainId, subject: entry.subject, source: entry.source, reason: `${reason}; ${attempts} times in a row, left to the next signal or sweep` }]);
     } else {
       await this.queueLater(entry, this.config.checkRetryMs * attempts, attempts, `${reason}; checking again at a new block`);
@@ -1216,7 +1361,7 @@ export class Watcher {
     const attempts = (queued?.attempts ?? entry.attempts) + 1;
     const base = { at: this.nowIso(), kind: 'error' as const, chainId: this.chainId, subject: entry.subject, source: entry.source };
     if (attempts >= this.config.maxCheckAttempts) {
-      removeEntry(st.queue as QueueEntry[], entry.subject);
+      this.dropEntry(entry.subject);
       await this.feed([{ ...base, reason: `check failed ${attempts} times, dropped until the next signal or sweep: ${why}` }]);
     } else {
       const notBefore = new Date(this.effects.now().getTime() + this.config.checkRetryMs * attempts).toISOString();
@@ -1243,7 +1388,7 @@ export class Watcher {
     const timeouts = (this.state.cooldowns[lower]?.timeouts ?? 0) + 1;
     const until = new Date(this.effects.now().getTime() + this.config.timeoutCooldownMs * 2 ** Math.min(timeouts - 1, 20)).toISOString();
     this.state.cooldowns[lower] = { until, timeouts };
-    removeEntry(this.state.queue as QueueEntry[], entry.subject);
+    this.dropEntry(entry.subject);
     await this.feed([
       {
         at: this.nowIso(),
@@ -1258,24 +1403,24 @@ export class Watcher {
   }
 
   /**
-   * Checks the subject's identity on its chain at the report's block and attests, counting the attestation
-   * against the budgets once it is mined. The transaction goes into state.attesting before its receipt is
-   * awaited: a receipt that does not come is `sent`, and the next pass looks the transaction up instead of
-   * sending again. An RPC failure or a send that did not go through without a revert is `retry` (the next try
-   * decides again from the registry); OlderThanLatest means another issuer attested a later block meanwhile
-   * (`newer`, read again from the registry); an identity mismatch, an unknown proxy, a report the registry
-   * would refuse and any other revert are `refused`. `nonce` resends with the nonce of a dropped transaction.
+   * Attests a report whose identity was checked (`opts.identity`, from afterCheck; a deferred one is checked
+   * here), counting the attestation against the budgets once it is mined. The transaction goes into
+   * state.attesting before its receipt is awaited: a receipt that does not come is `sent`, and the next pass
+   * looks the transaction up instead of sending again. An RPC failure or a send that did not go through
+   * without a revert is `retry` (the next try decides again from the registry); OlderThanLatest means another
+   * issuer attested a later block meanwhile (`newer`, read again from the registry, null when that read
+   * fails); an identity mismatch, an unknown proxy, a report the registry would refuse and any other revert
+   * are `refused`. `opts.nonce` resends with the nonce of a dropped transaction.
    */
   private async attestReport(
     subject: Address,
     source: FeedSource,
     report: StandardCheckReport,
     saved: { reportPath: string; reportURI: string },
-    supersedes: bigint | null,
     cls: AttestClass,
     base: Omit<FeedEventInput, 'at' | 'kind'>,
     check: FeedCheck,
-    nonce?: number,
+    opts: { identity?: SubjectCodeCheck; nonce?: number } = {},
   ): Promise<AttestResult> {
     const lower = subject.toLowerCase();
     this.setRunning(subject, source, 'attesting');
@@ -1283,7 +1428,7 @@ export class Watcher {
     try {
       let identity: SubjectCodeCheck;
       try {
-        identity = await this.effects.verifySubject(report);
+        identity = opts.identity ?? (await this.effects.verifySubject(report));
       } catch (err) {
         if (err instanceof AttestationError) return { kind: 'refused', why: 'identity', error: errorText(err) };
         throw err;
@@ -1304,7 +1449,7 @@ export class Watcher {
         throw err;
       }
       const attester = this.effects.attest!;
-      const sent = await attester.send(params, nonce !== undefined ? { nonce } : {});
+      const sent = await attester.send(params, opts.nonce !== undefined ? { nonce: opts.nonce } : {});
       // Recorded before the receipt is awaited: a crash or a lost receipt from here on is resolved by looking
       // this transaction up, never by sending a second attestation.
       this.state.attesting[lower] = {
@@ -1316,10 +1461,11 @@ export class Watcher {
         block: report.blockNumber,
         source,
         cls,
-        supersedes: supersedes === null ? null : supersedes.toString(),
+        replaced: [],
+        bumps: 0,
       };
       await this.save();
-      let mined: { id: bigint; gasCostWei: bigint };
+      let mined: { id: bigint; gasCostWei: bigint; supersedes: bigint | null };
       try {
         mined = await attester.wait(sent.hash);
       } catch (err) {
@@ -1327,15 +1473,15 @@ export class Watcher {
         return { kind: 'sent', hash: sent.hash };
       }
       delete this.state.attesting[lower];
-      const attestation = await this.recordAttested(lower, cls, { id: mined.id, hash: sent.hash, gasCostWei: mined.gasCostWei, supersedes }, base, check);
+      const attestation = await this.recordAttested(lower, cls, { id: mined.id, hash: sent.hash, gasCostWei: mined.gasCostWei, supersedes: mined.supersedes }, base, check);
       await this.save();
       return { kind: 'attested', attestation };
     } catch (err) {
       if (errorNameOf(err) === 'OlderThanLatest') {
         const latest = await this.effects.latestAttestation(subject).catch(() => null);
         if (latest && ATTESTATION_STATUS[latest.attestation.status] === 'Valid') return { kind: 'newer', newer: { id: latest.id, block: latest.attestation.blockNumber } };
-        // The registry did not answer the second read: decide again in a later pass, which finds the newer one.
-        return { kind: 'retry', error: errorText(err) };
+        // The registry did not answer the second read: still superseded, so this report never becomes the last check.
+        return { kind: 'newer', newer: null };
       }
       // A node that failed under the simulation reads like a revert to viem: tried again, not refused.
       if (countsAsFailure(err) && !isNodeFailure(err)) {
@@ -1366,11 +1512,26 @@ export class Watcher {
   }
 
   /**
+   * Where a recorded attest stands: the latest send first, then the lower-fee sends it replaced, any of which
+   * may be the one mined. Mined or reverted settles it; otherwise pending while any send is, else dropped.
+   */
+  private async lookUpAttest(a: WatchState['attesting'][string]): Promise<{ tx: WatchAttestTxStatus; hash: Hex }> {
+    let found: { tx: WatchAttestTxStatus; hash: Hex } | null = null;
+    for (const hash of [a.hash, ...[...a.replaced].reverse()] as Hex[]) {
+      const tx = await this.effects.attest!.status({ hash, nonce: a.nonce });
+      if (tx.state === 'mined' || tx.state === 'reverted') return { tx, hash };
+      if (!found || (tx.state === 'pending' && found.tx.state !== 'pending')) found = { tx, hash };
+    }
+    return found!;
+  }
+
+  /**
    * Attest transactions whose receipt an earlier pass did not see (lost, or the watcher stopped while it
    * waited) are looked up before anything else. mined: recorded and counted as if the receipt had come.
    * reverted: its gas is counted and the attestation is decided again after a wait, at most maxCheckAttempts
-   * reverts in a row. pending: it waits, and nothing else is sent meanwhile. dropped: decided again now, sent
-   * with the same nonce when that nonce is still unused (so at most one of the two can be mined); when another
+   * reverts in a row. pending: it waits, and nothing else is sent meanwhile; one pending replaceAfterMs is sent
+   * again with its nonce and a higher fee, at most maxFeeBumps times. dropped: decided again now, sent with the
+   * same nonce when that nonce is still unused (so at most one of the two can be mined); when another
    * transaction used it, the registry read of the new decision finds any attestation of this report that landed.
    */
   private async resolveAttesting(): Promise<void> {
@@ -1378,14 +1539,18 @@ export class Watcher {
     if (!this.effects.attest || Object.keys(st.attesting).length === 0) return;
     for (const [lower, a] of Object.entries(st.attesting)) {
       const subject = getAddress(lower);
-      let tx: WatchAttestTxStatus;
+      let found: { tx: WatchAttestTxStatus; hash: Hex };
       try {
-        tx = await this.effects.attest.status({ hash: a.hash as Hex, nonce: a.nonce });
+        found = await this.lookUpAttest(a);
       } catch (err) {
         this.emit({ type: 'watch-error', step: 'deferred', error: `${subject}: attest tx ${a.hash} could not be looked up: ${errorText(err)}` });
         continue;
       }
-      if (tx.state === 'pending') continue;
+      const tx = found.tx;
+      if (tx.state === 'pending') {
+        await this.replaceStuck(subject, a);
+        continue;
+      }
       delete st.attesting[lower];
       const base = { chainId: this.chainId, subject, source: a.source };
       const check = await this.effects.loadReport(a.reportPath).then(
@@ -1394,8 +1559,7 @@ export class Watcher {
       );
       const d = st.deferred[lower];
       if (tx.state === 'mined') {
-        const supersedes = a.supersedes === null ? null : BigInt(a.supersedes);
-        const attestation = await this.recordAttested(lower, a.cls, { id: tx.id, hash: a.hash as Hex, gasCostWei: tx.gasCostWei, supersedes }, base, check, '; its receipt was found in a later pass');
+        const attestation = await this.recordAttested(lower, a.cls, { id: tx.id, hash: found.hash, gasCostWei: tx.gasCostWei, supersedes: tx.supersedes }, base, check, '; its receipt was found in a later pass');
         const vault = this.store.vaults.vaults[lower];
         if (vault) vault.lastAttestationId = attestation.id;
         if (d?.reportPath === a.reportPath) delete st.deferred[lower];
@@ -1407,11 +1571,11 @@ export class Watcher {
         this.addGas(tx.gasCostWei);
         if (failures >= this.config.maxCheckAttempts) {
           delete st.deferred[lower];
-          await this.errorLine(lower, { ...base, ...(check ? { check } : {}), reason: `attest tx ${a.hash} reverted, ${failures} times in a row: not attested` });
+          await this.errorLine(lower, { ...base, ...(check ? { check } : {}), reason: `attest tx ${found.hash} reverted, ${failures} times in a row: not attested` });
           continue;
         }
         notBefore = new Date(this.effects.now().getTime() + Math.min(this.config.deferredRetryMs * 2 ** Math.min(failures - 1, 20), HOUR_MS)).toISOString();
-        await this.errorLine(lower, { ...base, ...(check ? { check } : {}), reason: `attest tx ${a.hash} reverted (${failures} of ${this.config.maxCheckAttempts}), decided again from ${notBefore}` });
+        await this.errorLine(lower, { ...base, ...(check ? { check } : {}), reason: `attest tx ${found.hash} reverted (${failures} of ${this.config.maxCheckAttempts}), decided again from ${notBefore}` });
       }
       const resend = tx.state === 'dropped' && !tx.nonceUsed ? { nonce: a.nonce } : {};
       st.deferred[lower] = { reportPath: a.reportPath, reportURI: a.reportURI, source: a.source, at: this.nowIso(), cls: a.cls, failures, notBefore, ...resend };
@@ -1420,14 +1584,35 @@ export class Watcher {
   }
 
   /**
-   * Attestations that wait (a budget, the balance floor, an RPC failure), each from its own retry time, the
-   * wait after a failure doubling from deferredRetryMs up to an hour. Each is decided again first; one whose
-   * vault was checked again since is dropped (the newer check decides), one a later attestation superseded is
-   * checked again. Below the balance floor nothing is tried.
+   * An attest pending replaceAfterMs since it was sent goes out again with its nonce and a higher fee, at most
+   * maxFeeBumps times; the record keeps every hash, since any of them may be the one mined.
+   */
+  private async replaceStuck(subject: Address, a: WatchState['attesting'][string]): Promise<void> {
+    if (a.bumps >= this.config.maxFeeBumps) return;
+    if (this.effects.now().getTime() - Date.parse(a.at) < this.config.replaceAfterMs) return;
+    try {
+      const next = await this.effects.attest!.replace({ hash: a.hash as Hex, nonce: a.nonce });
+      this.state.attesting[subject.toLowerCase()] = { ...a, hash: next.hash, at: this.nowIso(), replaced: [...a.replaced, a.hash], bumps: a.bumps + 1 };
+      this.emit({ type: 'watch-attest-replaced', subject, hash: next.hash, replaces: a.hash as Hex, bump: a.bumps + 1 });
+      await this.save();
+    } catch (err) {
+      // Mined meanwhile ("nonce too low"), or the node wants a higher fee: the next pass looks again.
+      this.emit({ type: 'watch-error', step: 'deferred', error: `${subject}: attest tx ${a.hash} could not be replaced: ${errorText(err)}` });
+    }
+  }
+
+  /**
+   * Attestations that wait (a budget, the balance floor, an RPC failure), the classes that matter most first
+   * (subscribed, a change of an attested subject, a fail, a factory's vault) so throwaway vaults cannot push
+   * them to the next day, then each from its own retry time, the wait after a failure doubling from
+   * deferredRetryMs up to an hour. Each is decided again first; one whose vault was checked again since is
+   * dropped (the newer check decides), one a later attestation superseded is checked again. Below the balance
+   * floor nothing is tried.
    */
   private async attestDeferred(): Promise<void> {
     const st = this.state;
-    const entries = Object.entries(st.deferred).sort((a, b) => (a[1].notBefore ?? '').localeCompare(b[1].notBefore ?? ''));
+    const rank = (cls: AttestClass | undefined) => (cls ? DEFERRED_ORDER.indexOf(cls) : DEFERRED_ORDER.length);
+    const entries = Object.entries(st.deferred).sort((a, b) => rank(a[1].cls) - rank(b[1].cls) || (a[1].notBefore ?? '').localeCompare(b[1].notBefore ?? ''));
     for (const [lower, d] of entries) {
       const vault = this.store.vaults.vaults[lower];
       if (!this.effects.attest || !vault?.lastCheck || vault.lastCheck.reportPath !== d.reportPath || !d.cls) {
@@ -1464,9 +1649,11 @@ export class Watcher {
         continue;
       }
       const base = { chainId: this.chainId, subject, source: d.source };
-      const out = await this.attestReport(subject, d.source, report, d, decision.supersedes, d.cls, base, feedCheckOf(report, d.reportPath), d.nonce);
+      const out = await this.attestReport(subject, d.source, report, d, d.cls, base, feedCheckOf(report, d.reportPath), d.nonce !== undefined ? { nonce: d.nonce } : {});
       if (out.kind === 'retry') {
         backoff(out.error);
+        // Its recorded nonce may be taken by the next try: that one takes the issuer's next nonce.
+        delete st.deferred[lower]!.nonce;
         continue;
       }
       delete st.deferred[lower];
@@ -1515,11 +1702,12 @@ function feedCheckOf(report: StandardCheckReport, reportPath: string): FeedCheck
 }
 
 /**
- * The watcher's fuzz seed of a subject: the same inputs on every check of it, so a result moves only when the
- * vault's state does, not with the luck of a random seed.
+ * The watcher's fuzz seed of a subject in one sweep cycle: the same inputs on every check of it within the
+ * cycle, so a result moves with the vault's state, not with the luck of a seed, and other inputs the next
+ * cycle (forge's failure corpus replays what an earlier one found).
  */
-export function watchFuzzSeedOf(subject: Address, standard = 'erc4626'): bigint {
-  return BigInt(keccak256(toHex(`specfirst-watch:${standard}:${subject.toLowerCase()}`)));
+export function watchFuzzSeedOf(subject: Address, standard = 'erc4626', cycle = 0): bigint {
+  return BigInt(keccak256(toHex(`specfirst-watch:${standard}:${subject.toLowerCase()}:${cycle}`)));
 }
 
 // ---------------------------------------------------------------- live effects
@@ -1600,7 +1788,7 @@ export interface LiveWatchEffectsInput extends SubjectCheckInput {
   /** reportURI = <reportBaseUrl>/<chainId>/<address>/<block>-<hash8>.json. No trailing slash. */
   reportBaseUrl: string;
   /** Registry on the attest chain, read for every decision; null when there is none (only with attest false). */
-  registry: Pick<AttestationRegistryClient, 'latest' | 'sendAttest' | 'waitAttest' | 'attestTx' | 'hasPendingTransactions'> | null;
+  registry: Pick<AttestationRegistryClient, 'latest' | 'sendAttest' | 'waitAttest' | 'attestTx' | 'hasPendingTransactions' | 'replaceTransaction'> | null;
   /** False with --no-attest: decisions are recorded, nothing is sent. */
   attest: boolean;
   /** The issuer's balance on the attest chain. */
@@ -1615,10 +1803,11 @@ export interface LiveWatchEffectsInput extends SubjectCheckInput {
 
 /**
  * The effects of a real watcher: reads the subject chain through `subjectClient` (getLogs through the batched
- * reader, per topic), runs the suite as the desk worker does but with a seed per subject and that subject's
- * forge failures kept under .specfirst/watch/<chainId>/forge-failures, copies reports to certs/checks and
- * attests through the registry client (whose wallet is the watcher's issuer key), sending and waiting apart
- * (the nonce fixed before sending, so the watcher can record it with the hash) and looking transactions up.
+ * reader, per topic), runs the suite as the desk worker does but with the seed the watcher picks and the
+ * subject's forge failures kept under .specfirst/watch/<chainId>/forge-failures, copies reports to
+ * certs/checks and attests through the registry client (whose wallet is the watcher's issuer key), sending
+ * and waiting apart (the nonce fixed before sending, so the watcher can record it with the hash), looking
+ * transactions up and replacing a stuck one with a higher fee.
  */
 export function liveWatchEffects(i: LiveWatchEffectsInput): WatchEffects {
   const registry = i.registry;
@@ -1630,9 +1819,9 @@ export function liveWatchEffects(i: LiveWatchEffectsInput): WatchEffects {
     getLogs,
     precheck: (subject, block) => precheckErc4626(i.subjectClient, subject, block),
     fingerprint: (subject, block) => fingerprintOf(i.subjectClient, subject, block),
-    runCheck: (subject, block) =>
+    runCheck: (subject, block, run) =>
       runSubjectCheck({ ...i, timeoutSec: i.timeoutSec ?? DEFAULT_WATCH_CHECK_TIMEOUT_SEC }, subject, block, {
-        seed: watchFuzzSeedOf(subject),
+        seed: run?.seed ?? watchFuzzSeedOf(subject),
         failurePersistDir: path.join(failures, subject.toLowerCase()),
       }),
     saveReport: (report) => saveReportCopy(i.projectDir, i.reportBaseUrl, report),
@@ -1646,15 +1835,17 @@ export function liveWatchEffects(i: LiveWatchEffectsInput): WatchEffects {
             send: (params, opts) => registry.sendAttest(params, opts),
             wait: async (hash) => {
               const out = await registry.waitAttest(hash);
-              return { id: out.id, gasCostWei: out.gasUsed * out.effectiveGasPrice };
+              return { id: out.id, gasCostWei: out.gasUsed * out.effectiveGasPrice, supersedes: out.supersedes ?? null };
             },
             status: async (sent) => {
               const tx = await registry.attestTx(sent.hash);
+              if (tx.state === 'mined') return { ...tx, supersedes: tx.supersedes ?? null };
               if (tx.state !== 'unknown') return tx;
               const used = i.issuerNonce ? await i.issuerNonce() : null;
               return { state: 'dropped', nonceUsed: used === null || used > sent.nonce };
             },
             hasPending: () => registry.hasPendingTransactions(),
+            replace: (sent) => registry.replaceTransaction(sent.hash),
           }
         : null,
     balance: i.attest && i.balance ? i.balance : null,

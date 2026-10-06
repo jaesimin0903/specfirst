@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { createPublicClient, getAddress, http, type Address, type Hex } from 'viem';
+import { createPublicClient, getAddress, http, toHex, type Address, type Hex } from 'viem';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   acquireIssuerLock,
@@ -15,9 +15,11 @@ import {
   classifiedErrorText,
   liveWatchEffects,
   LogsNodeBehindError,
+  parseCheckReport,
   precheckErc4626,
   seedKnownVaults,
   sourcesFromFile,
+  summarize,
   watchFuzzSeedOf,
   WatchStore,
   type ActiveSubscription,
@@ -157,7 +159,7 @@ describe('the reviewer repros, as regressions', { timeout: 60_000 }, () => {
     const w = h.watcher();
     await w.pass({ drain: true });
     const sent = h.registry.sends[0]!;
-    expect(h.store.state.attesting[V.toLowerCase()]).toMatchObject({ hash: sent.hash, nonce: 0, cls: 'factory', block: '2000', supersedes: null });
+    expect(h.store.state.attesting[V.toLowerCase()]).toMatchObject({ hash: sent.hash, nonce: 0, cls: 'factory', block: '2000', replaced: [], bumps: 0 });
     let feed = await h.feed();
     expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'error:factory', 'changed:factory']);
     expect(feed[3]!.reason).toMatch(new RegExp(`^attest tx ${sent.hash} was sent, its receipt is looked up in the next pass: Timed out`));
@@ -262,9 +264,11 @@ describe('H1: what is attested, and how much', { timeout: 60_000 }, () => {
     expect(last.reason).toMatch(/attestation deferred \[fail\]: 1 of 1 attestations of this subject made today; /);
     expect(h.store.state.deferred[V.toLowerCase()]).toMatchObject({ cls: 'fail', notBefore: '2026-10-07T00:00:00.000Z' });
     expect(h.registry.list).toHaveLength(2);
+    // The next day V's confirmed fail goes before W's first check (deferred attestations by class): W waits a day more.
     h.clock.now = new Date('2026-10-07T00:00:05.000Z');
     await w.pass();
-    expect(h.registry.list.map((a) => a.subject)).toEqual([X, V, W]);
+    expect(h.registry.list.map((a) => a.subject)).toEqual([X, V, V]);
+    expect(h.store.state.deferred[W.toLowerCase()]).toMatchObject({ cls: 'factory', notBefore: '2026-10-08T00:00:00.000Z' });
   });
 
   it('the balance floor: nothing is sent below it, status.json says why, and deferred attestations go once the issuer is funded', async () => {
@@ -381,7 +385,8 @@ describe('M3 to M6, L1 to L8', { timeout: 60_000 }, () => {
     await effects.runCheck(V, 10n);
     await effects.runCheck(V, 20n);
     await effects.runCheck(W, 20n);
-    expect(seen.map((s) => s.seed)).toEqual([watchFuzzSeedOf(V), watchFuzzSeedOf(V), watchFuzzSeedOf(W)]);
+    await effects.runCheck(W, 30n, { seed: 7n });
+    expect(seen.map((s) => s.seed)).toEqual([watchFuzzSeedOf(V), watchFuzzSeedOf(V), watchFuzzSeedOf(W), 7n]);
     expect(watchFuzzSeedOf(V)).not.toBe(watchFuzzSeedOf(W));
     expect(seen[0]!.failurePersistDir).toBe(`/tmp/project/.specfirst/watch/143/forge-failures/${V.toLowerCase()}`);
     expect(seen[0]!.timeoutSec).toBe(600);
@@ -595,14 +600,14 @@ describe('M3 to M6, L1 to L8', { timeout: 60_000 }, () => {
     const w = h.watcher();
     await w.pass({ drain: true });
     const feed = await h.feed();
-    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'error:factory']);
-    expect(feed[3]!.reason).toMatch(/^check failed \(attempt 1 of 3\), retrying from \S+: identity check refused the report: code at /);
+    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'error:factory']);
+    expect(feed[2]!.reason).toMatch(/^check failed \(attempt 1 of 3\), retrying from \S+: identity check refused the report: code at /);
     expect(h.store.vaults.vaults[V.toLowerCase()]!.lastCheck).toBeNull();
     expect(h.store.state.queue).toEqual([expect.objectContaining({ subject: V, attempts: 1 })]);
     h.effects.verifySubject = verify;
     later(h, 60_000);
     await w.pass();
-    expect(kinds((await h.feed()).slice(4))).toEqual(['checked:factory', 'attested:factory', 'changed:factory']);
+    expect(kinds((await h.feed()).slice(3))).toEqual(['checked:factory', 'attested:factory', 'changed:factory']);
   });
 
   it('M4: one watcher per issuer key for the user, whatever its project', async () => {
@@ -845,5 +850,337 @@ describe('M1, M2 and L1 on the shared primitives', { timeout: 60_000 }, () => {
     expect(h.registry.sends).toHaveLength(1);
     expect(h.store.vaults.vaults[V.toLowerCase()]!.lastAttestationId).toBe('0');
     expect(h.store.state.queue).toEqual([expect.objectContaining({ subject: V, attempts: 1 })]);
+  });
+});
+
+describe('the re-review repros, as regressions', { timeout: 60_000 }, () => {
+  /** V found through its factory and checked once (attested as factory) at block 2000. */
+  const known = async (h: Harness, config: Parameters<Harness['watcher']>[0] = {}, hooks?: Parameters<Harness['watcher']>[1]) => {
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    const w = h.watcher(config, hooks);
+    await w.pass({ drain: true });
+    return w;
+  };
+  const checksOf = (h: Harness, subject: Address) => h.checks.filter((c) => c.subject === subject).length;
+
+  it('N1: a real upgrade of a known vault is checked even when unknown emitters use up the probes of the pass', async () => {
+    const h = await harness();
+    const w = await known(h);
+    for (let i = 0; i < 25; i++) {
+      const a = addr(0x9000 + i);
+      h.chain.notVaults.add(a.toLowerCase());
+      h.chain.logs.push({ ...upgradedLog(a, 2015n), logIndex: i });
+    }
+    h.chain.fingerprints.set(V.toLowerCase(), hash(0xbeef));
+    h.chain.logs.push(upgradedLog(V, 2016n));
+    h.chain.head = 2030n;
+    later(h, 10 * 60_000);
+    await w.pass({ drain: true });
+    expect(checksOf(h, V)).toBe(2);
+    expect(Object.keys(h.store.state.probing)).toHaveLength(5);
+  });
+
+  it('N1: a fingerprint read that fails carries the signal to a later pass instead of counting as "nothing changed"', async () => {
+    const h = await harness();
+    const w = await known(h);
+    const fingerprint = h.effects.fingerprint!;
+    h.effects.fingerprint = async (subject, block) => {
+      if (subject === V) throw Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' });
+      return fingerprint(subject, block);
+    };
+    h.chain.fingerprints.set(V.toLowerCase(), hash(0xbeef));
+    h.chain.logs.push(upgradedLog(V, 2016n));
+    h.chain.head = 2030n;
+    later(h, 10 * 60_000);
+    await w.pass({ drain: true });
+    expect(checksOf(h, V)).toBe(1);
+    expect(h.store.state.upgrades[V.toLowerCase()]).toEqual({ source: 'upgrade', block: '2016', txHash: hash(2018), failures: 1, notBefore: '2026-10-06T12:15:00.000Z' });
+    expect((await h.feed()).at(-1)!.reason).toBe('fingerprint not read, the signal is looked at again from 2026-10-06T12:15:00.000Z: transport failure: fetch failed');
+    h.effects.fingerprint = fingerprint;
+    later(h, 5 * 60_000);
+    await w.pass({ drain: true });
+    expect(checksOf(h, V)).toBe(2);
+    expect(h.store.state.upgrades).toEqual({});
+  });
+
+  it('N1: an Upgraded naming an implementation the last check did not run queues the vault without a read', async () => {
+    const h = await harness();
+    h.chain.beacons.set(V.toLowerCase(), addr(0xbeac));
+    const w = await known(h);
+    expect(h.store.state.implementations[V.toLowerCase()]).toBe(addr(0x1111).toLowerCase());
+    const reads = h.chain.fingerprintReads;
+    h.chain.logs.push(upgradedLog(V, 2016n, addr(0x2222)));
+    h.chain.head = 2030n;
+    later(h, 10 * 60_000);
+    await w.pass();
+    expect(h.chain.fingerprintReads).toBe(reads + 1);
+    expect((await h.feed()).find((e) => e.kind === 'queued' && e.source === 'upgrade')!.reason).toBe('the event names an implementation the last check did not run');
+    expect(checksOf(h, V)).toBe(2);
+  });
+
+  it('N2: a stable new failure is confirmed while another count moves between the checks', async () => {
+    const h = await harness();
+    const w = await known(h);
+    h.chain.failing.set(V.toLowerCase(), ['deposit']);
+    const run = h.effects.runCheck;
+    let n = 0;
+    h.effects.runCheck = async (subject, block, opts) => {
+      const r = await run(subject, block, opts);
+      if (subject !== V) return r;
+      n++;
+      const results = r.results.map((x, i) => (i === 5 && n % 2 === 0 ? { ...x, status: 'inconclusive' as const, reason: '`vm.assume` rejected too many inputs (4096 allowed)' } : x));
+      return parseCheckReport(JSON.stringify({ ...r, results, summary: summarize(results) }));
+    };
+    let block = 2010n;
+    for (let i = 0; i < 3; i++) {
+      h.chain.fingerprints.set(V.toLowerCase(), hash(0x100 + i));
+      block += 20n;
+      h.chain.logs.push(upgradedLog(V, block - 15n));
+      h.chain.head = block;
+      later(h, 3 * 60_000);
+      await w.pass({ drain: true });
+    }
+    const feed = (await h.feed()).filter((e) => e.subject === V);
+    expect(feed.find((e) => e.kind === 'changed' && e.change!.kind === 'regressed')).toBeDefined();
+    expect(feed.filter((e) => e.kind === 'attested')).toHaveLength(2);
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastCheck!.failed).toEqual(['deposit']);
+  });
+
+  it('N2: checks that never agree on the failed properties are recorded as unstable, attested and alerted, not dropped', async () => {
+    const h = await harness();
+    const w = await known(h);
+    const properties = ['deposit', 'mint', 'withdraw', 'redeem'];
+    let block = 2010n;
+    for (let i = 0; i < 4; i++) {
+      h.chain.failing.set(V.toLowerCase(), [properties[i]!]);
+      h.chain.fingerprints.set(V.toLowerCase(), hash(0x100 + i));
+      block += 20n;
+      h.chain.logs.push(upgradedLog(V, block - 15n));
+      h.chain.head = block;
+      later(h, 3 * 60_000);
+      await w.pass({ drain: true });
+    }
+    const feed = (await h.feed()).filter((e) => e.subject === V);
+    const last = feed.filter((e) => e.kind === 'checked').at(-1)!;
+    expect(last.reason).toMatch(/^unstable: 4 checks in a row did not agree on the failed properties, the latest is recorded; attesting \[fail\]: /);
+    expect(kinds(feed.slice(-3))).toEqual(['checked:upgrade', 'attested:upgrade', 'changed:upgrade']);
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastCheck!.failed).toEqual(['redeem']);
+    expect(h.store.state.pending).toEqual({});
+  });
+
+  it('N3: an attest pending for ten minutes is sent again with its nonce and a higher fee, at most three times; status says why nothing else goes', async () => {
+    const h = await harness();
+    h.registry.hold = true;
+    const w = await known(h);
+    for (let i = 0; i < 2; i++) h.chain.logs.push(factoryLog(addr(0x8000 + i), 2015n, i));
+    h.chain.head = 2030n;
+    await w.pass({ drain: true });
+    const first = h.registry.sends[0]!.hash;
+    expect(w.status().attestBudget.paused).toBe(`attest tx ${first} sent at 2026-10-06T12:00:00.000Z is not mined yet: nothing else is sent until it is`);
+    for (let i = 0; i < 5; i++) {
+      later(h, 11 * 60_000);
+      await w.pass();
+    }
+    expect(h.registry.replacements.map((r) => r.replaces)).toEqual([first, h.registry.replacements[0]!.hash, h.registry.replacements[1]!.hash]);
+    const a = h.store.state.attesting[V.toLowerCase()]!;
+    expect(a).toMatchObject({ hash: h.registry.replacements[2]!.hash, nonce: 0, bumps: 3, replaced: [first, h.registry.replacements[0]!.hash, h.registry.replacements[1]!.hash] });
+    expect(w.status().attestBudget.paused).toMatch(/is not mined yet \(fee raised 3 times, the most it is\): nothing else is sent until it is$/);
+    expect(h.registry.sends).toHaveLength(1);
+    h.registry.mine(a.hash as Hex);
+    later(h, 60_000);
+    await w.pass();
+    const attested = (await h.feed()).filter((e) => e.kind === 'attested');
+    expect(attested[0]).toMatchObject({ subject: V, attestation: { txHash: a.hash } });
+    expect(attested.slice(1).map((e) => e.subject).sort()).toEqual([addr(0x8000), addr(0x8001)]);
+    expect(w.status().attestBudget.paused).toBeNull();
+  });
+
+  it('N3: the lower-fee send a replacement was for can be the one mined; it is found and counted', async () => {
+    const h = await harness();
+    h.registry.hold = true;
+    const w = await known(h);
+    const first = h.registry.sends[0]!.hash;
+    later(h, 11 * 60_000);
+    await w.pass();
+    expect(h.registry.replacements).toHaveLength(1);
+    h.registry.txs.get(first)!.state = 'pending';
+    h.registry.mine(first);
+    await w.pass();
+    expect((await h.feed()).filter((e) => e.kind === 'attested').map((e) => e.attestation!.txHash)).toEqual([first]);
+    expect(h.store.state.attesting).toEqual({});
+    expect(h.store.state.attestDay.used).toBe(1);
+  });
+
+  it('N4: a resend with a recorded nonce that fails forgets the nonce; the next send takes a fresh one', async () => {
+    const h = await harness();
+    h.registry.hold = true;
+    const send = h.effects.attest!.send;
+    const nonces: Array<number | undefined> = [];
+    let flaky = false;
+    h.effects.attest = {
+      ...h.effects.attest!,
+      send: async (p, o) => {
+        nonces.push(o.nonce);
+        if (flaky) {
+          flaky = false;
+          throw Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' });
+        }
+        if (o.nonce !== undefined && h.registry.minedNonce > o.nonce) throw Object.assign(new Error('attest failed: nonce too low'), { name: 'RegistryError' });
+        return send(p, o);
+      },
+    };
+    const w = await known(h);
+    h.registry.drop(h.registry.sends[0]!.hash);
+    flaky = true;
+    later(h, 60_000);
+    await w.pass();
+    expect(h.store.state.deferred[V.toLowerCase()]!.nonce).toBeUndefined();
+    h.registry.minedNonce = 1;
+    for (let i = 0; i < 3; i++) {
+      later(h, 10 * 60_000);
+      await w.pass();
+    }
+    expect(nonces).toEqual([undefined, 0, undefined]);
+    expect((await h.feed()).filter((e) => e.kind === 'attested')).toHaveLength(1);
+  });
+
+  it('N5: a confirmation whose check entry is dropped does not stop the subscribed cadence', async () => {
+    const h = await harness();
+    const w = await known(h, { subscribedMinutes: 60 }, { subscriptions: { active: async () => [sub(1n, V)] } });
+    h.chain.failing.set(V.toLowerCase(), ['deposit']);
+    later(h, 61 * 60_000);
+    h.chain.head = 2100n;
+    await w.pass({ drain: true });
+    expect(h.store.state.pending[V.toLowerCase()]).toBeDefined();
+    h.chain.checkErrors.set(V.toLowerCase(), 3);
+    for (let i = 0; i < 4; i++) {
+      later(h, 10 * 60_000);
+      h.chain.head += 50n;
+      await w.pass({ drain: true });
+    }
+    expect(h.store.state.pending).toEqual({});
+    const n = h.checks.length;
+    for (let i = 0; i < 6; i++) {
+      later(h, 60 * 60_000);
+      h.chain.head += 50n;
+      await w.pass({ drain: true });
+    }
+    expect(h.checks.length - n).toBeGreaterThanOrEqual(5);
+  });
+
+  it('N6: the seed rotates with the sweep cycle; a confirmation reuses the seed of the check it confirms', async () => {
+    const h = await harness();
+    const seeds: bigint[] = [];
+    const run = h.effects.runCheck;
+    h.effects.runCheck = async (subject, block, opts) => {
+      seeds.push(opts!.seed);
+      return parseCheckReport(JSON.stringify({ ...(await run(subject, block, opts)), seed: toHex(opts!.seed, { size: 32 }) }));
+    };
+    const w = await known(h, { confirmDelayMs: 0 });
+    const cycle = Math.floor(T0.getTime() / 86_400_000);
+    expect(seeds).toEqual([watchFuzzSeedOf(V, 'erc4626', cycle)]);
+    // A regression found late in the cycle; its confirmation runs in the next cycle with the same seed.
+    h.clock.now = new Date('2026-10-06T23:59:00.000Z');
+    h.chain.failing.set(V.toLowerCase(), ['deposit']);
+    h.chain.fingerprints.set(V.toLowerCase(), hash(0xf2));
+    h.chain.logs.push(upgradedLog(V, 2015n));
+    h.chain.head = 2030n;
+    await w.pass({ drain: true });
+    h.clock.now = new Date('2026-10-07T00:01:00.000Z');
+    h.chain.head = 2040n;
+    await w.pass({ drain: true });
+    expect(seeds.slice(1)).toEqual([watchFuzzSeedOf(V, 'erc4626', cycle), watchFuzzSeedOf(V, 'erc4626', cycle)]);
+    expect(watchFuzzSeedOf(V, 'erc4626', cycle + 1)).not.toBe(watchFuzzSeedOf(V, 'erc4626', cycle));
+    // The next check, not a confirmation, takes the new cycle's seed.
+    h.chain.fingerprints.set(V.toLowerCase(), hash(0xf3));
+    h.chain.logs.push(upgradedLog(V, 2045n));
+    h.chain.head = 2060n;
+    await w.pass({ drain: true });
+    expect(seeds.at(-1)).toBe(watchFuzzSeedOf(V, 'erc4626', cycle + 1));
+  });
+
+  it('L8: when OlderThanLatest is not read again, the check is superseded: no last check, no change, no alert', async () => {
+    const h = await harness();
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    const latest = h.effects.latestAttestation;
+    h.registry.beforeAttest = (p) => {
+      h.registry.beforeAttest = null;
+      h.registry.attest({ ...attestParams(p.subject, 2004n) });
+      h.effects.latestAttestation = async () => {
+        throw Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' });
+      };
+    };
+    const w = h.watcher();
+    await w.pass({ drain: true });
+    const feed = await h.feed();
+    expect(kinds(feed)).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'queued:factory']);
+    expect(feed[3]!.reason).toBe('superseded: the registry refused this check as older than its latest attestation (OlderThanLatest), which could not be read again; checking again at a new block');
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastCheck).toBeNull();
+    h.effects.latestAttestation = latest;
+  });
+
+  it('L8: `supersedes` comes from the receipt, not from the registry read before the send', async () => {
+    const h = await harness();
+    const w = await known(h);
+    h.chain.failing.set(V.toLowerCase(), ['deposit']);
+    h.chain.fingerprints.set(V.toLowerCase(), hash(0xf2));
+    h.chain.logs.push(upgradedLog(V, 2015n));
+    h.chain.head = 2030n;
+    later(h, 3 * 60_000);
+    await w.pass({ drain: true });
+    // Between the decision (latest: 0) and the send another issuer attests an earlier block than this check.
+    h.registry.beforeAttest = (p) => {
+      h.registry.beforeAttest = null;
+      h.registry.attest({ ...attestParams(p.subject, p.blockNumber - 1n), failCount: 1, passCount: 29, failedBitmap: 1n << 5n, passedBitmap: ((1n << 30n) - 1n) ^ (1n << 5n) });
+    };
+    later(h, 3 * 60_000);
+    h.chain.head = 2050n;
+    await w.pass({ drain: true });
+    const attested = (await h.feed()).filter((e) => e.kind === 'attested').at(-1)!;
+    expect(attested.attestation).toMatchObject({ id: '2', supersedes: '1' });
+  });
+
+  it('L8: the identity is checked before any report becomes the last check, also one the policy does not attest', async () => {
+    const h = await harness();
+    h.chain.logs.push(depositLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    h.effects.verifySubject = async () => {
+      throw new AttestationError('code at 0x... hashes to 0xaa, the report says 0xbb');
+    };
+    const w = h.watcher();
+    await w.pass({ drain: true });
+    const feed = await h.feed();
+    expect(kinds(feed)).toEqual(['detected:deposit', 'queued:deposit', 'error:deposit']);
+    expect(feed[2]!.reason).toMatch(/identity check refused the report: code at /);
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastCheck).toBeNull();
+  });
+
+  it('M6: a subscription read the time box gave up on is waited on again, never started twice; only the first pass waits', async () => {
+    const h = await harness();
+    let calls = 0;
+    const w = h.watcher(
+      { subscriptionRefreshMs: 0, subscriptionTimeoutMs: 50 },
+      {
+        subscriptions: {
+          active: () => {
+            calls++;
+            return new Promise<never>(() => {});
+          },
+        },
+      },
+    );
+    const started = Date.now();
+    await w.pass();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(40);
+    for (let i = 0; i < 4; i++) {
+      await w.pass();
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    expect(calls).toBe(1);
   });
 });

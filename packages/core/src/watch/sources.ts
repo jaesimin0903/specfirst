@@ -262,6 +262,8 @@ export interface Signal {
   block: bigint;
   txHash: Hex;
   logIndex: number;
+  /** upgrade and beacon-upgrade: the new implementation or beacon the event names (its first indexed topic), when it is an address. */
+  target?: Address;
 }
 
 /**
@@ -277,7 +279,11 @@ export function decodeSignal(log: SignalLog, sources: readonly WatchSource[]): S
   const source = matching.find((s) => s.address !== null) ?? matching[0];
   if (!source) return null;
   const at = { block: log.blockNumber, txHash: log.transactionHash, logIndex: log.logIndex };
-  if (source.signal !== 'factory') return { source, subject: getAddress(emitter), ...at };
+  if (source.signal !== 'factory') {
+    const topic1 = log.topics[1];
+    const named = (source.signal === 'upgrade' || source.signal === 'beacon-upgrade') && topic1 && /^0x0{24}[0-9a-fA-F]{40}$/.test(topic1);
+    return { source, subject: getAddress(emitter), ...at, ...(named ? { target: getAddress(`0x${topic1.slice(26)}`) } : {}) };
+  }
   try {
     const decoded = decodeEventLog({ abi: [source.event], data: log.data, topics: log.topics as [Hex, ...Hex[]], strict: true });
     const vault = (decoded.args as Record<string, unknown>)[source.vault!];

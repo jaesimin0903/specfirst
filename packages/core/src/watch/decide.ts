@@ -2,7 +2,7 @@ import type { Hex } from 'viem';
 import { STANDARD_PROPERTIES } from '../attest/params.js';
 import { ATTESTATION_STATUS, type Attestation } from '../attest/registry.js';
 import type { StandardCheckReport, StandardName } from '../standards/report.js';
-import type { FeedChange, WatchSummary } from './schema.js';
+import type { ChangeKind, FeedChange, WatchSummary } from './schema.js';
 
 /** What a check says about a subject, in the terms the attest rule compares (docs/adr/0006, "Pipeline"). */
 export interface CheckOutcome {
@@ -110,6 +110,19 @@ export function changeOf(prev: CheckOutcome | null, next: CheckOutcome): FeedCha
 /** Whether two outcomes agree in counts, failed ids and implementation key. */
 export function sameOutcome(a: CheckOutcome, b: CheckOutcome): boolean {
   return outcomeDiff(a, b).length === 0;
+}
+
+/**
+ * Whether a second check agrees with a pending change on what changed: the set of failed property ids for
+ * regressed, recovered and a failing first check, the four counts for a plain `changed`. Other counts may move
+ * between two checks (an input rejected once, a limit reached) without making a stable failure unconfirmable.
+ * Without a recorded kind (a state written before it was) the whole outcome must agree.
+ */
+export function confirmsChange(kind: ChangeKind | undefined, pending: CheckOutcome, next: CheckOutcome): boolean {
+  if (kind === undefined) return sameOutcome(pending, next);
+  if (kind === 'changed') return sameSummary(pending.summary, next.summary);
+  const a = new Set(pending.failed);
+  return a.size === new Set(next.failed).size && next.failed.every((id) => a.has(id));
 }
 
 /**

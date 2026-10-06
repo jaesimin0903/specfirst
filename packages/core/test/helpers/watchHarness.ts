@@ -77,9 +77,9 @@ export function depositLog(emitter: Address, block: bigint, logIndex = 0): Signa
   return { address: emitter, topics, data: encodeAbiParameters([{ type: 'uint256' }, { type: 'uint256' }], [5n, 5n]), blockNumber: block, transactionHash: hash(Number(block) + 1), logIndex };
 }
 
-export function upgradedLog(emitter: Address, block: bigint): SignalLog {
+export function upgradedLog(emitter: Address, block: bigint, implementation: Address = IMPL): SignalLog {
   const s = source('EIP-1967 Upgraded');
-  return { address: emitter, topics: encodeEventTopics({ abi: [s.event], args: { implementation: IMPL } } as never) as Hex[], data: '0x', blockNumber: block, transactionHash: hash(Number(block) + 2), logIndex: 0 };
+  return { address: emitter, topics: encodeEventTopics({ abi: [s.event], args: { implementation } } as never) as Hex[], data: '0x', blockNumber: block, transactionHash: hash(Number(block) + 2), logIndex: 0 };
 }
 
 export function setImplementationLog(block: bigint): SignalLog {
@@ -115,11 +115,12 @@ export function reportOf(
   );
 }
 
-type FakeTx = { params: AttestParams; nonce: number; state: 'pending' | 'mined' | 'reverted' | 'dropped'; id?: bigint };
+type FakeTx = { params: AttestParams; nonce: number; state: 'pending' | 'mined' | 'reverted' | 'dropped'; id?: bigint; supersedes?: bigint | null };
 
 /**
  * Registry stand-in with the rules the watcher relies on: latest per subject, supersede, OlderThanLatest. A
- * send is mined at once unless `hold` keeps it pending; `mine` and `drop` settle a held one later.
+ * send is mined at once unless `hold` keeps it pending; `mine` and `drop` settle a held one later, and
+ * `replace` sends a pending one again with its nonce (the node forgets the first, the second stays pending).
  */
 export class FakeRegistry {
   readonly list: Array<{ subject: Address; attestation: Attestation }> = [];
@@ -132,6 +133,7 @@ export class FakeRegistry {
   loseReceipt = false;
   readonly txs = new Map<Hex, FakeTx>();
   readonly sends: Array<{ hash: Hex; nonce: number }> = [];
+  readonly replacements: Array<{ hash: Hex; replaces: Hex }> = [];
   /** The issuer's mined transaction count. */
   minedNonce = 0;
 
@@ -141,11 +143,13 @@ export class FakeRegistry {
   }
 
   /** The contract's attest: another issuer's when a test calls it directly. */
-  attest(p: AttestParams): { id: bigint; hash: Hex; gasCostWei: bigint } {
+  attest(p: AttestParams): { id: bigint; hash: Hex; gasCostWei: bigint; supersedes: bigint | null } {
     const prev = this.latest(p.subject);
+    let supersedes: bigint | null = null;
     if (prev && prev.attestation.status === 1) {
       if (p.blockNumber < prev.attestation.blockNumber) throw Object.assign(new Error('OlderThanLatest reverted'), { errorName: 'OlderThanLatest' });
       prev.attestation.status = 2;
+      supersedes = prev.id;
     }
     const id = BigInt(this.list.length);
     this.list.push({
@@ -159,7 +163,7 @@ export class FakeRegistry {
         revokeReasonHash: hash(0),
       } as Attestation,
     });
-    return { id, hash: hash(0x7000 + Number(id)), gasCostWei: 1n };
+    return { id, hash: hash(0x7000 + Number(id)), gasCostWei: 1n, supersedes };
   }
 
   /** sendAttest: the simulation (failNext, OlderThanLatest) throws before anything is sent. */
@@ -185,12 +189,15 @@ export class FakeRegistry {
     return [...this.txs.values()].filter((t) => t.state === 'mined').length;
   }
 
-  /** Mines a pending send; it reverts when a later attestation landed meanwhile. */
+  /** Mines a pending send (the node forgets the others with its nonce); it reverts when a later attestation landed meanwhile. */
   mine(h: Hex): void {
     const tx = this.txs.get(h)!;
     this.minedNonce = Math.max(this.minedNonce, tx.nonce + 1);
+    for (const other of this.txs.values()) if (other !== tx && other.nonce === tx.nonce && other.state === 'pending') other.state = 'dropped';
     try {
-      tx.id = this.attest(tx.params).id;
+      const out = this.attest(tx.params);
+      tx.id = out.id;
+      tx.supersedes = out.supersedes;
       tx.state = 'mined';
     } catch {
       tx.state = 'reverted';
@@ -204,20 +211,30 @@ export class FakeRegistry {
     if (nonceUsed) this.minedNonce = Math.max(this.minedNonce, tx.nonce + 1);
   }
 
-  wait(h: Hex): { id: bigint; gasCostWei: bigint } {
+  replace(sent: { hash: Hex; nonce: number }): { hash: Hex; nonce: number } {
+    const tx = this.txs.get(sent.hash);
+    if (tx?.state !== 'pending') throw Object.assign(new Error('nonce too low'), { name: 'RegistryError' });
+    tx.state = 'dropped';
+    const h = hash(0x7800 + this.replacements.length);
+    this.replacements.push({ hash: h, replaces: sent.hash });
+    this.txs.set(h, { params: tx.params, nonce: tx.nonce, state: 'pending' });
+    return { hash: h, nonce: tx.nonce };
+  }
+
+  wait(h: Hex): { id: bigint; gasCostWei: bigint; supersedes: bigint | null } {
     const tx = this.txs.get(h);
     if (this.loseReceipt) {
       this.loseReceipt = false;
       throw Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' });
     }
-    if (tx?.state === 'mined') return { id: tx.id!, gasCostWei: 1n };
+    if (tx?.state === 'mined') return { id: tx.id!, gasCostWei: 1n, supersedes: tx.supersedes ?? null };
     if (tx?.state === 'reverted') throw Object.assign(new Error(`attest tx ${h} reverted`), { name: 'RegistryError' });
     throw Object.assign(new Error(`Timed out while waiting for transaction with hash "${h}" to be confirmed.`), { name: 'WaitForTransactionReceiptTimeoutError' });
   }
 
   status(sent: { hash: Hex; nonce: number }): WatchAttestTxStatus {
     const tx = this.txs.get(sent.hash);
-    if (tx?.state === 'mined') return { state: 'mined', id: tx.id!, gasCostWei: 1n };
+    if (tx?.state === 'mined') return { state: 'mined', id: tx.id!, gasCostWei: 1n, supersedes: tx.supersedes ?? null };
     if (tx?.state === 'reverted') return { state: 'reverted', gasCostWei: 1n };
     if (tx?.state === 'pending') return { state: 'pending' };
     return { state: 'dropped', nonceUsed: this.minedNonce > sent.nonce };
@@ -377,6 +394,7 @@ export async function harness(): Promise<Harness> {
       wait: async (h) => registry.wait(h),
       status: async (sent) => registry.status(sent),
       hasPending: async () => registry.hasPending(),
+      replace: async (sent) => registry.replace(sent),
     },
     balance: async () => chain.balance,
     now: () => clock.now,

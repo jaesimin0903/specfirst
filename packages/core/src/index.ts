@@ -551,6 +551,7 @@ export {
   attestDecision,
   changeOf,
   sameOutcome,
+  confirmsChange,
   needsConfirmation,
   attestClassOf,
   ATTEST_CLASSES,
@@ -574,6 +575,7 @@ export {
   seedKnownVaults,
   lastCheckOf,
   beaconOf,
+  implementationOf,
   type WatchState,
   type FeedEventInput,
 } from './watch/store.js';

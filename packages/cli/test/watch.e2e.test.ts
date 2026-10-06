@@ -383,7 +383,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     let first: Hex;
     try {
       first = await clients.wallet(WATCH_KEY).sendTransaction({ to: registry, data, nonce, gas: 2_000_000n });
-      store.state.attesting[lower] = { hash: first, nonce, at: new Date().toISOString(), reportPath: last.reportPath, reportURI, block: report.blockNumber, source: 'factory', cls: 'factory', supersedes: null };
+      store.state.attesting[lower] = { hash: first, nonce, at: new Date().toISOString(), reportPath: last.reportPath, reportURI, block: report.blockNumber, source: 'factory', cls: 'factory', replaced: [], bumps: 0 };
       await store.save();
       // Pending in the mempool: the new vault is checked, its attestation waits behind the transaction.
       const waiting = await watch();
@@ -406,5 +406,34 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     expect((await clients.publicClient.getTransaction({ hash: again })).nonce).toBe(nonce);
     expect((await reg.attestationOf(BigInt(attested[0]!.attestation!.id))).subject).toBe(unattested);
     expect(JSON.parse(await readFile(path.join(watchDir(), 'state.json'), 'utf8')).attesting).toEqual({});
+  });
+
+  it('a stuck attest is sent again with its nonce and a higher fee; only one of the two is mined', async () => {
+    const rpc = (method: string, params: unknown[]) => clients.publicClient.request({ method: method as never, params: params as never });
+    const store = await WatchStore.load(dir, 31337);
+    const [lower, deferred] = Object.entries(store.state.deferred)[0]!;
+    const report = parseCheckReport(await readFile(path.join(dir, deferred.reportPath), 'utf8'));
+    const reg = new AttestationRegistryClient(registry, clients.publicClient, clients.wallet(WATCH_KEY));
+    const before = await reg.attestationCount();
+    await rpc('evm_setAutomine', [false]);
+    let first: { hash: Hex; nonce: number };
+    let second: { hash: Hex; nonce: number };
+    let firstFee: bigint;
+    try {
+      first = await reg.sendAttest(attestationParamsFromReport(report, { reportURI: deferred.reportURI }));
+      firstFee = (await clients.publicClient.getTransaction({ hash: first.hash })).maxFeePerGas!;
+      second = await reg.replaceTransaction(first.hash);
+      await mine();
+    } finally {
+      await rpc('evm_setAutomine', [true]);
+    }
+    expect(second.nonce).toBe(first.nonce);
+    const [a, b] = await Promise.all([clients.publicClient.getTransaction({ hash: first.hash }).catch(() => null), clients.publicClient.getTransaction({ hash: second.hash })]);
+    expect(a).toBeNull();
+    expect(b.maxFeePerGas).toBe((firstFee! * 125n) / 100n + 1n);
+    expect(await reg.attestTx(second.hash)).toMatchObject({ state: 'mined' });
+    expect(await reg.attestTx(first.hash)).toEqual({ state: 'unknown' });
+    expect(await reg.attestationCount()).toBe(before + 1n);
+    expect((await reg.latest(31337n, lower as Address, ERC4626))!.attestation.subject.toLowerCase()).toBe(lower);
   });
 });

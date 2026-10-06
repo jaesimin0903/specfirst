@@ -393,6 +393,29 @@ describe('AttestationRegistryClient.attest reads the id from the receipt (mocks,
     expect(await lookup(notFound('TransactionReceiptNotFoundError'), notFound('TransactionNotFoundError'))).toEqual({ state: 'unknown' });
     await expect(lookup(Object.assign(new Error('fetch failed'), { name: 'HttpRequestError' }), null)).rejects.toThrow(/fetch failed/);
   });
+
+  it('waitAttest and attestTx name what the receipt says the attestation superseded, from its Superseded event', async () => {
+    const supersededLog = (address: Address, id: bigint, byId: bigint) => ({
+      address: address.toLowerCase(),
+      topics: encodeEventTopics({ abi: checkAttestationRegistryAbi, eventName: 'Superseded', args: { id, byId } }),
+      data: '0x',
+      blockNumber: 5n,
+      logIndex: 1,
+      transactionHash: `0x${'ab'.repeat(32)}`,
+    });
+    const receipt = { status: 'success', blockNumber: 5n, gasUsed: 10n, effectiveGasPrice: 3n, logs: [attestedLog(REGISTRY, 4n), supersededLog(DECOY, 1n, 4n), supersededLog(REGISTRY, 2n, 4n)] };
+    const reg = new AttestationRegistryClient(REGISTRY, { waitForTransactionReceipt: vi.fn(async () => receipt), getTransactionReceipt: vi.fn(async () => receipt) } as never);
+    expect(await reg.waitAttest(`0x${'ab'.repeat(32)}`)).toMatchObject({ id: 4n, supersedes: 2n });
+    expect(await reg.attestTx(`0x${'ab'.repeat(32)}`)).toEqual({ state: 'mined', id: 4n, gasCostWei: 30n, supersedes: 2n });
+  });
+
+  it('replaceTransaction sends a pending transaction again with its nonce, recipient, data and gas and higher fees', async () => {
+    const sendTransaction = vi.fn(async () => `0x${'ef'.repeat(32)}` as Hex);
+    const client = { getTransaction: vi.fn(async () => ({ to: REGISTRY, input: '0x1234', gas: 300_000n, nonce: 7, maxFeePerGas: 100n, maxPriorityFeePerGas: 10n })) };
+    const reg = new AttestationRegistryClient(REGISTRY, client as never, { account: { address: ISSUER }, sendTransaction } as never);
+    expect(await reg.replaceTransaction(`0x${'cd'.repeat(32)}`)).toEqual({ hash: `0x${'ef'.repeat(32)}`, nonce: 7 });
+    expect((sendTransaction.mock.calls[0] as unknown[])[0]).toMatchObject({ to: REGISTRY, data: '0x1234', gas: 300_000n, nonce: 7, maxFeePerGas: 126n, maxPriorityFeePerGas: 13n });
+  });
 });
 
 describe('bundled CheckAttestationRegistry artifact', () => {

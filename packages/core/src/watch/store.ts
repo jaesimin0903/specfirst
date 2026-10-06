@@ -10,6 +10,7 @@ import type { StandardCheckReport } from '../standards/report.js';
 import { defaultCacheDir } from '../standards/workspace.js';
 import { ATTEST_CLASSES, outcomeOfReport } from './decide.js';
 import {
+  CHANGE_KINDS,
   FEED_KINDS,
   FEED_SOURCES,
   feedEventSchema,
@@ -74,8 +75,11 @@ export const queueEntrySchema = z
  * written per key, so a failing subject writes at most one an hour. checkedBlocks: the block of the last
  * `checked` event per vault, so a newer report found in certs/checks at start is told from the watcher's own.
  * attesting: attest transactions sent whose receipt was not seen yet, recorded before it is awaited; each is
- * looked up first in the next pass, and nothing else is sent while one is. A deferred entry's `nonce` resends
- * with the nonce of a transaction the node dropped, so at most one of the two can be mined.
+ * looked up first in the next pass, and nothing else is sent while one is; `replaced` holds the hashes of the
+ * same nonce sent before with a lower fee, any of which may still be mined. A deferred entry's `nonce` resends
+ * with the nonce of a transaction the node dropped, so at most one of the two can be mined. upgrades: Upgraded
+ * or BeaconUpgraded of known vaults whose fingerprint could not be read yet, carried to the next pass.
+ * implementations: the implementation each known vault ran at its last check.
  */
 export const watchStateSchema = z
   .object({
@@ -142,6 +146,10 @@ export const watchStateSchema = z
             source,
             firstCheck: z.boolean(),
             attempts: count,
+            /** The change the second check must agree on; absent in states written before it was recorded. */
+            kind: z.enum(CHANGE_KINDS).optional(),
+            /** The fuzz seed of the pending check, which its confirmation reuses. */
+            seed: hex32.optional(),
           })
           .strict(),
       )
@@ -162,11 +170,18 @@ export const watchStateSchema = z
             block: decimal,
             source,
             cls: z.enum(ATTEST_CLASSES),
-            supersedes: decimal.nullable(),
+            /** Written before the attested event took it from the receipt; read no more. */
+            supersedes: decimal.nullable().optional(),
+            replaced: z.array(hex32).default([]),
+            bumps: count.default(0),
           })
           .strict(),
       )
       .default({}),
+    upgrades: z
+      .record(lowerAddress, z.object({ source, block: decimal, txHash: hex32.optional(), failures: count, notBefore: iso.optional() }).strict())
+      .default({}),
+    implementations: z.record(lowerAddress, lowerAddress).default({}),
   })
   .strict();
 export type WatchState = z.output<typeof watchStateSchema>;
@@ -203,6 +218,8 @@ export function emptyWatchState(chainId: number): WatchState {
     errorsAt: {},
     checkedBlocks: {},
     attesting: {},
+    upgrades: {},
+    implementations: {},
   };
 }
 
@@ -430,6 +447,12 @@ export function beaconOf(report: StandardCheckReport): string | null {
   return p && 'beacon' in p && p.beacon ? p.beacon.toLowerCase() : null;
 }
 
+/** The implementation a report says the subject's proxy ran (lowercase), or null for no proxy or an unknown one. */
+export function implementationOf(report: StandardCheckReport): string | null {
+  const p = report.identity.proxy as { implementation?: string | null } | null;
+  return p && typeof p.implementation === 'string' && /^0x[0-9a-fA-F]{40}$/.test(p.implementation) ? p.implementation.toLowerCase() : null;
+}
+
 const REPORT_FILE = /^(0|[1-9]\d*)-[0-9a-f]{16}\.json$/;
 
 /**
@@ -488,6 +511,9 @@ export async function seedKnownVaults(
     const beacon = beaconOf(latest.report);
     if (beacon) store.state.beacons[dirName] = beacon;
     else delete store.state.beacons[dirName];
+    const implementation = implementationOf(latest.report);
+    if (implementation) store.state.implementations[dirName] = implementation;
+    else delete store.state.implementations[dirName];
   }
   return out;
 }

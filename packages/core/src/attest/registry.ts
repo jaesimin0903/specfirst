@@ -87,8 +87,9 @@ export interface AttestSendOptions {
   onSent?: (sent: { hash: Hex; nonce: number }) => void | Promise<void>;
 }
 
+/** mined: `supersedes` is the attestation the receipt's Superseded event names, present only when there is one. */
 export type AttestTxState =
-  | { state: 'mined'; id: bigint; gasCostWei: bigint }
+  | { state: 'mined'; id: bigint; gasCostWei: bigint; supersedes?: bigint }
   | { state: 'reverted'; gasCostWei: bigint }
   | { state: 'pending' }
   | { state: 'unknown' };
@@ -170,9 +171,40 @@ export class AttestationRegistryClient {
     return { hash: sent.hash, nonce: sent.nonce! };
   }
 
-  async waitAttest(hash: Hex): Promise<TxOutcome & { id: bigint; effectiveGasPrice: bigint }> {
+  /** `supersedes`: the attestation the receipt's Superseded event names, present only when there is one. */
+  async waitAttest(hash: Hex): Promise<TxOutcome & { id: bigint; effectiveGasPrice: bigint; supersedes?: bigint }> {
     const out = await this.wait('attest', hash);
-    return { hash, blockNumber: out.blockNumber, gasUsed: out.gasUsed, id: this.attestedIdOf(hash, out.receipt), effectiveGasPrice: out.receipt.effectiveGasPrice ?? 0n };
+    const id = this.attestedIdOf(hash, out.receipt);
+    const supersedes = this.supersededBy(id, out.receipt);
+    return {
+      hash,
+      blockNumber: out.blockNumber,
+      gasUsed: out.gasUsed,
+      id,
+      effectiveGasPrice: out.receipt.effectiveGasPrice ?? 0n,
+      ...(supersedes !== null ? { supersedes } : {}),
+    };
+  }
+
+  /**
+   * Sends the wallet's pending transaction `hash` again with its nonce, recipient, data and gas and its fees
+   * raised by `bumpPercent` (a node replaces a pending transaction only for at least 10% more), for one stuck
+   * below the going fee. Either of the two can be mined, never both.
+   */
+  async replaceTransaction(hash: Hex, bumpPercent = 25): Promise<{ hash: Hex; nonce: number }> {
+    if (!this.wallet) throw new RegistryError('replaceTransaction needs a wallet client');
+    const tx = await this.client.getTransaction({ hash });
+    const raise = (v: bigint) => (v * BigInt(100 + bumpPercent)) / 100n + 1n;
+    const fees =
+      tx.maxFeePerGas !== undefined && tx.maxFeePerGas !== null
+        ? { maxFeePerGas: raise(tx.maxFeePerGas), maxPriorityFeePerGas: raise(tx.maxPriorityFeePerGas ?? 0n) }
+        : { gasPrice: raise(tx.gasPrice ?? 0n) };
+    try {
+      const next = await this.wallet.sendTransaction({ account: this.wallet.account, to: tx.to!, data: tx.input, gas: tx.gas, nonce: tx.nonce, ...fees } as never);
+      return { hash: next, nonce: tx.nonce };
+    } catch (err) {
+      throw this.failure('attest', err);
+    }
   }
 
   /**
@@ -196,6 +228,13 @@ export class AttestationRegistryClient {
     return events[0]!.args.id;
   }
 
+  /** The attestation the receipt's Superseded event from this registry says `id` superseded, or null. */
+  private supersededBy(id: bigint, receipt: Pick<TransactionReceipt, 'logs'>): bigint | null {
+    const self = this.address.toLowerCase();
+    const event = parseEventLogs({ abi: checkAttestationRegistryAbi, eventName: 'Superseded', logs: receipt.logs }).find((l) => l.address.toLowerCase() === self && l.args.byId === id);
+    return event ? event.args.id : null;
+  }
+
   /**
    * Where an attest transaction sent earlier stands: mined (with the attestation id from its receipt), reverted,
    * pending (the node knows it, no receipt yet) or unknown to the node (dropped, or replaced by another
@@ -211,7 +250,9 @@ export class AttestationRegistryClient {
     if (receipt) {
       const gasCostWei = receipt.gasUsed * (receipt.effectiveGasPrice ?? 0n);
       if (receipt.status !== 'success') return { state: 'reverted', gasCostWei };
-      return { state: 'mined', id: this.attestedIdOf(hash, receipt), gasCostWei };
+      const id = this.attestedIdOf(hash, receipt);
+      const supersedes = this.supersededBy(id, receipt);
+      return { state: 'mined', id, gasCostWei, ...(supersedes !== null ? { supersedes } : {}) };
     }
     try {
       await this.client.getTransaction({ hash });
