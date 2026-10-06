@@ -14,6 +14,23 @@ node --env-file=.env packages/cli/dist/index.js <command>
 
 `.gitignore` ignores every name that starts with `.env` except `.env.example`, so a Finder copy such as `.env copy.example` is not committed by accident.
 
+## Exit codes
+
+| Code | Command | When |
+|---|---|---|
+| 2 | `init`, `lock`, `run` | the spec file is invalid |
+| 3 | `lock` | a mutant does not break the property it targets |
+| 10 | `run` | the fix loop ran out of iterations or stalled |
+| 11 | `run` | the project no longer matches `.specfirst/lock.json` |
+| 12, 13, 14 | `deploy`, `verify`, `cert`, `attest-registry`, and those stages of `run` | a deploy failed; a deployed contract violates an invariant; issue, revoke or attest failed |
+| 15 | `run` | a run or the total spend passed its cap |
+| 16, 17 | `check` | a property failed; nothing failed but the check is incomplete |
+| 18 | `desk`, `worker` | a desk action failed or was refused |
+| 19 | `watch` | the watcher cannot start, or a `--once` pass cannot read the subject chain |
+| 20 | `subs` | a subscriptions action failed or was refused |
+
+Each is a `*_EXIT_CODE` constant of `@specfirst/core`; `packages/core/test/exit-codes.test.ts` keeps them distinct. 1 is anything else.
+
 ## Check attestations
 
 `specfirst check` results for contracts on any chain, Monad mainnet included, are recorded on testnet in `CheckAttestationRegistry` with `specfirst attest-registry deploy`, `specfirst cert attest <report.json>` and read back with `specfirst cert attestation <chainId> <address>`. See `docs/adr/0004-check-attestation-registry.md` for the trust model and what `isCompliant` does and does not mean.
@@ -71,7 +88,7 @@ node packages/cli/dist/index.js watch sources --verify
 - Budget and cadence: `--max-attest-per-day` (40; more wait for the next UTC day), `--sweep-hours` (24) and `--sweep-per-hour` (6, 0 turns the sweep off), `--subscribed-minutes` (60), `--check-timeout` (600 s per check; a check that runs out is recorded, not attested and not retried, and forge gives a test call at most 100 million gas). `--once` reads up to the head (or `--to-block`) and runs every due check; `--to-block` alone stops once the queue is empty.
 - What is never attested: a report in which a property is inconclusive because the fork RPC failed (the vault is checked again later), a check older than the subject's latest Valid attestation from any issuer (checked again at a new block), and a check that timed out. An RPC failure or a rate limit during the probe is never "not a vault".
 - Files in `.specfirst/watch/<subjectChainId>/`: `feed.ndjson` (append only, one event per line), `status.json` and `vaults.json` (rewritten atomically), with zod schemas in `@specfirst/core/watch` (browser-safe, like `@specfirst/core/desk`), plus the watcher's own `state.json` (cursor, queue, rejected probes, budget) and `watch.lock` (one watcher per directory). The known set starts from `certs/checks/<chainId>/`. The web reads the directory from `SPECFIRST_WATCH_DIR` (default `<repo>/.specfirst/watch`).
-- Subscriptions and alerts plug in through `SubscriptionSource` and `AlertSink` (`packages/core/src/watch/hooks.ts`); without them the watcher runs with none.
+- Subscriptions and alerts: with a CheckSubscriptions address on the attest network (`--subs`, else `SPECFIRST_SUBS_<chainId>` of `--network`, so `SPECFIRST_SUBS_10143`), the watcher reads the active subscriptions there (a subscribed vault is checked first, then every `--subscribed-minutes`) and POSTs each change to the subscribers' webhooks in `.specfirst/watch/webhooks.json` (see Alert subscriptions). `--webhook-local-origin <origin>` (repeatable, exact origins such as `http://localhost:3418`) lets a local receiver like the web's demo hook through. Without an address it runs with no subscriptions and no alerts. The hooks are `SubscriptionSource` and `AlertSink` in `packages/core/src/watch/hooks.ts`.
 
 ### Demo on Monad testnet
 
@@ -104,7 +121,14 @@ node --env-file=.env packages/cli/dist/index.js subs settle                     
 node --env-file=.env packages/cli/dist/index.js subs withdraw                   # owner: earned fees only, to the owner
 ```
 
-A webhook is registered off chain: the subscriber signs `Specfirst alerts webhook\nsubscriber: <address>\nurl: <https url>\nissued: <unix seconds>` (the URL in canonical form) and the web API verifies and stores it in the watch directory's `webhooks.json` with `registerWebhook` from `@specfirst/core`. The watcher's sink (`createWebhookAlertSink`) POSTs `{ v: 1, subscriptionId, subscriptionIds, subject, chainId, change, check, attestation, reportURL }` once to every subscriber with an active subscription on a vault whose result changed: up to 3 attempts, at most 25 subscribers and 20 s per event, and never to a host that resolves to an internal address. For a local demo receiver pass its exact origin in `allowedLocalOrigins`. The ABI, the day accounting, the client, `listActive` and the webhook message and verification are browser-safe in `@specfirst/core/subs`.
+A webhook is registered off chain: the subscriber signs `Specfirst alerts webhook\nsubscriber: <address>\nurl: <https url>\nissued: <unix seconds>` (the URL in canonical form, `new URL(url).href`) on `/watch/inbox`, and the web API verifies and stores it in `.specfirst/watch/webhooks.json` (the web's `SPECFIRST_WATCH_DIR`) with `registerWebhook` from `@specfirst/core`. `specfirst watch` with `SPECFIRST_SUBS_10143` set POSTs `{ v: 1, subscriptionId, subscriptionIds, subject, chainId, change, check, attestation, reportURL }` (`createWebhookAlertSink`) once to every subscriber with an active subscription on a vault whose result changed: up to 3 attempts, at most 25 subscribers and 20 s per event, and never to a host that resolves to an internal address. Each delivery is an `alerted` event in the feed. A local demo receiver needs its exact origin on both sides: `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1` on the web (its own origin) and `--webhook-local-origin` on the watcher:
+
+```
+PORT=3418 SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1 NEXT_PUBLIC_SPECFIRST_SUBS_10143=$SPECFIRST_SUBS_10143 pnpm --filter @specfirst/web dev
+node --env-file=.env packages/cli/dist/index.js --json watch --subject-chain 10143 --sources examples/watch/sources-demo.json --network monad-testnet --webhook-local-origin http://localhost:3418
+```
+
+Subscriptions failures exit 20. The ABI, the day accounting, the client, `listActive` and the webhook message and verification are browser-safe in `@specfirst/core/subs`.
 
 ## Board
 
@@ -136,7 +160,7 @@ Environment of the web server (all optional; nothing here is a key):
 | `NEXT_PUBLIC_MONAD_FAUCET_URL` | `https://faucet.monad.xyz` | Linked from the burner card. |
 | `SPECFIRST_REPO_ROOT` | two directories above `packages/web` | Base for the relative paths above. |
 
-The desk ABI and the status.json schema live in `packages/web/lib/desk/contract.ts` until `@specfirst/core/desk` exports them; that file says how to swap.
+The desk ABI comes from `@specfirst/core/desk`; `packages/web/lib/desk/contract.ts` re-exports it next to the web's lenient status.json readers.
 
 ## Watch pages
 
@@ -146,12 +170,12 @@ JSON: `GET /api/v1/watch/status`, `/api/v1/watch/feed?after=<seq>|before=<seq>`,
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SPECFIRST_WATCH_DIR` | `<repo>/.specfirst/watch` | The watcher's files, and where the web writes `webhooks.json` and `demo-hook.json`. |
+| `SPECFIRST_WATCH_DIR` | `<repo>/.specfirst/watch` | The watcher's files (`<dir>/<chainId>/`), so `.specfirst/watch` of the watcher's `--project`; the web writes `webhooks.json` there, which the watcher's alert sink reads, and `demo-hook.json`. |
 | `NEXT_PUBLIC_SPECFIRST_SUBS_10143` | unset | CheckSubscriptions on Monad testnet. Unset: the subscribe box and the inbox say "not deployed yet". |
-| `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS` | unset | `1` lets a webhook at this site's own origin register even when it is local (`http://localhost:3418/api/v1/watch/demo-hook`), for demos on one machine. Other local URLs stay refused. |
+| `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS` | unset | `1` lets a webhook at this site's own origin register even when it is local (`http://localhost:3418/api/v1/watch/demo-hook`), for demos on one machine. Other local URLs stay refused. The watcher delivers to it only when started with `--webhook-local-origin` set to the same origin. |
 | `SPECFIRST_DEMO_HOOK` | on | `off` turns the demo receiver off. |
 
-Until the watcher and subscriptions branches are merged, the web carries stand-ins with core's names and behavior: `packages/web/lib/watch/core.ts` for `@specfirst/core/watch` (file schemas), `packages/web/lib/subs/core.ts` for `@specfirst/core/subs` (ABI, day accounting, webhook message, URL rules, verification) and the first part of `packages/web/lib/watch/webhooks.ts` for the root's `readWebhooks`, `saveWebhookRegistration` and `registerWebhook`. Each becomes an import.
+The web takes the file schemas from `@specfirst/core/watch` and the CheckSubscriptions ABI, day accounting and webhook verification from `@specfirst/core/subs` (`packages/web/lib/watch/core.ts` and `lib/subs/core.ts` re-export them; both are browser-safe), and the `webhooks.json` store from the package root in server code only (`lib/watch/webhooks.ts`), so the web and the watcher's alert sink write and read one file the same way.
 
 ## License
 
