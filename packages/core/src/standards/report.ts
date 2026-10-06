@@ -4,10 +4,10 @@ import { callsOf, extractJson, formatForgeCall, type ForgeTestResult } from '../
 import type { StandardProperty } from './erc4626.js';
 
 /**
- * 2 adds `vaultKind`, 3 adds `skipReason`. Reports of earlier versions (without those fields) still
- * validate, so reports written before a change, and attestations built from them, stay readable.
+ * 2 adds `vaultKind`, 3 adds `skipReason`, 4 adds `traits`. Reports of earlier versions (without those fields)
+ * still validate, so reports written before a change, and attestations built from them, stay readable.
  */
-export const STANDARD_CHECK_SCHEMA_VERSION = 3;
+export const STANDARD_CHECK_SCHEMA_VERSION = 4;
 /** CLI exit code when any standard property fails on the checked contract. */
 export const STANDARD_CHECK_FAILED_EXIT_CODE = 16;
 /**
@@ -56,6 +56,42 @@ export const MISSING_PRECOMPILE_PREFIX = 'specfirst: fork lacks a Monad precompi
 /** Reason text of a property stopped by a missing precompile; the precompile address follows in parentheses. */
 export const MISSING_PRECOMPILE_NOTE = "the vault calls a Monad precompile forge's EVM lacks, so the call reverts on the fork only; not attributable to the vault";
 export type StandardName = z.infer<typeof standardNameSchema>;
+
+/**
+ * Request functions that mark an asynchronous exit when the code exposes them: ERC-7540's requestRedeem, and
+ * Magma gMON's requestRedeemGVault (the variant met in the Upshift and Magma sources on Monad; Upshift earnAUSD
+ * exposes requestRedeem itself).
+ */
+export const ASYNC_REDEEM_REQUEST_FUNCTIONS = ['requestRedeem(uint256,address,address)', 'requestRedeemGVault(uint256,address,address,uint64)'] as const;
+/** ERC-165 interface ids EIP-7540 defines: asynchronous redemption, asynchronous deposit, operator methods. */
+export const ERC7540_INTERFACE_IDS = { asyncRedeem: '0x620ee8e4', asyncDeposit: '0xce3bbe50', operator: '0xe3bc4e65' } as const;
+
+/**
+ * Why a vault carries the async-redeem trait. codeAddress: the code that was read (the implementation behind a
+ * proxy, else the vault). requestFunctions: the request functions whose selector that code pushes. erc165: what
+ * supportsInterface answered for the ERC-7540 ids, null when the vault does not implement ERC-165. run: what this
+ * check showed. exits-rejected: deposit worked while withdraw and redeem rejected every input (the upstream
+ * properties ran out of inputs and the sf- calls reverted within their max, or the max was 0). not-exercised: the
+ * fork could not run the vault (a Monad precompile it lacks), so the trait rests on the code and on the vault's
+ * own ERC-165 answer for asynchronous redemption.
+ */
+export const asyncRedeemEvidenceSchema = z
+  .object({
+    codeAddress: address,
+    requestFunctions: z.array(z.enum(ASYNC_REDEEM_REQUEST_FUNCTIONS)).min(1),
+    erc165: z.object({ asyncRedeem: z.boolean(), asyncDeposit: z.boolean(), operator: z.boolean() }).strict().nullable(),
+    run: z.enum(['exits-rejected', 'not-exercised']),
+  })
+  .strict();
+export type AsyncRedeemEvidence = z.infer<typeof asyncRedeemEvidenceSchema>;
+
+/**
+ * A capability of the vault, with the evidence for it. Context only: a trait never changes a property's status.
+ * async-redeem: exits go through a request function (ERC-7540 style). ERC-7540 still requires maxWithdraw and
+ * maxRedeem to report what can be claimed now, so such a vault that reports its full balance still fails.
+ */
+export const vaultTraitSchema = z.object({ id: z.literal('async-redeem'), evidence: asyncRedeemEvidenceSchema }).strict();
+export type VaultTrait = z.infer<typeof vaultTraitSchema>;
 
 /**
  * pass: the property held on every fuzz run. fail: forge found a counterexample.
@@ -130,7 +166,7 @@ export type StandardCheckSummary = z.infer<typeof standardCheckSummarySchema>;
  */
 export const standardCheckReportSchema = z
   .object({
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(STANDARD_CHECK_SCHEMA_VERSION)]),
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(STANDARD_CHECK_SCHEMA_VERSION)]),
     chainId: z.number().int().positive(),
     address,
     /** Fork block, decimal without leading zeros. */
@@ -140,6 +176,8 @@ export const standardCheckReportSchema = z
     vaultKind: vaultKindSchema.optional(),
     /** Required (possibly null) from schemaVersion 3 on; absent before. */
     skipReason: skipReasonSchema.nullable().optional(),
+    /** Required (possibly empty) from schemaVersion 4 on; absent before. */
+    traits: z.array(vaultTraitSchema).optional(),
     upstream: z.object({ repo: z.string().url(), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
     harnessSha256: hex32,
     /** sha256 of Specfirst's own properties (SpecfirstMaxHonored.t.sol). */
@@ -180,6 +218,12 @@ export const standardCheckReportSchema = z
     }
     if (r.schemaVersion < 3 && r.skipReason !== undefined) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['skipReason'], message: `skipReason does not exist in schemaVersion ${r.schemaVersion}` });
+    }
+    if (r.schemaVersion >= 4 && r.traits === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['traits'], message: 'traits (empty when none) is required from schemaVersion 4 on' });
+    }
+    if (r.schemaVersion < 4 && r.traits !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['traits'], message: `traits does not exist in schemaVersion ${r.schemaVersion}` });
     }
     const expected = summarize(r.results);
     for (const k of Object.keys(expected) as Array<keyof StandardCheckSummary>) {

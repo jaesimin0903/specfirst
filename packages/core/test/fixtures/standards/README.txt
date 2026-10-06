@@ -107,3 +107,14 @@ local anvil fork, no recorded JSON):
 review/M.sol Vault mode 5 deposits through 0x1000; review/Exp.t.sol ForkGaps covers SfForkGaps on recorded
 state diffs (flags 0x0100, 0x1000 and 0x1001 in reverted frames, ignores other empty accounts, Ethereum
 precompiles, balance reads and a precompile the EVM has).
+
+Asynchronous exits and the async-redeem trait (mock-vaults.sol, full checks on a local anvil fork in
+standards.forge.test.ts, no recorded JSON):
+  AsyncRedeemVault (0x5f..81)      Upshift shape with ERC-7540 requestRedeem in the code: trait with run
+                                   exits-rejected and erc165 null, statuses identical to AsyncExitVault (0x5f..32,
+                                   the same exits without a request function, no trait).
+  SelectorOnlyVault (0x5f..82)     requestRedeem in the code, withdraw and redeem work: 30 pass, no trait.
+  PrecompileAsyncVault (0x5f..83)  gMON shape: deposits stop at 0x1000, requestRedeem, ERC-165 declares
+                                   0x620ee8e4: 30 inconclusive, trait with run not-exercised.
+standards.traits.test.ts reads two committed reports of the 2026-09-30 batch (certs/checks/143, Upshift earnAUSD
+and Morpho 0x802c..4e44) for the run evidence.

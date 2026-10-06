@@ -84,7 +84,7 @@ describe('runStandardCheck without forge', () => {
     expect(report).toMatchObject({ seed: null, sender: null, toolchain: { forgeVersion: null, forgeStd: { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit } } });
     expect(events).toEqual(['check-start', 'check-identity', 'check-skip']);
     expect(report.blockNumber).toBe('5');
-    expect(report).toMatchObject({ schemaVersion: 3, vaultKind: 'erc7535', skipReason: 'native-asset' });
+    expect(report).toMatchObject({ schemaVersion: 4, vaultKind: 'erc7535', skipReason: 'native-asset', traits: [] });
     expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
     expect(report.results.every((r) => r.status === 'not_applicable' && r.reason === NATIVE_ASSET_REASON)).toBe(true);
     expect(report.upstream).toEqual(ERC4626_UPSTREAM);
@@ -116,7 +116,7 @@ describe('runStandardCheck without forge', () => {
     );
     expect(events.map((e) => e.type)).toEqual(['check-start', 'check-identity', 'check-skip']);
     expect(events[2]).toMatchObject({ vaultKind: 'erc7575', reason });
-    expect(report).toMatchObject({ schemaVersion: 3, vaultKind: 'erc7575', skipReason: 'separate-share-token', seed: null, sender: null });
+    expect(report).toMatchObject({ schemaVersion: 4, vaultKind: 'erc7575', skipReason: 'separate-share-token', traits: [], seed: null, sender: null });
     expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
     expect(report.results.every((r) => r.status === 'not_applicable' && r.reason === reason)).toBe(true);
     expect(standardCheckExitCode(report.summary)).toBe(17);
@@ -274,7 +274,7 @@ describe('runStandardCheck with a stand-in forge (M6, M7, L3, L6, L7)', () => {
       await rm(forge.record, { force: true });
       const report = await runStandardCheck({ ...input, client: client({ code: CODE, asset: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603', share }) });
       expect(existsSync(forge.record)).toBe(true);
-      expect(report).toMatchObject({ schemaVersion: 3, vaultKind: 'erc4626', skipReason: null });
+      expect(report).toMatchObject({ schemaVersion: 4, vaultKind: 'erc4626', skipReason: null, traits: [] });
       expect(report.results.find((r) => r.id === 'asset')!.status).toBe('pass');
     }
   });
@@ -389,6 +389,21 @@ describe('standardCheckReportSchema', () => {
     expect(standardCheckReportSchema.parse({ ...v3, skipReason: 'missing-precompile' }).skipReason).toBe('missing-precompile');
     expect(() => standardCheckReportSchema.parse({ ...v3, skipReason: 'other' })).toThrow();
     expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 2, vaultKind: 'erc4626', skipReason: null })).toThrow(/skipReason does not exist in schemaVersion 2/);
+  });
+
+  it('schema version 4 needs traits (empty when none); earlier versions must not carry them', () => {
+    const v4 = { ...valid(), schemaVersion: 4, vaultKind: 'erc4626', skipReason: null };
+    expect(() => standardCheckReportSchema.parse(v4)).toThrow(/traits \(empty when none\) is required from schemaVersion 4 on/);
+    expect(standardCheckReportSchema.parse({ ...v4, traits: [] }).traits).toEqual([]);
+    const trait = {
+      id: 'async-redeem',
+      evidence: { codeAddress: '0xFd2F793C248Dd673C830DF610a95a045054de267', requestFunctions: ['requestRedeem(uint256,address,address)'], erc165: null, run: 'exits-rejected' },
+    };
+    expect(standardCheckReportSchema.parse({ ...v4, traits: [trait] }).traits).toEqual([trait]);
+    expect(() => standardCheckReportSchema.parse({ ...v4, traits: [{ ...trait, id: 'other' }] })).toThrow();
+    expect(() => standardCheckReportSchema.parse({ ...v4, traits: [{ ...trait, evidence: { ...trait.evidence, requestFunctions: [] } }] })).toThrow();
+    expect(() => standardCheckReportSchema.parse({ ...v4, traits: [{ ...trait, evidence: { ...trait.evidence, requestFunctions: ['withdraw(uint256)'] } }] })).toThrow();
+    expect(() => standardCheckReportSchema.parse({ ...valid(), schemaVersion: 3, vaultKind: 'erc4626', skipReason: null, traits: [] })).toThrow(/traits does not exist in schemaVersion 3/);
   });
 
   it('accepts a complete report', () => {

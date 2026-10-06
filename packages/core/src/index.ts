@@ -290,6 +290,7 @@ export {
   EIP1967_BEACON_SLOT,
   PROXY_MAX_CODE_SIZE,
   fingerprintKey,
+  pushedSelectors,
   type ImplementationIdentity,
   type ImplementationKeyKind,
   type CodeFingerprint,
@@ -313,6 +314,10 @@ export {
   RESTRICTED_ASSET_NOTE,
   MISSING_PRECOMPILE_PREFIX,
   MISSING_PRECOMPILE_NOTE,
+  ASYNC_REDEEM_REQUEST_FUNCTIONS,
+  ERC7540_INTERFACE_IDS,
+  asyncRedeemEvidenceSchema,
+  vaultTraitSchema,
   missingPrecompilesOf,
   minAmountNote,
   maxZeroNote,
@@ -331,7 +336,10 @@ export {
   type StandardName,
   type VaultKind,
   type SkipReason,
+  type AsyncRedeemEvidence,
+  type VaultTrait,
 } from './standards/report.js';
+export { detectTraits, exitEvidenceOf, requestFunctionsIn, erc7540InterfacesOf } from './standards/traits.js';
 export {
   runStandardCheck,
   runErc4626Control,

@@ -29,8 +29,10 @@ import {
   type SkipReason,
   type StandardName,
   type VaultKind,
+  type VaultTrait,
   type StandardPropertyResult,
 } from './report.js';
+import { detectTraits } from './traits.js';
 import { ERC4626_FOUNDRY_TOML, EVENTS_DIR, FUZZ_MAX_TEST_REJECTS, prepareErc4626Workspace, type StandardWorkspace } from './workspace.js';
 
 export const CHECKS_DIR = '.specfirst/checks';
@@ -77,6 +79,7 @@ export type StandardCheckEvent =
   | { type: 'check-identity'; identity: ImplementationIdentity }
   | { type: 'check-workspace'; dir: string; fetched: string[]; harnessSha256: string }
   | { type: 'check-skip'; vaultKind: VaultKind; reason: string }
+  | { type: 'check-traits'; traits: VaultTrait[] }
   | { type: 'check-forge'; args: string[]; seed: Hex; sender: Address; forgeVersion: string | null };
 
 export type StandardCheckClient = IdentityClient & Pick<PublicClient, 'getChainId' | 'getBlockNumber'>;
@@ -306,7 +309,7 @@ function defaultClient(rpcUrl: string): StandardCheckClient {
  * block (docs/adr/0003). Nothing is signed or sent: forge executes against a local fork of `rpcUrl`.
  * Steps: chain id and block, implementation identity, pre-checks (asset() is the ERC-7535 native sentinel,
  * or share() names a separate ERC-7575 share token: not applicable, forge skipped), cached workspace,
- * forge, parse, validate, write.
+ * forge, parse, traits (traits.ts), validate, write.
  */
 export async function runStandardCheck(input: RunStandardCheckInput): Promise<StandardCheckReport> {
   if (input.standard !== 'erc4626') throw new StandardCheckError(`unknown standard "${input.standard}" (expected erc4626)`);
@@ -335,6 +338,7 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
   if (identity.codeSize === 0) throw new StandardCheckError(`no contract code at ${address} on chain ${chainId} block ${blockNumber}`);
 
   let results: StandardPropertyResult[];
+  let traits: VaultTrait[] = [];
   let run: ForgeSuiteRun | null = null;
   let upstream = input.pins?.upstream ?? ERC4626_UPSTREAM;
   let forgeStd: PinnedRepo = input.pins?.forgeStd ?? { repo: FORGE_STD_PIN.repo, commit: FORGE_STD_PIN.commit };
@@ -392,6 +396,9 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
       onEvent: input.onEvent,
     });
     results = run.results;
+    // Context from the run and the code (async-redeem); never changes a result.
+    traits = await detectTraits(client, address, identity, results, blockNumber);
+    if (traits.length > 0) input.onEvent?.({ type: 'check-traits', traits });
   }
 
   const report = standardCheckReportSchema.parse({
@@ -402,6 +409,7 @@ export async function runStandardCheck(input: RunStandardCheckInput): Promise<St
     standard: input.standard,
     vaultKind,
     skipReason: skipCode ?? skipReasonOf(results),
+    traits,
     upstream: { repo: upstream.repo, commit: upstream.commit },
     harnessSha256,
     sfPropertiesSha256,

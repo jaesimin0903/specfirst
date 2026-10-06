@@ -184,6 +184,9 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
       'FakePrecompileTextVault',
       'FakePrecompileSetupVault',
       'MintSurchargeVault',
+      'AsyncRedeemVault',
+      'SelectorOnlyVault',
+      'PrecompileAsyncVault',
     ]) {
       const art = JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${name}.json`), 'utf8')) as { deployedBytecode: { object: string } };
       code[name] = art.deployedBytecode.object;
@@ -209,6 +212,9 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000073', code.FakePrecompileTextVault]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000074', code.FakePrecompileSetupVault]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000075', code.MintSurchargeVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000081', code.AsyncRedeemVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000082', code.SelectorOnlyVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000083', code.PrecompileAsyncVault]);
     await rpc('anvil_mine', ['0x1']);
   });
   afterAll(async () => {
@@ -304,6 +310,8 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     expect(new Set(report.results.map((r) => r.reason))).toEqual(new Set([`${MISSING_PRECOMPILE_NOTE} (0x0000000000000000000000000000000000001000)`]));
     expect(report.skipReason).toBe('missing-precompile');
     expect(standardCheckExitCode(report.summary)).toBe(17);
+    // No request function in its code and no ERC-165: no async-redeem trait.
+    expect(report.traits).toEqual([]);
   });
 
   it('a vault that reverts with the missing-precompile text but calls no precompile keeps its fails', async () => {
@@ -337,6 +345,50 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     const report = await check('0x5F00000000000000000000000000000000000031');
     expect(report.vaultKind).toBe('erc4626');
     expect(report.summary.pass).toBe(30);
+    expect(report.schemaVersion).toBe(4);
+    expect(report.traits).toEqual([]);
+  });
+
+  it('asynchronous exits (Upshift shape, requestRedeem in the code): async-redeem trait, and the same fails as without it', async () => {
+    const asyncVault = await check('0x5f00000000000000000000000000000000000081');
+    expect(asyncVault.traits).toEqual([
+      {
+        id: 'async-redeem',
+        evidence: { codeAddress: '0x5f00000000000000000000000000000000000081', requestFunctions: ['requestRedeem(uint256,address,address)'], erc165: null, run: 'exits-rejected' },
+      },
+    ]);
+    const r = new Map(asyncVault.results.map((x) => [x.id, x]));
+    expect(r.get('sf-maxWithdraw-honored')!.reason).toMatch(/^withdraw\(\d+\) reverted with selector 0x75ed2e3e while maxWithdraw is [1-9]\d*$/);
+    expect(r.get('sf-maxRedeem-honored')!.reason).toMatch(/^redeem\(\d+\) reverted with selector 0x75ed2e3e while maxRedeem is [1-9]\d*$/);
+    expect(standardCheckExitCode(asyncVault.summary)).toBe(16);
+    // AsyncExitVault behaves the same but has no request function: no trait, and the very same statuses.
+    const plain = await check('0x5f00000000000000000000000000000000000032');
+    expect(plain.traits).toEqual([]);
+    expect(asyncVault.results.map((x) => [x.id, x.status])).toEqual(plain.results.map((x) => [x.id, x.status]));
+    expect(asyncVault.summary).toEqual(plain.summary);
+  });
+
+  it('requestRedeem in the code while withdraw and redeem go through: no trait', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000082');
+    expect(report.summary).toEqual({ pass: 30, fail: 0, inconclusive: 0, notApplicable: 0 });
+    expect(report.traits).toEqual([]);
+  });
+
+  it('gMON shape (deposits stop at the staking precompile, ERC-165 declares async redemption): trait from code and ERC-165, run not-exercised', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000083');
+    expect(report.summary).toEqual({ pass: 0, fail: 0, inconclusive: 30, notApplicable: 0 });
+    expect(report.skipReason).toBe('missing-precompile');
+    expect(report.traits).toEqual([
+      {
+        id: 'async-redeem',
+        evidence: {
+          codeAddress: '0x5f00000000000000000000000000000000000083',
+          requestFunctions: ['requestRedeem(uint256,address,address)'],
+          erc165: { asyncRedeem: true, asyncDeposit: false, operator: false },
+          run: 'not-exercised',
+        },
+      },
+    ]);
   });
 });
 

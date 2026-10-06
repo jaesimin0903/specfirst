@@ -410,3 +410,43 @@ contract MinDepositVault is VaultBase {
         return super.mint(s, r);
     }
 }
+
+/// Asynchronous exits, the Upshift earnAUSD shape: withdraw and redeem always revert, requestRedeem (ERC-7540's
+/// signature) takes the shares, and maxWithdraw and maxRedeem still report the balance. It gets the async-redeem
+/// trait and keeps its sf- exit fails: ERC-7540 still wants those max values to be what can be claimed now.
+contract AsyncRedeemVault is VaultBase {
+    mapping(address => uint256) public pendingShares;
+
+    function requestRedeem(uint256 shares, address controller, address owner) external returns (uint256 requestId) {
+        balanceOf[owner] -= shares;
+        pendingShares[controller] += shares;
+        return 0;
+    }
+
+    function withdraw(uint256, address, address) public pure override returns (uint256) { revert WithdrawalRequestRequired(); }
+    function redeem(uint256, address, address) public pure override returns (uint256) { revert WithdrawalRequestRequired(); }
+}
+
+/// Exposes requestRedeem but lets withdraw and redeem go through: the selector alone is not the trait.
+contract SelectorOnlyVault is VaultBase {
+    function requestRedeem(uint256, address, address) external pure returns (uint256) { return 0; }
+}
+
+/// The Magma gMON shape: deposits stake through Monad's staking precompile (so the fork cannot run them),
+/// exits go through requestRedeem, and ERC-165 declares ERC-7540 asynchronous redemption (0x620ee8e4).
+contract PrecompileAsyncVault is VaultBase {
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        s = super.deposit(a, r);
+        require(IMonadStaking(MONAD_STAKING).delegate(78));
+    }
+
+    function mint(uint256 s, address r) public override returns (uint256 a) {
+        a = super.mint(s, r);
+        require(IMonadStaking(MONAD_STAKING).delegate(78));
+    }
+
+    function requestRedeem(uint256, address, address) external pure returns (uint256) { return 0; }
+    function supportsInterface(bytes4 id) external pure returns (bool) { return id == 0x01ffc9a7 || id == 0x620ee8e4; }
+    function withdraw(uint256, address, address) public pure override returns (uint256) { revert(); }
+    function redeem(uint256, address, address) public pure override returns (uint256) { revert(); }
+}
