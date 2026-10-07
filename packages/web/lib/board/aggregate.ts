@@ -2,6 +2,7 @@ import type {
   AttestationView,
   BoardData,
   BoardTotals,
+  FailedProperty,
   ImplementationGroup,
   PropertyInfo,
   ProtocolSummary,
@@ -46,6 +47,16 @@ const CELL: Record<ReportResultView['status'], string> = { pass: 'p', fail: 'f',
 
 export function cellsOf(results: ReadonlyArray<Pick<ReportResultView, 'status'>>): string {
   return results.map((r) => CELL[r.status]).join('');
+}
+
+/** The failed properties of a report, each with its class (lib/board/levels) from its reason and forge's logs. */
+export function failedPropertiesOf(results: ReadonlyArray<ReportResultView>): FailedProperty[] {
+  return results
+    .filter((x) => x.status === 'fail')
+    .map((x) => {
+      const c = classifyFailure(x);
+      return { id: x.id, reason: x.reason ?? '', topic: c.topic, ...(c.delta ? { delta: c.delta, amount: c.amount } : {}) };
+    });
 }
 
 export function vaultId(chainId: number, address: string): string {
@@ -137,12 +148,7 @@ export function buildRow({ candidate, meta, attestation, reportPath }: BuildRowI
     proxyKind: identity.proxy?.kind ?? null,
     implementationAddress: identity.implementation?.address ?? null,
     groupSize: 1,
-    failed: r.results
-      .filter((x) => x.status === 'fail')
-      .map((x) => {
-        const c = classifyFailure(x);
-        return { id: x.id, reason: x.reason ?? '', topic: c.topic, ...(c.delta ? { delta: c.delta, amount: c.amount } : {}) };
-      }),
+    failed: failedPropertiesOf(r.results),
     reasonCategories: [...reasonCountsOf(r.results).keys()],
     traits: r.traits ? r.traits.map((t) => ({ id: t.id, evidence: { ...t.evidence, requestFunctions: [...t.evidence.requestFunctions] } })) : [],
     attestation,

@@ -173,6 +173,8 @@ describe('GET /api/v1/watch/feed', () => {
     for (const c of checks) {
       expect(c.check!.cells).toHaveLength(30);
       expect(c.check!.reportMatches).toBe(true);
+      // Read from the report as the board reads it: these fixtures fail MUST properties only.
+      expect(c.check!.failureLevel).toBe(c.check!.status === 'mismatch' ? 'must' : null);
       expect(c.check!.reportUrl).toMatch(/^\/api\/v1\/reports\/143\/0xfeed0+\d\/\d+-[0-9a-f]{16}\.json$/);
     }
     const factoryCheck = checks.find((c) => c.found?.source === 'factory')!;

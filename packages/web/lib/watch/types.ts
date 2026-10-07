@@ -1,3 +1,4 @@
+import type { FailureLevel } from '../board/levels';
 import type { StatusCounts, VaultStatus } from '../board/types';
 import type { CheckChangeKind, FeedKind, FeedSource, WatchStage } from './core';
 
@@ -20,6 +21,11 @@ export interface OutcomeJson {
   summary: StatusCounts;
   failed: string[];
   status: VaultStatus;
+  /**
+   * lib/board/levels FailureLevel of the failures, read from the check's report when it is on this server and hashes
+   * to the feed's reportHash; null otherwise, and when nothing failed. Without it the failed ids give a level.
+   */
+  failureLevel: FailureLevel | null;
 }
 
 /** How the watcher first came to a subject: from vaults.json, else from its first detected event. */
@@ -72,6 +78,12 @@ export interface FeedEventJson {
     reportUrl: string | null;
     /** The report file's keccak256 equals the feed's reportHash; null when the file was not read. */
     reportMatches: boolean | null;
+    /**
+     * lib/board/levels FailureLevel of the failures, read from their reasons and forge's logs as the board does
+     * ('rounding' when only round trips failed, each by a rounding-sized difference). Null unless reportMatches is
+     * true, and when nothing failed; then the failed ids alone give a level.
+     */
+    failureLevel: FailureLevel | null;
   } | null;
   attestation: { id: string; txHash: string; txUrl: string; supersedes: string | null } | null;
   change: ChangeJson | null;

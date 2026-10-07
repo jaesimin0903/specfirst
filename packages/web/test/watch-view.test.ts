@@ -55,7 +55,7 @@ describe('labels and sources', () => {
   it('a checked event carries its result, its status word and how the vault was found', () => {
     const first = events.find((e) => e.kind === 'checked' && e.subject.toLowerCase() === MORPHO)!;
     const found = foundOf(vaults[MORPHO], indexFeed(events).firstDetected.get(MORPHO));
-    const j = eventJson(first, ctx, { cells: 'p'.repeat(26) + 'nnnn', reportUrl: '/api/v1/reports/x', reportMatches: true }, found);
+    const j = eventJson(first, ctx, { cells: 'p'.repeat(26) + 'nnnn', reportUrl: '/api/v1/reports/x', reportMatches: true, failureLevel: null }, found);
     expect(j.check).toMatchObject({ status: 'partial', cells: 'p'.repeat(26) + 'nnnn', reportMatches: true, summary: { pass: 26, notApplicable: 4 } });
     expect(j.found).toMatchObject({ source: 'factory', deployBlock: '110930586', factory: { name: 'Morpho VaultV2Factory' } });
     expect(j.vaultPath).toBe(`/v/143/${MORPHO}`);

@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import { cellsOf, type CheckCandidate } from '../board/aggregate';
+import { cellsOf, failedPropertiesOf, type CheckCandidate } from '../board/aggregate';
+import { failureLevelOf } from '../board/levels';
 import { candidateFromText } from '../desk/reportFiles';
 import { runtimeReportPath } from '../desk/vault';
 import { resolveReportPath } from './paths';
-import type { ReportInfo } from './view';
+import { NO_REPORT, type ReportInfo } from './view';
 
 /*
  * The report behind a feed check, read from the checks directory by the feed's reportPath. Report files are
@@ -43,16 +44,21 @@ export async function reportCandidate(reportPath: string, now: number = Date.now
   return entry;
 }
 
-/** Cells, link and hash check for one feed check. The report must be about the same subject. */
+/**
+ * Cells, link, hash check and failure level for one feed check. The report must be about the same subject, and its
+ * failures are read as the board reads them only when it hashes to the feed's reportHash.
+ */
 export async function reportInfo(check: { reportPath: string; reportHash: string }, subject: { chainId: number; address: string }): Promise<ReportInfo> {
   const { candidate, rel } = await reportCandidate(check.reportPath);
-  if (!candidate || !rel) return { cells: null, reportUrl: null, reportMatches: null };
+  if (!candidate || !rel) return NO_REPORT;
   const same = candidate.report.chainId === subject.chainId && candidate.report.address.toLowerCase() === subject.address.toLowerCase();
-  if (!same) return { cells: null, reportUrl: null, reportMatches: false };
+  if (!same) return { ...NO_REPORT, reportMatches: false };
+  const matches = candidate.reportHash.toLowerCase() === check.reportHash.toLowerCase();
   return {
     cells: cellsOf(candidate.report.results),
     reportUrl: runtimeReportPath(rel),
-    reportMatches: candidate.reportHash.toLowerCase() === check.reportHash.toLowerCase(),
+    reportMatches: matches,
+    failureLevel: matches ? failureLevelOf(failedPropertiesOf(candidate.report.results)) : null,
   };
 }
 

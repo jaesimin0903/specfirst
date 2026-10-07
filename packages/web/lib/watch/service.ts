@@ -9,7 +9,7 @@ import { displayWatchDir, isChainId, watchFile } from './paths';
 import { readFeed, readStatus, readVaults, watchedChains } from './read';
 import { reportCandidate, reportInfo } from './reports';
 import type { FeedEventJson, FeedPageJson, VaultWatchJson, WatchStatusJson } from './types';
-import { checksum, countFound, eventJson, foundOf, indexFeed, labelFor, NO_REPORT, pageOf, sourceText, statusJson, type LabelContext } from './view';
+import { checkBefore, checksum, countFound, eventJson, foundOf, indexFeed, labelFor, NO_REPORT, pageOf, sourceText, statusJson, type LabelContext } from './view';
 
 /*
  * Server-side assembly of what the watch pages and API routes return. Files are read at request time (the feed
@@ -66,7 +66,10 @@ export async function watchStatusView(chainId: number, chains: number[], now: Da
   });
 }
 
-/** Feed events as the pages show them; `all` is the whole feed, for names and how each subject was found. */
+/**
+ * Feed events as the pages show them; `all` is the whole feed, for names, how each subject was found and the check a
+ * change of result is against.
+ */
 export async function feedEventsJson(events: readonly FeedEvent[], chainId: number, all: readonly FeedEvent[]): Promise<FeedEventJson[]> {
   const vaults = await readVaults(chainId);
   const ctx = labelContext(all);
@@ -74,8 +77,11 @@ export async function feedEventsJson(events: readonly FeedEvent[], chainId: numb
   return Promise.all(
     events.map(async (e) => {
       const a = e.subject.toLowerCase();
-      const report = e.check ? await reportInfo(e.check, { chainId: e.chainId, address: e.subject }) : NO_REPORT;
-      return eventJson(e, ctx, report, foundOf(vaults.vaults[a], firstDetected.get(a)));
+      const subject = { chainId: e.chainId, address: e.subject };
+      const report = e.check ? await reportInfo(e.check, subject) : NO_REPORT;
+      const prior = checkBefore(e, all);
+      const before = prior ? await reportInfo(prior, subject) : NO_REPORT;
+      return eventJson(e, ctx, report, foundOf(vaults.vaults[a], firstDetected.get(a)), before);
     }),
   );
 }

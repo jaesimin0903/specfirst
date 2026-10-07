@@ -1,9 +1,10 @@
 import { getAddress } from 'viem';
 import { vaultStatusOf, type VaultMeta } from '../board/aggregate';
 import { txUrl as testnetTxUrl } from '../board/attestations';
+import type { FailureLevel } from '../board/levels';
 import { chainName } from '../board/reproduce';
 import type { StatusCounts } from '../board/types';
-import type { FeedChange, FeedEvent, FeedSource, WatchStatus, WatchVault } from './core';
+import type { FeedChange, FeedCheck, FeedEvent, FeedSource, WatchStatus, WatchVault } from './core';
 import type { ChangeJson, FeedEventJson, FoundJson, OutcomeJson, VaultLabelJson, WatchStatusJson } from './types';
 
 /*
@@ -85,13 +86,47 @@ export function sourceText(source: FeedSource | undefined | null, factory?: { na
   return SOURCE_TEXT[source] ?? source;
 }
 
-export function outcomeOf(o: { summary: StatusCounts; failed: string[] }): OutcomeJson {
-  return { summary: { ...o.summary }, failed: [...o.failed], status: vaultStatusOf(o.summary) };
+export function outcomeOf(o: { summary: StatusCounts; failed: string[] }, failureLevel: FailureLevel | null = null): OutcomeJson {
+  return { summary: { ...o.summary }, failed: [...o.failed], status: vaultStatusOf(o.summary), failureLevel };
 }
 
-export function changeJson(c: FeedChange): ChangeJson {
+/** `levels`: of the result before and of the result now, each read from its check's report; null when not read. */
+export function changeJson(c: FeedChange, levels: { from: FailureLevel | null; to: FailureLevel | null } = { from: null, to: null }): ChangeJson {
   if (c.kind === 'price-drop') return { ...c };
-  return { kind: c.kind, from: c.from ? outcomeOf(c.from) : null, to: outcomeOf(c.to) };
+  return { kind: c.kind, from: c.from ? outcomeOf(c.from, levels.from) : null, to: outcomeOf(c.to, levels.to) };
+}
+
+function sameResult(a: { summary: StatusCounts; failed: readonly string[] }, b: { summary: StatusCounts; failed: readonly string[] }): boolean {
+  const s = a.summary;
+  const t = b.summary;
+  return (
+    s.pass === t.pass &&
+    s.fail === t.fail &&
+    s.inconclusive === t.inconclusive &&
+    s.notApplicable === t.notApplicable &&
+    a.failed.length === b.failed.length &&
+    a.failed.every((id, i) => id === b.failed[i])
+  );
+}
+
+/**
+ * The check a change of result is against: the latest check of the same subject before `e` with the result
+ * change.from, so its report can give that result's level. The change's own check (its `checked` event comes
+ * first) is passed over, since an implementation change has the same result on both sides. Null for a first
+ * result, a share value drop, or when the feed holds no such check.
+ */
+export function checkBefore(e: FeedEvent, events: readonly FeedEvent[]): FeedCheck | null {
+  const from = e.change && e.change.kind !== 'price-drop' ? e.change.from : null;
+  if (!from) return null;
+  const a = e.subject.toLowerCase();
+  const own = e.check?.reportHash.toLowerCase();
+  let best: FeedEvent | null = null;
+  for (const x of events) {
+    if (!x.check || x.seq >= e.seq || x.chainId !== e.chainId || x.subject.toLowerCase() !== a) continue;
+    if (x.check.reportHash.toLowerCase() === own || !sameResult(x.check, from)) continue;
+    if (!best || x.seq > best.seq) best = x;
+  }
+  return best?.check ?? null;
 }
 
 /** Lowercase subject -> its first detected event, and the factories that announced subjects. */
@@ -133,11 +168,14 @@ export interface ReportInfo {
   cells: string | null;
   reportUrl: string | null;
   reportMatches: boolean | null;
+  /** The level of the report's failures, as the board reads it; null unless the report hashes to the feed's reportHash. */
+  failureLevel: FailureLevel | null;
 }
 
-export const NO_REPORT: ReportInfo = { cells: null, reportUrl: null, reportMatches: null };
+export const NO_REPORT: ReportInfo = { cells: null, reportUrl: null, reportMatches: null, failureLevel: null };
 
-export function eventJson(e: FeedEvent, ctx: LabelContext, report: ReportInfo = NO_REPORT, found: FoundJson | null = null): FeedEventJson {
+/** `before`: the report of the check a change of result is against (checkBefore). */
+export function eventJson(e: FeedEvent, ctx: LabelContext, report: ReportInfo = NO_REPORT, found: FoundJson | null = null, before: ReportInfo = NO_REPORT): FeedEventJson {
   const subject = checksum(e.subject);
   return {
     seq: e.seq,
@@ -168,7 +206,13 @@ export function eventJson(e: FeedEvent, ctx: LabelContext, report: ReportInfo = 
     attestation: e.attestation
       ? { id: e.attestation.id, txHash: e.attestation.txHash, txUrl: testnetTxUrl(e.attestation.txHash), supersedes: e.attestation.supersedes }
       : null,
-    change: e.change ? changeJson(e.change) : null,
+    change: e.change
+      ? changeJson(e.change, {
+          from: before.failureLevel,
+          // A changed event carries the check whose result is change.to.
+          to: e.change.kind !== 'price-drop' && e.check && sameResult(e.check, e.change.to) ? report.failureLevel : null,
+        })
+      : null,
     alert: e.alert
       ? {
           subscriptionId: e.alert.subscriptionId,
