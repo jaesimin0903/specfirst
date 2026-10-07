@@ -214,8 +214,12 @@ export function explainResult(result: Pick<ReportResultView, 'status' | 'reason'
     case 'asset-transfer-restricted':
       return `Not applicable: the asset restricts transfers, through an allowlist or similar, and both suites need test balances that move freely.${refusalOf(reason)}`;
     case 'missing-precompile': {
-      const at = MISSING_PRECOMPILE.exec(reason)?.[1];
-      return `Not judged: every rejected input reached Monad precompile${at ? ` ${at}` : ''}, which forge's EVM does not have, and its call reverted on the fork only when that precompile gave no answer. These inputs were not judged.`;
+      const m = MISSING_PRECOMPILE.exec(reason);
+      const at = m?.[1] ? ` ${m[1]}` : '';
+      if (m?.[2]) {
+        return `Not judged: ${m[2]} inputs reached Monad precompile${at}, which forge's EVM does not have, and behaved differently once it answered. A vault can tell such a stand-in from the real precompile, so a property with unjudged inputs never counts as a pass; no other input failed.`;
+      }
+      return `Not judged: every rejected input reached Monad precompile${at}, which forge's EVM does not have, and its call reverted on the fork only when that precompile gave no answer. These inputs were not judged.`;
     }
     case 'rpc-error':
       return 'Never exercised: the RPC failed while the fork was reading chain state. This says nothing about the vault; a rerun on another RPC should settle it.';

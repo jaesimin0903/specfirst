@@ -140,8 +140,12 @@ describe('explainResult', () => {
     expect(explainResult({ status: 'pass', runs: 16, reason: belowBoundNote(3) })).toBe(
       'No counterexample in 16 fuzz runs at this block. 3 amounts below the bound were refused; the bound itself was accepted.',
     );
-    expect(explainResult({ status: 'pass', runs: 16, reason: missingPrecompileNote('0x0000000000000000000000000000000000001001', 5) })).toBe(
-      "No counterexample in 16 fuzz runs at this block. 5 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and were not judged.",
+    expect(explainResult({ status: 'fail', reason: `withdraw(5) reverted with selector 0x4e487b71 while maxWithdraw is 9; ${missingPrecompileNote('0x0000000000000000000000000000000000001001', 5)}` })).toBe(
+      "maxWithdraw was 9, but withdraw(5) reverted with 0x4e487b71. EIP-4626: maxWithdraw MUST return the maximum amount of assets withdraw accepts without reverting, and 0 while withdrawals are disabled. 5 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and were not judged.",
+    );
+    // A property with unjudged inputs and no fail is inconclusive, never a pass (FeeLaunderVault).
+    expect(explainResult({ status: 'inconclusive', runs: 16, reason: missingPrecompileNote('0x0000000000000000000000000000000000001001', 2) })).toBe(
+      "Not judged: 2 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and behaved differently once it answered. A vault can tell such a stand-in from the real precompile, so a property with unjudged inputs never counts as a pass; no other input failed.",
     );
     expect(explainResult({ status: 'inconclusive', reason: 'no result in forge output' })).toBe('Inconclusive: forge reported no result for this property.');
     expect(explainResult({ status: 'inconclusive', reason: 'forge status Skipped' })).toBe('Inconclusive: forge ended this property with status Skipped.');
