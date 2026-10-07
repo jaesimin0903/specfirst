@@ -34,6 +34,8 @@ const MISSING_PRECOMPILE = /a vault call reached Monad precompile (0x[0-9a-fA-F]
 const SETUP_PRECOMPILE = /a vault call reached Monad precompile (0x[0-9a-fA-F]{40}) in the setup deposit, which forge lacks, in (\d+) inputs; these inputs were rejected/;
 /** core belowBoundNote. */
 const BELOW_BOUND = /(\d+) amounts below the bound were refused; the bound itself was accepted/;
+/** core unfundedBoundNote. */
+const UNFUNDED_BOUND = /the bound could not be funded in (\d+) inputs; these inputs were discarded/;
 
 /**
  * Custom errors seen in the Monad batch, named by matching the 4-byte selector against candidate signatures.
@@ -166,13 +168,16 @@ function refusalOf(reason: string): string {
 
 /**
  * What the runner counted beside the verdict: refusals below the bound (an sf- property checks that the bound is
- * accepted) and inputs not judged because they needed a missing precompile. Empty when there is neither.
+ * accepted), inputs whose bound could not be funded, and inputs not judged because they needed a missing
+ * precompile. Empty when there is none of these.
  */
 export function countedNotes(reason: string | undefined): string {
   const r = reason ?? '';
   const out: string[] = [];
   const below = BELOW_BOUND.exec(r);
   if (below) out.push(`${below[1]} amounts below the bound were refused; the bound itself was accepted.`);
+  const unfunded = UNFUNDED_BOUND.exec(r);
+  if (unfunded) out.push(`In ${unfunded[1]} inputs the test user could not be given enough of the asset to try the bound itself; those inputs were discarded.`);
   const pre = MISSING_PRECOMPILE.exec(r);
   if (pre?.[2]) out.push(`${pre[2]} inputs reached Monad precompile ${pre[1]}, which forge's EVM does not have, and were not judged.`);
   const setup = SETUP_PRECOMPILE.exec(r);
