@@ -17,6 +17,7 @@ import {
   MISSING_PRECOMPILE_NOTE,
   missingPrecompileNote,
   missingPrecompilesOf,
+  setupPrecompileNote,
   maxZeroNote,
   belowBoundNote,
   summarize,
@@ -521,6 +522,24 @@ describe('inputs not judged because they needed a Monad precompile (missing-prec
     const results = parseStandardForgeJson(setUp, [sfDeposit], { missingPrecompileEvents: `${toFunctionSelector('setUp()')} ${STAKING}` })!;
     expect(results[0]).toMatchObject({ status: 'not_applicable' });
     expect(skipReasonOf(results)).toBe('setup-reverted');
+  });
+
+  it('inputs rejected in a setup deposit count as rejects: a pass stays a pass; out of inputs they are named; with unjudged ones they can fill the limit', () => {
+    const setUpKey = 'test_sf_maxWithdraw_honored(uint256,uint256,uint256)';
+    const sfWithdraw = SPECFIRST_ERC4626_PROPERTIES[2]!;
+    const pass = { status: 'Success', reason: null, counterexample: null, kind: { Fuzz: { runs: 16 } } };
+    const [p] = parseStandardForgeJson(doc({ [setUpKey]: pass }), [sfWithdraw], { setupPrecompileEvents: lines(setUpKey, 40) })!;
+    expect(p).toMatchObject({ status: 'pass', runs: 16 });
+    expect(p!.reason).toBeUndefined();
+    const [mixed] = parseStandardForgeJson(doc({ [setUpKey]: rejected }), [sfWithdraw], { setupPrecompileEvents: lines(setUpKey, 3923) })!;
+    expect(mixed!.reason).toBe(`\`vm.assume\` rejected too many inputs (4096 allowed); ${setupPrecompileNote(STAKING, 3923)}`);
+    expect(setupPrecompileNote(STAKING, 3923)).toBe(`a vault call reached Monad precompile ${STAKING} in the setup deposit, which forge lacks, in 3923 inputs; these inputs were rejected`);
+    const [full] = parseStandardForgeJson(doc({ [setUpKey]: rejected }), [sfWithdraw], {
+      setupPrecompileEvents: lines(setUpKey, 4000),
+      missingPrecompileEvents: lines(setUpKey, 96),
+    })!;
+    expect(full).toMatchObject({ status: 'inconclusive', reason: missingPrecompileNote(STAKING) });
+    expect(skipReasonOf([mixed!])).toBe('missing-precompile');
   });
 
   it('missingPrecompilesOf: one line per input, counted per test with the first precompile; unknown selectors and malformed lines ignored', () => {

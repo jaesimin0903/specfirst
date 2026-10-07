@@ -146,15 +146,43 @@ contract ForkGaps is Test {
         assertEq(SfForkGaps.precompileCause(address(v), address(0xA11CE), data, ret), address(0));
     }
     function test_causeIsNoneWhenThePrecompileDoesNotMatter() public {
-        // Touches 0x1001 (call or staticcall) and reverts whatever it answers: the vault's own revert.
-        bytes memory data = abi.encodeCall(CallThenRevert.callThenRevert, (address(0x1001), hex"3a61584e"));
+        // Touches 0x1001 or 0x1000 and reverts with the same data whatever they answer: the vault's own revert.
+        bytes memory data = abi.encodeCall(CallThenRevert.callThenRevertWithData, (address(0x1001), hex"3a61584e"));
         (bool ok, bytes memory ret) = address(c).call(data);
         assertFalse(ok);
         assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
-        data = abi.encodeCall(CallThenRevert.staticThenRevert, (address(0x1000), hex"757991a8"));
+        data = abi.encodeCall(CallThenRevert.callThenRevertWithData, (address(0x1000), abi.encodeWithSignature("getDelegations(address,uint64)", address(1), uint64(0))));
         (ok, ret) = address(c).call(data);
         assertFalse(ok);
         assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
+    }
+    function test_causeIsThePrecompileForAnEmptyRevert() public {
+        // An empty revert after a precompile call is never judged: an honest vault that decodes the answer looks
+        // like this on the fork, whatever the mock answers.
+        bytes memory data = abi.encodeCall(CallThenRevert.callThenRevert, (address(0x1001), hex"3a61584e"));
+        (bool ok, bytes memory ret) = address(c).call(data);
+        assertFalse(ok);
+        assertEq(ret.length, 0);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0x1001));
+        data = abi.encodeCall(CallThenRevert.staticThenRevert, (address(0x1000), hex"757991a8"));
+        (ok, ret) = address(c).call(data);
+        assertFalse(ok);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0x1000));
+    }
+    function test_causeIsTheStakingPrecompileForADynamicAnswer() public {
+        // HonestDynVault's shape: getDelegations (bool, uint64, uint64[]) then delegate. The ABI-shaped mock lets it
+        // through, so it is not judged on the fork's empty revert.
+        bytes memory data = abi.encodeCall(CallThenRevert.stakeHonestly, ());
+        (bool ok, bytes memory ret) = address(c).call(data);
+        assertFalse(ok);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0x1000));
+        // Non-empty on the fork (the vault's own Nope() when the answer does not decode): only an answer of the
+        // right shape lets it through and shows that the revert depends on the precompile.
+        data = abi.encodeCall(CallThenRevert.stakeOrNope, ());
+        (ok, ret) = address(c).call(data);
+        assertFalse(ok);
+        assertEq(bytes4(ret), CallThenRevert.Nope.selector);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0x1000));
     }
     function test_causeIsNoneWithoutAPrecompile() public {
         bytes memory data = abi.encodeCall(CallThenRevert.callThenRevert, (address(0xdead), hex""));

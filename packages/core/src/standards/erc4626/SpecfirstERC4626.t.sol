@@ -134,9 +134,10 @@ contract SpecfirstERC4626Test is ERC4626Test {
                 // EIP-4626: a deposit up to a positive maxDeposit must not revert. Upstream discards the input; so
                 // do we, but the discard is recorded so a vault cannot hide the violation behind rejected inputs.
                 // A revert under a maxDeposit of 0 is not recorded: 0 honestly says "not allowed". A revert that
-                // needed a Monad precompile the fork lacks is recorded as that instead: the input was not judged.
+                // reached a Monad precompile the fork lacks and cannot be judged is recorded as that instead; the
+                // property never ran on this input, so the runner counts it as a rejected input.
                 address p = SfForkGaps.precompileCause(_vault_, user, abi.encodeCall(IERC4626.deposit, (shares, user)), ret);
-                if (p != address(0)) SfEvents.missingPrecompile(p);
+                if (p != address(0)) SfEvents.setupPrecompile(p);
                 else if (advertised > 0 && shares > 0 && shares <= advertised) _recordDepositRevert();
                 vm.assume(false);
             }

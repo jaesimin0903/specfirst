@@ -238,6 +238,7 @@ async function runForgeSuite(i: {
   const maxZeroFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.max-zero.log`);
   const belowBoundFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.below-bound.log`);
   const precompileFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.missing-precompile.log`);
+  const setupPrecompileFile = path.join(i.ws.dir, EVENTS_DIR, `${runId}.setup-precompile.log`);
   const args = [
     'test',
     ...i.select,
@@ -283,8 +284,9 @@ async function runForgeSuite(i: {
     const maxZeroEvents = await readFile(maxZeroFile, 'utf8').catch(() => '');
     const belowBoundEvents = await readFile(belowBoundFile, 'utf8').catch(() => '');
     const missingPrecompileEvents = await readFile(precompileFile, 'utf8').catch(() => '');
+    const setupPrecompileEvents = await readFile(setupPrecompileFile, 'utf8').catch(() => '');
     const results = doc
-      ? parseStandardForgeJson(JSON.stringify(doc), i.properties, { depositRevertEvents: events, maxZeroEvents, belowBoundEvents, missingPrecompileEvents })
+      ? parseStandardForgeJson(JSON.stringify(doc), i.properties, { depositRevertEvents: events, maxZeroEvents, belowBoundEvents, missingPrecompileEvents, setupPrecompileEvents })
       : null;
     if (!doc || !results) {
       const out = mask([String(proc.stderr ?? '').trim(), stdout.trim()].filter(Boolean).join('\n'));
@@ -297,6 +299,7 @@ async function runForgeSuite(i: {
     await rm(maxZeroFile, { force: true });
     await rm(belowBoundFile, { force: true });
     await rm(precompileFile, { force: true });
+    await rm(setupPrecompileFile, { force: true });
   }
 }
 

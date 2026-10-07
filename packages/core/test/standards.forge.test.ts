@@ -125,6 +125,8 @@ describe.skipIf(SKIP)('ERC-4626 harness with forge, offline (pinned cache presen
       ['test_causeIsNoneOffMonad', 'Success'],
       ['test_causeIsNoneWhenThePrecompileDoesNotMatter', 'Success'],
       ['test_causeIsNoneWithoutAPrecompile', 'Success'],
+      ['test_causeIsThePrecompileForAnEmptyRevert', 'Success'],
+      ['test_causeIsTheStakingPrecompileForADynamicAnswer', 'Success'],
       ['test_causeIsTheStakingPrecompileForAStakingDeposit', 'Success'],
       ['test_eventsRefuseACallFromInsideAVault', 'Success'],
       ['test_gapsLeaveOutAPrecompileThisEvmHas', 'Success'],
@@ -196,6 +198,8 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
       'ReenterVault',
       'LyingMintVault',
       'FeeLaunderVault',
+      'HonestDynVault',
+      'ThresholdPrecompileVault',
     ]) {
       const art = JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${name}.json`), 'utf8')) as { deployedBytecode: { object: string } };
       code[name] = art.deployedBytecode.object;
@@ -233,6 +237,8 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000096', code.ReenterVault]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000097', code.LyingMintVault]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000098', code.FeeLaunderVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000099', code.HonestDynVault]);
+    await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000072', code.ThresholdPrecompileVault]);
     await rpc('anvil_mine', ['0x1']);
   });
   afterAll(async () => {
@@ -389,6 +395,22 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     expect(plain.results.find((r) => r.id === 'sf-maxWithdraw-honored')!.status).toBe('fail');
   });
 
+  it('HonestDynVault (reads a dynamic answer from the staking precompile, works on Monad): no fail, the deposit inputs are not judged', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000099');
+    expect(report.summary.fail).toBe(0);
+    const x = report.results.find((r) => r.id === 'sf-maxDeposit-honored')!;
+    expect(x.status).toBe('inconclusive');
+    expect(x.reason).toMatch(/^a vault call reached Monad precompile 0x0000000000000000000000000000000000001000, which forge lacks/);
+    expect(standardCheckExitCode(report.summary)).toBe(17);
+  });
+
+  it('ThresholdPrecompileVault, full check: inputs rejected in the setup deposit do not touch the upstream properties, which pass', async () => {
+    const report = await check('0x5f00000000000000000000000000000000000072');
+    expect(report.summary.fail).toBe(0);
+    expect(report.results.slice(0, 26).filter((r) => r.status !== 'pass').map((r) => r.id)).toEqual([]);
+    expect(report.results.slice(0, 26).some((r) => r.reason !== undefined)).toBe(false);
+  });
+
   it('WindowVault (refuses 500,000 to 1,000,000 tokens, accepts the bound): sf-maxDeposit passes and counts the refusals below the bound', async () => {
     const report = await check('0x5F00000000000000000000000000000000000095');
     const x = report.results.find((r) => r.id === 'sf-maxDeposit-honored')!;
@@ -524,6 +546,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
       maxZeroEvents: await events('max-zero'),
       belowBoundEvents: await events('below-bound'),
       missingPrecompileEvents: await events('missing-precompile'),
+      setupPrecompileEvents: await events('setup-precompile'),
     });
     if (!results) throw new Error(String(p.stderr));
     return new Map(results.map((x) => [x.id, x]));

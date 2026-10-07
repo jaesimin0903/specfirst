@@ -322,6 +322,7 @@ export {
   missingPrecompilesOf,
   belowBoundNote,
   missingPrecompileNote,
+  setupPrecompileNote,
   maxZeroNote,
   implementationIdentitySchema,
   STANDARD_CHECK_SCHEMA_VERSION,

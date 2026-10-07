@@ -106,12 +106,48 @@ contract FalseToken {
     function transfer(address, uint256) external pure returns (bool) { return false; }
 }
 
+interface IStakingDyn {
+    function getDelegations(address delegator, uint64 startValId) external returns (bool isDone, uint64 nextValId, uint64[] memory valIds);
+    function delegate(uint64 validatorId) external payable returns (bool);
+}
+
 /// Calls one address, then always reverts: what SfForkGaps sees in a vault call that met a precompile.
 contract CallThenRevert {
     function callThenRevert(address target, bytes calldata data) external {
         (bool ok,) = target.call(data);
         ok;
         revert();
+    }
+
+    error Nope();
+
+    /// Calls one address, then reverts with data (Nope()) whatever it answered: the vault's own revert.
+    function callThenRevertWithData(address target, bytes calldata data) external {
+        (bool ok,) = target.call(data);
+        ok;
+        revert Nope();
+    }
+
+    /// Reads delegations from the staking precompile (a dynamic answer) and delegates: honest, and on a fork it
+    /// reverts with no data because the empty answer does not decode.
+    function stakeHonestly() external {
+        (,, uint64[] memory ids) = IStakingDyn(address(0x1000)).getDelegations(address(this), 0);
+        require(IStakingDyn(address(0x1000)).delegate(ids.length > 0 ? ids[0] : 1));
+    }
+
+    /// The same, but an answer that is not ABI-shaped (the fork's empty one, or eight words of 1) becomes the
+    /// vault's own error Nope(): only an answer of the right shape lets it through, so the mock must give one.
+    function stakeOrNope() external {
+        (bool ok, bytes memory r) = address(0x1000).call(abi.encodeCall(IStakingDyn.getDelegations, (address(this), 0)));
+        uint256 offset;
+        if (r.length >= 96) {
+            assembly {
+                offset := mload(add(r, 96))
+            }
+        }
+        if (!ok || offset != 0x60) revert Nope();
+        (,, uint64[] memory ids) = abi.decode(r, (bool, uint64, uint64[]));
+        require(IStakingDyn(address(0x1000)).delegate(ids.length > 0 ? ids[0] : 1));
     }
 
     function staticThenRevert(address target, bytes calldata data) external view {

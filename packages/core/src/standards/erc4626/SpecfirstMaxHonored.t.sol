@@ -63,14 +63,17 @@ library SfForkGaps {
     }
 
     /**
-     * A call of `caller` to `target` reverted with `ret`. Returns the missing precompile it depends on, or 0 when
-     * the revert is the vault's own. Two reruns, inside a state snapshot that is always restored:
-     * 1. with state diffs recorded, to see whether the call reaches a missing precompile at all;
-     * 2. when it does, with every missing precompile answering plausibly (vm.mockCall over a byte of code): a
-     *    vault that only touches a precompile and reverts anyway (an ignored staticcall, a fee bug) reverts
-     *    the same way again and is judged on that revert; one whose call goes through, or reverts differently,
-     *    is not judged. That second outcome can be staged (a vault sees the byte of code), so the runner never
-     *    passes a property with an unjudged input; the mocked rerun only keeps real fails.
+     * A call of `caller` to `target` reverted with `ret`. Returns the missing precompile it reached when the input
+     * cannot be judged on that revert, or 0 when the revert is the vault's own. Inside a state snapshot that is
+     * always restored, the call runs again:
+     * 1. with state diffs recorded, to see whether it reaches a missing precompile at all; when it does not, the
+     *    revert is the vault's own;
+     * 2. when it does, it is judged only if the revert carries data and stays exactly the same while every
+     *    missing precompile answers, first with typical values and then with empty or false ones (vm.mockCall
+     *    with ABI-shaped answers per function, over a byte of code). An empty revert, a call that then goes
+     *    through or a revert that changes leaves the input unjudged: an honest vault that decodes a precompile's
+     *    answer reverts with no data on the fork, and a vault can stage a difference (it sees the byte of code),
+     *    which is why the runner never passes a property with an unjudged input.
      * Runs only after a revert. forge 1.5.1 keeps state diff recording on after stopAndReturnStateDiff for the
      * rest of the fuzz run, and every caller here either discards the input or ends the run soon after, so the
      * properties do not pay for it.
@@ -87,14 +90,77 @@ library SfForkGaps {
         if (reached != address(0)) {
             for (uint256 i = 0; i < gaps.length; i++) {
                 VM.etch(gaps[i], hex"00");
-                VM.mockCall(gaps[i], bytes(""), _plausibleAnswer(gaps[i]));
             }
-            VM.prank(caller);
-            (bool okMocked, bytes memory retMocked) = target.call(data);
-            VM.clearMockedCalls();
-            if (okMocked || keccak256(retMocked) != keccak256(ret)) p = reached;
+            if (ret.length == 0 || !_sameRevert(target, caller, data, ret, gaps, true) || !_sameRevert(target, caller, data, ret, gaps, false)) {
+                p = reached;
+            }
         }
         VM.revertToStateAndDelete(snap);
+    }
+
+    /// The call again with every missing precompile answering (`typical` or empty and false values); true when it
+    /// reverts with exactly `ret`.
+    function _sameRevert(address target, address caller, bytes memory data, bytes memory ret, address[] memory gaps, bool typical) private returns (bool) {
+        for (uint256 i = 0; i < gaps.length; i++) {
+            _mockAnswers(gaps[i], typical);
+        }
+        VM.prank(caller);
+        (bool ok, bytes memory again) = target.call(data);
+        VM.clearMockedCalls();
+        return !ok && keccak256(again) == keccak256(ret);
+    }
+
+    /// ABI-shaped answers per function. P256: a valid signature (1), or the empty answer of an invalid one. The
+    /// reserve balance check: false or true. The staking precompile (docs.monad.xyz, "Staking API"): every
+    /// function with its return types, `typical` giving success, one id or delegator and non-zero amounts, the
+    /// other failure, empty lists and zeros; list functions answer isDone true either way.
+    function _mockAnswers(address p, bool typical) private {
+        if (p == address(0x0100)) {
+            VM.mockCall(p, bytes(""), typical ? abi.encode(uint256(1)) : bytes(""));
+            return;
+        }
+        if (p == address(0x1001)) {
+            VM.mockCall(p, abi.encodeWithSignature("dippedIntoReserve()"), abi.encode(!typical));
+            return;
+        }
+        uint256 amount = typical ? 1e24 : 0;
+        uint64 id = typical ? 1 : 0;
+        uint64[] memory ids = new uint64[](typical ? 1 : 0);
+        address[] memory delegators = new address[](typical ? 1 : 0);
+        if (typical) {
+            ids[0] = 1;
+            delegators[0] = address(1);
+        }
+        _mock(p, "addValidator(bytes,bytes,bytes)", abi.encode(id));
+        _mock(p, "delegate(uint64)", abi.encode(typical));
+        _mock(p, "undelegate(uint64,uint256,uint8)", abi.encode(typical));
+        _mock(p, "withdraw(uint64,uint8)", abi.encode(typical));
+        _mock(p, "compound(uint64)", abi.encode(typical));
+        _mock(p, "claimRewards(uint64)", abi.encode(typical));
+        _mock(p, "changeCommission(uint64,uint256)", abi.encode(typical));
+        _mock(p, "externalReward(uint64)", abi.encode(typical));
+        // getValidator: address, uint64, eight uint256, then two empty bytes (offsets 0x180 and 0x1a0, length 0).
+        _mock(
+            p,
+            "getValidator(uint64)",
+            bytes.concat(
+                abi.encode(address(uint160(id)), uint64(0), amount, amount / 1e6, uint256(0), uint256(0)),
+                abi.encode(amount, uint256(0), amount, uint256(0), uint256(0x180), uint256(0x1a0), uint256(0), uint256(0))
+            )
+        );
+        _mock(p, "getDelegator(uint64,address)", abi.encode(amount, amount / 1e6, uint256(0), uint256(0), uint256(0), uint64(0), uint64(0)));
+        _mock(p, "getWithdrawalRequest(uint64,address,uint8)", abi.encode(amount, amount / 1e6, uint64(0)));
+        _mock(p, "getConsensusValidatorSet(uint32)", abi.encode(true, uint32(0), ids));
+        _mock(p, "getSnapshotValidatorSet(uint32)", abi.encode(true, uint32(0), ids));
+        _mock(p, "getExecutionValidatorSet(uint32)", abi.encode(true, uint32(0), ids));
+        _mock(p, "getDelegations(address,uint64)", abi.encode(true, uint64(0), ids));
+        _mock(p, "getDelegators(uint64,address)", abi.encode(true, address(0), delegators));
+        _mock(p, "getEpoch()", abi.encode(uint64(typical ? 100 : 0), false));
+        _mock(p, "getProposerValId()", abi.encode(id));
+    }
+
+    function _mock(address p, string memory signature, bytes memory answer) private {
+        VM.mockCall(p, abi.encodeWithSignature(signature), answer);
     }
 
     /// No code, and an input the real precompile answers with data (or refuses) succeeds with no data: the
@@ -114,15 +180,6 @@ library SfForkGaps {
         if (p == address(0x1000)) return hex"757991a8";
         if (p == address(0x1001)) return hex"3a61584e";
         return "";
-    }
-
-    /// What the mocked precompile answers: P256 a valid signature (1); the reserve balance check false (not
-    /// dipped into reserve); the staking precompile eight words of 1, which decode as true, 1 or address 1 for
-    /// the static return shapes of its functions (delegate's bool, getEpoch's uint64 and bool, and so on).
-    function _plausibleAnswer(address p) private pure returns (bytes memory) {
-        if (p == address(0x0100)) return abi.encode(uint256(1));
-        if (p == address(0x1001)) return abi.encode(false);
-        return abi.encode(uint256(1), uint256(1), uint256(1), uint256(1), uint256(1), uint256(1), uint256(1), uint256(1));
     }
 }
 
@@ -147,9 +204,16 @@ library SfEvents {
         VM.writeLine(string.concat("sf-events/", runId, ".", kind, ".log"), string.concat(VM.toString(abi.encodePacked(msg.sig)), extra));
     }
 
-    /// An input not judged because its vault call needed a Monad precompile this fork lacks (SfForkGaps).
+    /// An input of the property not judged because its vault call reached a Monad precompile this fork lacks
+    /// and could not be judged on its revert (SfForkGaps.precompileCause).
     function missingPrecompile(address p) internal {
         write("missing-precompile", string.concat(" ", VM.toString(p)));
+    }
+
+    /// The same in a setup deposit (setUpVault, or the deposit that gives shares): the property never ran on
+    /// that input, so the runner counts it as a rejected input, not as an unjudged one.
+    function setupPrecompile(address p) internal {
+        write("setup-precompile", string.concat(" ", VM.toString(p)));
     }
 }
 
@@ -299,13 +363,16 @@ contract SpecfirstMaxHonored is Test {
     function _callVault(address u, bytes memory data) internal returns (bool ok, bytes memory ret) {
         vm.prank(u);
         (ok, ret) = vault.call(data);
-        if (!ok) _discardIfPrecompile(u, data, ret);
+        if (!ok) _discardIfPrecompile(u, data, ret, false);
     }
 
-    function _discardIfPrecompile(address u, bytes memory data, bytes memory ret) internal {
+    /// Discards the input when the revert cannot be judged (SfForkGaps.precompileCause), recording it as an
+    /// unjudged input of the property, or as a rejected one when it happened in a setup deposit.
+    function _discardIfPrecompile(address u, bytes memory data, bytes memory ret, bool setup) internal {
         address p = SfForkGaps.precompileCause(vault, u, data, ret);
         if (p == address(0)) return;
-        SfEvents.missingPrecompile(p);
+        if (setup) SfEvents.setupPrecompile(p);
+        else SfEvents.missingPrecompile(p);
         vm.assume(false);
     }
 
@@ -378,7 +445,7 @@ contract SpecfirstMaxHonored is Test {
     /// maxWithdraw and maxRedeem looked at. When that amount is refused, one whole token (or the max when it is
     /// smaller) is tried, so a vault that only refuses large deposits (one that stakes them through a
     /// precompile the fork lacks, say) still has its withdraw and redeem judged. When neither goes through the
-    /// input is discarded, and recorded when the refusal needed a missing precompile.
+    /// input is discarded, and recorded as a setup reject when the refusal reached a missing precompile.
     function _holdShares(address u, uint256 amount) internal {
         uint256 maxDep = _read(abi.encodeCall(ISfVault.maxDeposit, (u)));
         uint256 hi = maxDep > 0 && maxDep < cap ? maxDep : cap;
@@ -391,7 +458,7 @@ contract SpecfirstMaxHonored is Test {
             (ran, ok, ret) = _tryDeposit(u, a);
             if (ok) return;
         }
-        if (ran) _discardIfPrecompile(u, abi.encodeCall(ISfVault.deposit, (a, u)), ret);
+        if (ran) _discardIfPrecompile(u, abi.encodeCall(ISfVault.deposit, (a, u)), ret, true);
         vm.assume(false);
     }
 

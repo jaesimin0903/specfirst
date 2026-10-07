@@ -358,6 +358,8 @@ export interface ParseStandardOptions {
   belowBoundEvents?: string;
   /** Content of the missing-precompile event file both suites write: "<selector> <precompile>" per input not judged. */
   missingPrecompileEvents?: string;
+  /** Content of the setup-precompile event file: the same per input discarded in a setup deposit (a rejected input). */
+  setupPrecompileEvents?: string;
 }
 
 /** Note on an sf- property whose drawn amounts below the bound min(max, cap) were refused while the bound itself went through. */
@@ -373,6 +375,11 @@ export function missingPrecompileNote(precompile: string, n?: number): string {
   return n === undefined
     ? `${MISSING_PRECOMPILE_NOTE} ${precompile}, which forge lacks; these inputs were not judged`
     : `${MISSING_PRECOMPILE_NOTE} ${precompile}, which forge lacks, in ${n} inputs; these inputs were not judged`;
+}
+
+/** Note on a property that ran out of inputs, `n` of which were rejected in a setup deposit that reached a missing precompile. */
+export function setupPrecompileNote(precompile: string, n: number): string {
+  return `${MISSING_PRECOMPILE_NOTE} ${precompile} in the setup deposit, which forge lacks, in ${n} inputs; these inputs were rejected`;
 }
 
 /**
@@ -396,24 +403,38 @@ export function missingPrecompilesOf(events: string, testKeys: Iterable<string>)
 }
 
 /**
- * Inputs not judged because their vault call needed a missing precompile. A property with any such input is
- * never a pass: a vault can tell a mocked precompile from the real one (code at the address, gas, the answer),
- * so an unjudged input may be exactly the one that would have failed. A fail keeps its status and
- * counterexample (another input failed) and gets the count; a pass becomes inconclusive with the count; a
- * property that ran out of inputs with at least as many of them as forge's reject limit had no other rejected
- * input and is inconclusive with missingPrecompileNote alone. Applied to forge's own reason, before the other
- * notes are added.
+ * Inputs whose vault call reached a missing precompile and could not be judged. Unjudged inputs of the property
+ * itself (`unjudged`) rule out a pass: a vault can tell a mocked precompile from the real one (code at the address,
+ * gas, the answer), so such an input may be exactly the one that would have failed. A fail keeps its status and
+ * counterexample (another input failed) and gets the count; a pass becomes inconclusive with the count. Inputs
+ * discarded in a setup deposit (`setup`) never ran the property: they are rejected inputs, named in the reason of
+ * a property that ran out of inputs and otherwise not counted. A property whose rejected inputs were all of these
+ * kinds (at least forge's reject limit) is inconclusive with missingPrecompileNote alone. Applied to forge's own
+ * reason, before the other notes are added.
  */
-function withMissingPrecompile(r: StandardPropertyResult, ev: { count: number; precompile: string } | undefined): StandardPropertyResult {
-  if (!ev) return r;
+function withMissingPrecompile(
+  r: StandardPropertyResult,
+  unjudged: { count: number; precompile: string } | undefined,
+  setup: { count: number; precompile: string } | undefined,
+): StandardPropertyResult {
+  if (!unjudged && !setup) return r;
   const runs = r.runs !== undefined ? { runs: r.runs } : {};
+  const base = { id: r.id, test: r.test, description: r.description };
   const limit = /^`vm\.assume` rejected too many inputs \((\d+) allowed\)$/.exec(r.reason ?? '');
-  if (r.status === 'inconclusive' && limit && ev.count >= Number(limit[1])) {
-    return { id: r.id, test: r.test, description: r.description, status: 'inconclusive', ...runs, reason: missingPrecompileNote(ev.precompile) };
+  const total = (unjudged?.count ?? 0) + (setup?.count ?? 0);
+  if (r.status === 'inconclusive' && limit && total >= Number(limit[1])) {
+    return { ...base, status: 'inconclusive', ...runs, reason: missingPrecompileNote((unjudged ?? setup)!.precompile) };
   }
-  const note = missingPrecompileNote(ev.precompile, ev.count);
-  if (r.status === 'pass') return { id: r.id, test: r.test, description: r.description, status: 'inconclusive', ...runs, reason: note };
-  return { ...r, reason: r.reason ? `${r.reason}; ${note}` : note };
+  let out = r;
+  if (unjudged) {
+    const note = missingPrecompileNote(unjudged.precompile, unjudged.count);
+    out = out.status === 'pass' ? { ...base, status: 'inconclusive', ...runs, reason: note } : { ...out, reason: out.reason ? `${out.reason}; ${note}` : note };
+  }
+  if (setup && limit && out.status === 'inconclusive') {
+    const note = setupPrecompileNote(setup.precompile, setup.count);
+    out = { ...out, reason: `${out.reason}; ${note}` };
+  }
+  return out;
 }
 
 function withBelowBoundNote(r: StandardPropertyResult, n: number | undefined): StandardPropertyResult {
@@ -470,6 +491,7 @@ export function parseStandardForgeJson(
   const maxZero = opts.maxZeroEvents ? depositRevertCounts(opts.maxZeroEvents, keys) : new Map<string, number>();
   const belowBound = opts.belowBoundEvents ? depositRevertCounts(opts.belowBoundEvents, keys) : new Map<string, number>();
   const precompiles = opts.missingPrecompileEvents ? missingPrecompilesOf(opts.missingPrecompileEvents, keys) : new Map<string, { count: number; precompile: string }>();
+  const setupPrecompiles = opts.setupPrecompileEvents ? missingPrecompilesOf(opts.setupPrecompileEvents, keys) : new Map<string, { count: number; precompile: string }>();
   return [...properties, ...extra].map((p): StandardPropertyResult => {
     const base = { id: p.id, test: p.test, description: p.description };
     const r = byTest.get(p.test);
@@ -485,7 +507,7 @@ export function parseStandardForgeJson(
     }
     if (!r) return { ...base, status: 'inconclusive', reason: 'no result in forge output' };
     // Each rule reads forge's own reason first, so the order matters: max-zero, then the precompile inputs, then the notes.
-    const judged = withMissingPrecompile(withMaxZero(classify(p, r), maxZero.get(p.test)), precompiles.get(p.test));
+    const judged = withMissingPrecompile(withMaxZero(classify(p, r), maxZero.get(p.test)), precompiles.get(p.test), setupPrecompiles.get(p.test));
     return withBelowBoundNote(withDepositNote(judged, deposits.get(p.test)), belowBound.get(p.test));
   });
 }

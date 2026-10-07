@@ -561,3 +561,19 @@ contract FeeLaunderVault is FeeVault {
         return super.withdraw(a, r, o);
     }
 }
+
+interface IMonadStakingDyn {
+    function getDelegations(address delegator, uint64 startValId) external returns (bool isDone, uint64 nextValId, uint64[] memory valIds);
+    function delegate(uint64 validatorId) external payable returns (bool);
+}
+
+/// Third review (2026-10-07): an honest liquid staking shape. Each deposit reads its delegations from Monad's
+/// staking precompile (a dynamic return) and delegates to the first validator. On Monad it works; on the fork the
+/// empty answer fails to decode and the deposit reverts with no data. It must never fail.
+contract HonestDynVault is VaultBase {
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        s = super.deposit(a, r);
+        (,, uint64[] memory ids) = IMonadStakingDyn(MONAD_STAKING).getDelegations(address(this), 0);
+        require(IMonadStakingDyn(MONAD_STAKING).delegate(ids.length > 0 ? ids[0] : 1));
+    }
+}
