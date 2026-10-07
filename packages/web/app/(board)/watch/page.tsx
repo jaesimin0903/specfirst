@@ -48,6 +48,7 @@ export default async function WatchPage({ searchParams }: { searchParams: Promis
         <p className="sw-links">
           <a href="/watch/inbox">Your alerts inbox</a>
           <a href="/watch/demo-hook">Demo webhook receiver</a>
+          <a href="/watch/gate">Allocation gate demo</a>
         </p>
       </header>
       <WatchLive initialStatus={status} initialFeed={feed} />

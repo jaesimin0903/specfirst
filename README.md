@@ -6,7 +6,7 @@ Plan of record: see docs/plan.md. Status: week 1, scaffolding.
 
 ## Keys
 
-Commands that send transactions read `DEPLOYER_PRIVATE_KEY` and `ISSUER_PRIVATE_KEY` (and `REQUESTER_PRIVATE_KEY` for `desk request` and the test subscriber of `subs`, `WATCH_ISSUER_PRIVATE_KEY` for `watch`) from the environment; they do not read `.env` on their own. Copy `.env.example` to `.env`, fill it in, and run with Node's env loader:
+Commands that send transactions read `DEPLOYER_PRIVATE_KEY` and `ISSUER_PRIVATE_KEY` (and `REQUESTER_PRIVATE_KEY` for `desk request` and the test subscriber of `subs`, `WATCH_ISSUER_PRIVATE_KEY` for `watch`, `KEEPER_PRIVATE_KEY` for `watch demo gate keep`) from the environment; they do not read `.env` on their own. Copy `.env.example` to `.env`, fill it in, and run with Node's env loader:
 
 ```
 node --env-file=.env packages/cli/dist/index.js <command>
@@ -26,7 +26,7 @@ node --env-file=.env packages/cli/dist/index.js <command>
 | 15 | `run` | a run or the total spend passed its cap |
 | 16, 17 | `check` | a property failed; nothing failed but the check is incomplete |
 | 18 | `desk`, `worker` | a desk action failed or was refused |
-| 19 | `watch` | the watcher cannot start, or a `--once` pass cannot read the subject chain |
+| 19 | `watch` | the watcher cannot start, or a `--once` pass cannot read the subject chain; a `watch demo` or `watch demo gate` action failed or was refused |
 | 20 | `subs` | a subscriptions action failed or was refused |
 
 Each is a `*_EXIT_CODE` constant of `@specfirst/core`; `packages/core/test/exit-codes.test.ts` keeps them distinct. 1 is anything else.
@@ -112,6 +112,20 @@ node --env-file=.env packages/cli/dist/index.js watch demo set-broken <vault> on
 node --env-file=.env packages/cli/dist/index.js watch demo loss <vault> 42                        # 0.42% of its assets away: price-drop seen, confirmed, alerted, re-checked
 ```
 
+### Allocation gate: a contract that reads the attestations
+
+`AllocationGate` (`packages/contracts/src/demo/`, ADR 0007) answers "who reads these attestations?" on chain. Its owner can move the gate's idle asset into a vault only while the registry's latest attestation of that vault is compliant (with the gate's suite when it pins one, `--suite-hash`), fresh (`--max-age`, default a day), from a current issuer, about the code at the vault's address and of a block that exists, and only for at least `--min-shares` (default: the vault's previewDeposit less 1%). Once the latest attestation fails, is revoked, or its issuer is removed, anyone can call `exit` and the gate redeems its shares; the owner can exit on any verdict (`--as-owner` in the CLI). A stale but compliant attestation stops new money and opens no exit to others. The watcher does not attest unchanged re-checks, so a day after a vault's last attested change allocate needs a new attestation: a desk request, or `specfirst check` and `specfirst cert attest`. A vault that moves nothing on exit ends in an `ExitFailed` event instead of a revert; each vault call gets a fixed gas stipend set at deployment (`--vault-call-gas` 2,000,000 and `--vault-view-gas` 300,000 by default, sized for Monad's cold access prices), so an exit needs a gas limit of about 2.2M, and Monad charges the limit. Exit counts only assets that arrive; `watch demo gate resync <vault>` lets the owner set the books to the vault's balance after a vault misreported. The keeper signs with its own key (`--key-env`, default `KEEPER_PRIVATE_KEY`, else `REQUESTER_PRIVATE_KEY`), never the owner's, since exit is open to anyone; it backs off a vault whose exit would move nothing, took back only dust or failed on chain, from a minute doubling to an hour. Removing an issuer opens exit on every vault it attested: rotate a key by attesting with the new one first. The gate trusts the registry's issuers, nothing more (ADR 0005). `watch demo gate` signs with `DEPLOYER_PRIVATE_KEY` (the owner) and takes `--network monad-testnet|anvil`, `--registry-attest` and, for `keep`, `--once` and `--poll` of `watch`; the gate address comes from `--gate` or `SPECFIRST_GATE_<chainId>`.
+
+```
+node --env-file=.env packages/cli/dist/index.js watch demo gate deploy --asset <DemoToken> --fund 100   # owner = deployer; prints SPECFIRST_GATE_10143
+node --env-file=.env packages/cli/dist/index.js watch demo gate allocate <vault> 10                     # refused unless the vault is attested compliant and fresh
+node --env-file=.env packages/cli/dist/index.js --json watch demo gate keep                             # keeper (KEEPER_PRIVATE_KEY): exits every vault whose exit is open, every 15 s
+node --env-file=.env packages/cli/dist/index.js watch demo set-broken <vault> on                         # the demo watcher attests the failing report, the keeper exits
+node --env-file=.env packages/cli/dist/index.js watch demo gate status                                   # positions, verdicts, latest attestations
+```
+
+`watch demo gate exit <vault>` is the same exit by hand (`--as-owner` to leave a healthy vault). The web shows the gate at `/watch/gate` when `NEXT_PUBLIC_SPECFIRST_GATE_10143` is set.
+
 ## Alert subscriptions
 
 `CheckSubscriptions` sells delivery and freshness, not results: a subscriber prepays a fee per day in testnet MON for one vault and gets a webhook POST when its check result changes (and one for the first check after it subscribes), plus a faster re-check cadence from the watcher. A day that has started counts as used; `settle` moves the fee of started days to earned, `cancel` refunds the days not started, and extending an expired subscription starts it again from now, so days without service are never charged. See `docs/adr/0006-chain-as-entry-point.md` (CheckSubscriptions, Alerts) for the accounting and the webhook rules.
@@ -174,7 +188,7 @@ The desk ABI comes from `@specfirst/core/desk`; `packages/web/lib/desk/contract.
 
 ## Watch pages
 
-`/watch` is a window on the watcher (ADR 0006): it reads `feed.ndjson`, `status.json` and `vaults.json` under `SPECFIRST_WATCH_DIR/<chainId>/` per request and then every three seconds, and shows what the watcher is doing, how far behind the head it is, its queue and sources, and its feed with each check's 30 results read from the report the feed names, and with each confirmed fall of a vault's share value ("Share value fell 0.42% between block X and block Y"). Nothing there needs a person; a missing directory reads as "not running". Vaults the watcher found that the board build does not have join the board's table (`GET /api/v1/watch/overlay`) and get a vault page with their history and a "Watch this vault" box that pays `CheckSubscriptions` per day. `/watch/inbox` lists the paying address's subscriptions and alerts, cancels with the days not started refunded, and registers a webhook by signing the ADR text; the URL is stored in `<watch dir>/webhooks.json` only for a subscriber holding an active subscription (at most 1000 subscribers), and only its origin is ever shown. `/watch/demo-hook` is a demo receiver for a webhook delivery. `/desk` adds subscription revenue and the watcher's gas when its status reports it.
+`/watch` is a window on the watcher (ADR 0006): it reads `feed.ndjson`, `status.json` and `vaults.json` under `SPECFIRST_WATCH_DIR/<chainId>/` per request and then every three seconds, and shows what the watcher is doing, how far behind the head it is, its queue and sources, and its feed with each check's 30 results read from the report the feed names, and with each confirmed fall of a vault's share value ("Share value fell 0.42% between block X and block Y"). Nothing there needs a person; a missing directory reads as "not running". Vaults the watcher found that the board build does not have join the board's table (`GET /api/v1/watch/overlay`) and get a vault page with their history and a "Watch this vault" box that pays `CheckSubscriptions` per day. `/watch/inbox` lists the paying address's subscriptions and alerts, cancels with the days not started refunded, and registers a webhook by signing the ADR text; the URL is stored in `<watch dir>/webhooks.json` only for a subscriber holding an active subscription (at most 1000 subscribers), and only its origin is ever shown. `/watch/demo-hook` is a demo receiver for a webhook delivery. `/desk` adds subscription revenue and the watcher's gas when its status reports it. `/watch/gate` shows the allocation gate of ADR 0007: its positions, each vault's verdict and latest attestation, and its recent events, read from Monad testnet per request.
 
 JSON: `GET /api/v1/watch/status`, `/api/v1/watch/feed?after=<seq>|before=<seq>`, `/api/v1/watch/vaults/<chainId>/<address>`, `/api/v1/watch/subs`, `/api/v1/watch/subs/<subscriber>`, `/api/v1/watch/inbox?subscriber=`, `POST /api/v1/watch/webhooks`. For local rendering without a watcher: `node packages/web/test/fixtures/watch/generate.mjs --now --out /tmp/w`, then `SPECFIRST_WATCH_DIR=/tmp/w SPECFIRST_CHECKS_DIR=/tmp/w/checks` (synthetic data).
 
@@ -184,6 +198,7 @@ JSON: `GET /api/v1/watch/status`, `/api/v1/watch/feed?after=<seq>|before=<seq>`,
 | `NEXT_PUBLIC_SPECFIRST_SUBS_10143` | unset | CheckSubscriptions on Monad testnet. Unset: the subscribe box and the inbox say "not deployed yet". |
 | `SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS` | unset | `1` lets a webhook at this site's own origin register even when it is local (`http://localhost:3418/api/v1/watch/demo-hook`), for demos on one machine. Other local URLs stay refused. The watcher delivers to it only when started with `--webhook-local-origin` set to the same origin. |
 | `SPECFIRST_DEMO_HOOK` | on | `off` turns the demo receiver off. |
+| `NEXT_PUBLIC_SPECFIRST_GATE_10143` | unset | AllocationGate on Monad testnet, shown at `/watch/gate` (ADR 0007). Unset: the page says no gate is deployed. |
 
 The web takes the file schemas from `@specfirst/core/watch` and the CheckSubscriptions ABI, day accounting and webhook verification from `@specfirst/core/subs` (`packages/web/lib/watch/core.ts` and `lib/subs/core.ts` re-export them; both are browser-safe), and the `webhooks.json` store from the Node-only `@specfirst/core/webhooks` in server code (`lib/watch/webhooks.ts`), so the web and the watcher's alert sink write and read one file the same way. It never imports the package root.
 

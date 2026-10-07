@@ -6,7 +6,8 @@ Foundry project for `CertificateRegistry.sol`, the onchain certificate registry 
 anyone pays a fee for such a check and the worker is paid when it fulfills the request with a matching
 attestation (docs/adr/0005), `CheckSubscriptions.sol`, where a subscriber prepays per day for alerts
 about one subject and the fee of each started day becomes earned (docs/adr/0006), and the demo contracts
-of the watcher (docs/adr/0006, `src/demo/`).
+of the watcher (docs/adr/0006, `src/demo/`), with `AllocationGate.sol`, a demo integrator that reads the attestations
+(docs/adr/0007).
 
 ## Layout
 
@@ -27,6 +28,9 @@ of the watcher (docs/adr/0006, `src/demo/`).
 | `src/demo/DemoVaultFactory.sol` | Watcher demo (docs/adr/0006): DemoVaultFactory deploys DemoVaults and emits `VaultDeployed(vault, asset)`; DemoVault is a minimal ERC-4626 with the positive control's previewDeposit bug behind an operator switch (`setBroken`, `BrokenSet`), and an operator loss (`setLoss(bps)` sends that share of its assets to 0x...dEaD, `LossSet`) so the share value falls. Adding setLoss moved the factory's CREATE2 address; the earlier factory stays deployed on testnet |
 | `src/demo/DemoToken.sol` | ERC-20 anyone can mint, the asset of demo vaults |
 | `test/DemoVaultFactory.t.sol` | Deploy event and operator, deposit and redeem with events, previewDeposit equal to deposit unless broken (and a fuzz of it), setBroken by the operator only, setLoss by the operator only within 1 to 9,999 bps, the share value falling by the bps asked for (and a fuzz of it), allowances |
+| `src/demo/AllocationGate.sol` | Allocation gate (docs/adr/0007): allocates only into vaults whose latest attestation is compliant (optionally with a pinned suite), fresh, from a current issuer, about their code and of a block that exists, with a minShares floor; anyone can exit a vault once it is not, the owner always; an exit counts only assets that arrive, the books follow the vault's balance and the owner can resync them; per-call gas stipends set at deployment (sized for Monad), ExitFailed when nothing arrived |
+| `test/AllocationGate.t.sol` | Unit and fuzz tests: every verdict and their order (a stale attestation that is also bad opens exit), the demo scenario with a DemoVault switched broken and re-attested, exit refused to others while compliant or stale and open to the owner, minShares against a donation, stipend limits, hostile vaults (refusals, partial withdraw, answers without paying, an under-reported balance, silent balanceOf, resync, re-entry, gas burner, 600 KB revert), the review's nested-vault probes, every gas limit never ending an honest exit in ExitFailed, a starved registry read, odd tokens, the books |
+| `test/AllocationGate.invariant.t.sol` | Handler based invariants with keeper and owner exits: idle == funded - allocated + exited - withdrawn, positions equal the vaults' balances, no approval left, a refused verdict never allocates |
 | `lib/forge-std` | forge-std v1.16.2, vendored as plain files (no submodule) |
 
 ## Commands
