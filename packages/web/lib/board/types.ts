@@ -66,6 +66,8 @@ export interface AttestationRecord {
   reportURI: string;
   /** From data/attestation-txs.json; the registry itself does not store it. */
   txHash: string | null;
+  /** The attestation's failedBitmap as 0x hex (bit i: property i failed); absent in board data built before it was kept. */
+  failedBitmap?: string;
 }
 
 /**

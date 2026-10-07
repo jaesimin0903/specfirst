@@ -46,6 +46,8 @@ export interface RawAttestation {
   issuer: string;
   status: number | bigint;
   reportURI: string;
+  /** Bit i set: property i failed. Present whenever the full struct was read. */
+  failedBitmap?: bigint | string;
 }
 
 export interface ReadAttestationsInput {
@@ -97,6 +99,7 @@ export function toRecord(id: bigint, a: RawAttestation, compliant: boolean | nul
     issuer: a.issuer,
     reportURI: a.reportURI,
     txHash: txHashes?.[id.toString()] ?? null,
+    ...(a.failedBitmap !== undefined ? { failedBitmap: `0x${BigInt(a.failedBitmap).toString(16)}` } : {}),
   };
 }
 

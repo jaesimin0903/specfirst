@@ -1,3 +1,4 @@
+import { failureLevelOf, SHOULD_PROPERTIES, type FailureLevel } from './levels.ts';
 import type { PropertyStatus, ReasonCategory, ReportResultView, SkipReason, StatusCounts, VaultStatus, VaultTraitView } from './types';
 
 /*
@@ -64,6 +65,26 @@ export const VAULT_STATUS_LABEL: Record<VaultStatus, string> = {
   partial: 'Partly checked',
   not_applicable: 'Not applicable',
 };
+
+/** The chip of a vault whose only failures are round trips: no MUST sentence failed, so not "Spec mismatch". */
+export const ROUNDING_LABEL = 'Rounding favors caller';
+
+/** The label of a vault's chip: its status, except a mismatch made only of round trips. */
+export function vaultLabel(status: VaultStatus, failure: FailureLevel | null = null): string {
+  return status === 'mismatch' && failure === 'rounding' ? ROUNDING_LABEL : VAULT_STATUS_LABEL[status];
+}
+
+/** The rule a failed SHOULD property goes against; null for a MUST property (its rule comes from the failure). */
+export function shouldRule(id: string | undefined): string | null {
+  switch (id ? SHOULD_PROPERTIES[id] : undefined) {
+    case 'rounding':
+      return "EIP-4626, Security Considerations: rounding should favor the Vault over its users. That is a SHOULD, not a MUST.";
+    case 'allowance':
+      return "EIP-4626: withdraw and redeem SHOULD check that the caller may spend the owner's shares.";
+    default:
+      return null;
+  }
+}
 
 /** Short labels for the "why not checked" tally. */
 export const REASON_LABEL: Record<ReasonCategory, string> = {
@@ -139,19 +160,19 @@ export function eipSentence(maxName: string): string {
   }
 }
 
-/** What a failed property found, and the EIP-4626 rule it breaks when that is known. */
-export function describeFailure(reason: string | undefined): { finding: string; rule: string | null } {
+/** What a failed property found, and the EIP-4626 rule it breaks when that is known (`id` names SHOULD rules). */
+export function describeFailure(reason: string | undefined, id?: string): { finding: string; rule: string | null } {
   const f = parseMaxHonoredFailure(reason);
   if (f) {
     const how = f.selector ? `with ${describeSelector(f.selector)}` : `with ${reason?.includes('short revert data') ? 'short revert data' : 'no revert data'}`;
     return { finding: `${f.maxName} was ${groupDigits(f.max)}, but ${f.action}(${groupDigits(f.amount)}) reverted ${how}.`, rule: eipSentence(f.maxName) || null };
   }
-  return { finding: reason ? `Forge found a counterexample: ${reason}` : 'Forge found a counterexample.', rule: null };
+  return { finding: reason ? `Forge found a counterexample: ${reason}` : 'Forge found a counterexample.', rule: shouldRule(id) };
 }
 
 /** One or two sentences on what a failed property found. */
-export function explainFailure(reason: string | undefined): string {
-  const { finding, rule } = describeFailure(reason);
+export function explainFailure(reason: string | undefined, id?: string): string {
+  const { finding, rule } = describeFailure(reason, id);
   return rule ? `${finding} ${rule}` : finding;
 }
 
@@ -186,13 +207,13 @@ function withCounted(sentence: string, reason: string | undefined): string {
 }
 
 /** A sentence for one property result, whatever its status. */
-export function explainResult(result: Pick<ReportResultView, 'status' | 'reason' | 'runs'>): string {
+export function explainResult(result: Pick<ReportResultView, 'status' | 'reason' | 'runs'> & { id?: string }): string {
   const reason = result.reason ?? '';
   switch (result.status) {
     case 'pass':
       return withCounted(result.runs ? `No counterexample in ${result.runs} fuzz runs at this block.` : 'No counterexample at this block.', result.reason);
     case 'fail':
-      return withCounted(explainFailure(result.reason), result.reason);
+      return withCounted(explainFailure(result.reason, result.id), result.reason);
     default:
       break;
   }
@@ -314,13 +335,35 @@ export function asyncFailureNote(result: Pick<ReportResultView, 'id' | 'status'>
   return result.id === 'sf-maxWithdraw-honored' || result.id === 'sf-maxRedeem-honored' ? ASYNC_MAX_NOTE : null;
 }
 
-/** The one-line verdict at the top of a vault page. */
-export function verdictSentence(status: VaultStatus, summary: StatusCounts, blockNumber: string): string {
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/**
+ * The one-line verdict at the top of a vault page. A mismatch follows the levels of the failed properties
+ * (`failedIds`): any MUST keeps "contradicts an EIP-4626 MUST sentence"; only SHOULD failures say so instead.
+ * Without ids it reads as a MUST, so nothing is softened by mistake.
+ */
+export function verdictSentence(status: VaultStatus, summary: StatusCounts, blockNumber: string, failedIds: ReadonlyArray<string> = []): string {
   const total = summary.pass + summary.fail + summary.inconclusive + summary.notApplicable;
   const block = formatBlock(blockNumber);
   switch (status) {
-    case 'mismatch':
+    case 'mismatch': {
+      const level = failureLevelOf(failedIds);
+      const rounding = failedIds.filter((id) => SHOULD_PROPERTIES[id] === 'rounding').length;
+      if (level === 'rounding') {
+        return `Rounding favors the caller: ${plural(rounding, 'round-trip property fails', 'round-trip properties fail')} EIP-4626's SHOULD guidance (Security Considerations) at block ${block}; no MUST sentence failed.`;
+      }
+      if (level === 'should') {
+        const allowance = failedIds.length - rounding;
+        const parts = [
+          `${plural(allowance, 'withdraw or redeem', 'withdraws or redeems')} on behalf of an owner went through without allowance, which the vault SHOULD check`,
+          ...(rounding > 0 ? [`${plural(rounding, 'round trip favors', 'round trips favor')} the caller against the SHOULD rounding guidance`] : []),
+        ];
+        return `${summary.fail} of ${total} properties failed at block ${block}, all of them EIP-4626 SHOULD sentences: ${parts.join(', and ')}. No MUST sentence failed.`;
+      }
       return `${summary.fail} of ${total} properties failed at block ${block}. The vault's behavior contradicts an EIP-4626 MUST sentence.`;
+    }
     case 'complete':
       return `All ${total} properties passed at block ${block}. No counterexample was found; that is evidence, not a safety guarantee.`;
     case 'partial': {

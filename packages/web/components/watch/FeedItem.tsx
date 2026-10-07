@@ -3,6 +3,7 @@ import { blockText, CHANGE_LABEL, clock, countsText, failedDiff, KIND_LABEL, pri
 import { formatDuration } from '../../lib/desk/format';
 import { shortAddress, shortHash } from '../../lib/format';
 import { VaultChip } from '../board/StatusChip';
+import { failureLevelOf } from '../../lib/board/levels';
 import { PropertyCells } from '../desk/Marks';
 
 /**
@@ -114,7 +115,7 @@ function CheckDetail({ e }: { e: FeedEventJson }) {
       {c && e.kind === 'checked' && (
         <>
           <div className="sw-result">
-            <VaultChip status={c.status} />
+            <VaultChip status={c.status} failure={failureLevelOf(c.failed)} />
             {c.cells ? <PropertyCells cells={c.cells} width={240} /> : null}
           </div>
           <p className="sw-line">
@@ -169,13 +170,13 @@ function ChangeDetail({ e }: { e: FeedEventJson }) {
       <div className="sw-result">
         {ch.from ? (
           <>
-            <VaultChip status={ch.from.status} />
+            <VaultChip status={ch.from.status} failure={failureLevelOf(ch.from.failed)} />
             <span aria-hidden="true" className="sw-arrow">
               to
             </span>
           </>
         ) : null}
-        <VaultChip status={ch.to.status} />
+        <VaultChip status={ch.to.status} failure={failureLevelOf(ch.to.failed)} />
       </div>
       <p className="sw-line">{ch.from ? `${countsText(ch.from.summary)} before; ${countsText(ch.to.summary)} now.` : `${countsText(ch.to.summary)}.`}</p>
       {diff.added.length > 0 && <p className="sw-line sw-err">Now failing: {diff.added.join(', ')}</p>}

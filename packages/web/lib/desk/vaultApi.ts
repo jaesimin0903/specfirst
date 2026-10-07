@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { describeFailure } from '../board/reasons';
+import { propertyLevel } from '../board/levels';
 import { txUrl } from '../board/attestations';
 import { reproduceArgs } from '../board/reproduce';
 import type { PropertyStatus } from '../board/types';
@@ -36,7 +37,7 @@ export const vaultApiResponseSchema = z.object({
       startedAt: z.string(),
       summary: counts,
       total: z.number(),
-      failed: z.array(z.object({ id: z.string(), finding: z.string() })),
+      failed: z.array(z.object({ id: z.string(), finding: z.string(), level: z.enum(['must', 'should']) })),
       reportHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
       suiteHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
       url: z.string(),
@@ -64,7 +65,7 @@ export const vaultApiResponseSchema = z.object({
     registry: z.object({ chainId: z.number(), address: z.string() }),
     reason: z.string().nullable(),
   }),
-  badge: z.object({ state: z.enum(['compliant', 'mismatch', 'partial', 'not-attested', 'unavailable']), text: z.string(), url: z.string() }),
+  badge: z.object({ state: z.enum(['compliant', 'mismatch', 'rounding', 'partial', 'not-attested', 'unavailable']), text: z.string(), url: z.string() }),
   reproduce: z.object({ command: z.string(), args: z.array(z.string()) }).nullable(),
   links: z.object({ page: z.string(), badge: z.string(), report: z.string().nullable(), requestCheck: z.string() }),
   readAt: z.string(),
@@ -112,7 +113,7 @@ export function buildVaultApi({ resolved, live, origin, now = new Date() }: Buil
             startedAt: report.startedAt,
             summary: report.summary,
             total: report.results.length,
-            failed: report.results.filter((r) => r.status === 'fail').map((r) => ({ id: r.id, finding: describeFailure(r.reason).finding })),
+            failed: report.results.filter((r) => r.status === 'fail').map((r) => ({ id: r.id, finding: describeFailure(r.reason, r.id).finding, level: propertyLevel(r.id) })),
             reportHash: detail.reportHash,
             suiteHash: detail.suiteHash,
             url: `${origin}${detail.row.reportPath}`,

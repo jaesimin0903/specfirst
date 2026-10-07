@@ -13,7 +13,8 @@ import {
 } from '../../lib/board/reasons';
 import { addressUrl, txUrl } from '../../lib/board/attestations';
 import { shortAddress, shortHash } from '../../lib/format';
-import { PropertyChip, VaultChip } from './StatusChip';
+import { LevelTag, PropertyChip, VaultChip } from './StatusChip';
+import { failureLevelOf, propertyLevel } from '../../lib/board/levels';
 import { Glyph } from './Glyph';
 import { CopyButton } from './CopyButton';
 import { chainName, reproduceCommandMultiline } from '../../lib/board/reproduce';
@@ -189,6 +190,9 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
   const split = report.results.filter((r) => !r.id.startsWith('sf-')).length;
   const skip = effectiveSkipReason(report);
   const failed = report.results.filter((r) => r.status === 'fail');
+  const failure = failureLevelOf(failed.map((r) => r.id));
+  const upstream = report.results.slice(0, split);
+  const upstreamShould = upstream.filter((r) => propertyLevel(r.id) === 'should').length;
   const traits: VaultTraitView[] = report.traits ?? [];
   const cmd = reproduceCommandMultiline(report);
   const title = row.name ?? row.address;
@@ -206,7 +210,7 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
         ) : null}
       </p>
       <header className="sb-vault-head">
-        <VaultChip status={row.status} />
+        <VaultChip status={row.status} failure={failure} />
         <h1 className="sb-vault-name">{title}</h1>
         <p className="sb-vault-meta">
           {row.protocol && <span>{row.protocol}</span>}
@@ -214,7 +218,7 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
           <span className="mono break">{row.address}</span>
           <span>{chainName(row.chainId)}</span>
         </p>
-        <p className="sb-verdict">{verdictSentence(row.status, report.summary, report.blockNumber)}</p>
+        <p className="sb-verdict">{verdictSentence(row.status, report.summary, report.blockNumber, failed.map((r) => r.id))}</p>
         {traits.map((t) => (
           <p key={t.id} className="sb-trait" title={traitBasis(t)}>
             {traitLabel(t)}
@@ -258,8 +262,9 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
                       <a href={`#p-${r.id}`} className="sb-finding-prop">
                         {r.id}
                       </a>
-                      <p>{describeFailure(r.reason).finding}</p>
-                      {describeFailure(r.reason).rule && <p className="sb-rule">{describeFailure(r.reason).rule}</p>}
+                      <LevelTag id={r.id} />
+                      <p>{describeFailure(r.reason, r.id).finding}</p>
+                      {describeFailure(r.reason, r.id).rule && <p className="sb-rule">{describeFailure(r.reason, r.id).rule}</p>}
                       {asyncFailureNote(r, traits) && <p className="sb-rule">{asyncFailureNote(r, traits)}</p>}
                       {r.counterexample && r.counterexample.calls.length > 0 && (
                         <p className="soft" style={{ fontSize: 13, marginTop: 6 }}>
@@ -271,7 +276,11 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
                 ))}
               </ul>
               <p className="sb-note">
-                A spec mismatch is a disagreement with an EIP-4626 MUST sentence, shown by a concrete call. It is not a claim that funds are at risk.
+                {failure === 'must'
+                  ? `A spec mismatch is a disagreement with an EIP-4626 MUST sentence, shown by a concrete call.${failed.some((r) => propertyLevel(r.id) === 'should') ? ' Properties marked SHOULD go against guidance the standard recommends rather than requires.' : ''} It is not a claim that funds are at risk.`
+                  : failure === 'rounding'
+                    ? "Each round trip shown went in the caller's favor by the amount in its counterexample, against EIP-4626's guidance that rounding should favor the vault. That guidance is a SHOULD; no MUST sentence failed, and it is not a claim that funds are at risk."
+                    : 'These properties go against EIP-4626 SHOULD sentences, shown by a concrete call; no MUST sentence failed.'}
               </p>
             </section>
           )}
@@ -298,7 +307,8 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
                 <tbody>
                   <tr className="sb-divider">
                     <td colSpan={4}>
-                      a16z/erc4626-tests at <a href={`${report.upstream.repo}/tree/${report.upstream.commit}`}>{upstreamShort}</a>, {split} properties
+                      a16z/erc4626-tests at <a href={`${report.upstream.repo}/tree/${report.upstream.commit}`}>{upstreamShort}</a>, {split} properties:{' '}
+                      {split - upstreamShould} on EIP-4626 MUST sentences, {upstreamShould} on SHOULD guidance (the round trips and the allowance checks)
                     </td>
                   </tr>
                   {report.results.map((r, i) => (
@@ -444,7 +454,7 @@ function FragmentRow({ r, i, divider, traits }: { r: ReportResultView; i: number
     <>
       {divider && (
         <tr className="sb-divider">
-          <td colSpan={4}>Specfirst max-honored properties, MIT, one EIP-4626 MUST sentence each</td>
+          <td colSpan={4}>Specfirst max-honored properties, MIT, each on one EIP-4626 MUST sentence about a max function</td>
         </tr>
       )}
       <tr id={`p-${r.id}`} data-s={r.status}>
@@ -452,6 +462,7 @@ function FragmentRow({ r, i, divider, traits }: { r: ReportResultView; i: number
         <td className="sb-prop-id">
           <code>{r.id}</code>
           <small>{r.test}</small>
+          <LevelTag id={r.id} />
         </td>
         <td className="nowrap">
           <PropertyChip status={r.status} />
