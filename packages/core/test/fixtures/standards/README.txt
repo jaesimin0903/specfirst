@@ -87,3 +87,62 @@ local-restricted-asset.json, local-partial-restricted.json, local-hook-blocked.j
   "asset token restricts transfers ... (selector 0x82b42900)". HookBlockedVault (0x5f..63) keeps a free
   asset but refuses deposits in the vault (like Euler 0xf26d..95Bf): the probe passes, sf-maxDeposit-honored
   and sf-maxMint-honored fail with NotAuthorized() 0xea8e4eb5, the rest are inconclusive.
+
+Monad precompiles, mint funding and refusals below the bound (mock-vaults.sol, used live by
+standards.forge.test.ts on a local anvil fork started with --chain-id 143, no recorded JSON). An input whose vault
+call needed a missing precompile is left unjudged with an event; a property with any unjudged input is never a
+pass (a fail elsewhere stays a fail, otherwise inconclusive). An empty revert is never judged, and a revert with
+data only when it stays the same under both sets of ABI-shaped mocked answers. Inputs rejected in a setup deposit
+(setUpVault, the deposit that gives shares) count as rejects of the property, not as unjudged inputs.
+  PrecompileVault (0x5f..71)           deposit and mint stake through Monad's staking precompile 0x1000, like
+                                       Magma gMON: every input needs it, 30 inconclusive, skipReason
+                                       missing-precompile.
+  ThresholdPrecompileVault (0x5f..72)  stakes only deposits and mints above 10 tokens: no fail, the 26 upstream
+                                       properties pass (their staked setUpVault deposits are rejects), sf-maxDeposit
+                                       and sf-maxMint inconclusive with the staked inputs counted, sf-maxWithdraw
+                                       and sf-maxRedeem judged with a one-token deposit and passing.
+  FakePrecompileTextVault (0x5f..73)   maxMint and withdraw revert with precompile-sounding text and call no
+                                       precompile: maxMint and sf-maxWithdraw-honored stay fail.
+  FakePrecompileSetupVault (0x5F..74)  asset() reverts with that text: 30 not_applicable, setup-reverted.
+  MintSurchargeVault (0x5f..75)        mint pulls 2% plus 2 more than previewMint quotes (hyAUSD shape):
+                                       previewMint fails, sf-maxMint-honored passes. The harness before 2026-10-07
+                                       (1% more funding) failed sf-maxMint-honored with Panic 0x4e487b71.
+  MinDepositVault (0x5f..76)           deposit and mint refuse amounts below 500,000 tokens under an unlimited max:
+                                       sf-maxDeposit-honored and sf-maxMint-honored pass with the below-bound count.
+                                       The harness before 2026-10-07 failed both with BelowMinimum() 0x860b82a9.
+Review PoCs (ported from the reviewer's Adv.sol, mock-vaults.sol "Review PoCs"), full checks, 16 runs where the
+fuzzer must reach a fee bug:
+  FeeVault (0x5F..91), FeeTouchVault (0x5F..92)  fee withdraw (Panic 0x11 near maxWithdraw); FeeTouch adds an
+                                       ignored staticcall to 0x1001. Both fail sf-maxWithdraw-honored with a
+                                       counterexample; FeeTouch's fail is not turned into "not judged".
+  ProbeKillVault (0x5f..93), ProbeKillControl (0x5F..94)  bonus share and fee withdraw; ProbeKill also touches
+                                       0x1001 and reverts for exactly one whole token (the old probe amount). Both
+                                       fail previewWithdraw and sf-maxWithdraw-honored; nothing stops the suites.
+  WindowVault (0x5F..95)               refuses 500,000 to 1,000,000 tokens and accepts the bound: sf-maxDeposit
+                                       passes with "N amounts below the bound were refused; the bound itself was
+                                       accepted".
+  ReenterVault (0x5f..96)              calls setUp and an sf- property back from its deposit: the guard refuses,
+                                       30 pass, no event.
+  LyingMintVault (0x5F..97)            mint pulls more than it returns: test_mint fails, sf-maxMint passes.
+  FeeLaunderVault (0x5f..98)           second review: FeeVault's bug, an ignored staticcall to 0x1001 and a withdraw
+                                       that does nothing when 0x1001 has code (only the mocked rerun gives it code).
+                                       sf-maxWithdraw-honored is never a pass; FeeVault fails it.
+  HonestDynVault (0x5f..99)            third review: every deposit reads getDelegations (a dynamic return) from
+                                       0x1000 and delegates; honest on Monad, reverts with no data on the fork. Must
+                                       never fail: sf-maxDeposit-honored is inconclusive with its inputs not judged.
+review/M.sol Vault mode 5 deposits through 0x1000; review/Exp.t.sol ForkGaps covers SfForkGaps (the list only on
+chains 143 and 10143, a precompile the EVM has is left out, a staking deposit needs 0x1000, a touch that does not
+matter and a call without any precompile are the vault's own reverts, reverted frames are seen, an empty revert
+after a precompile call and a revert that a dynamic staking answer avoids are blamed on the precompile) and the SfEvents
+re-entry guard; GuardedSetUp the setUp guard.
+
+Asynchronous exits and the async-redeem trait (mock-vaults.sol, full checks on a local anvil fork in
+standards.forge.test.ts, no recorded JSON):
+  AsyncRedeemVault (0x5f..81)      Upshift shape with ERC-7540 requestRedeem in the code: trait with run
+                                   exits-rejected and erc165 null, statuses identical to AsyncExitVault (0x5f..32,
+                                   the same exits without a request function, no trait).
+  SelectorOnlyVault (0x5f..82)     requestRedeem in the code, withdraw and redeem work: 30 pass, no trait.
+  PrecompileAsyncVault (0x5f..83)  gMON shape: deposits stop at 0x1000, requestRedeem, ERC-165 declares
+                                   0x620ee8e4: 30 inconclusive, trait with run not-exercised.
+standards.traits.test.ts reads two committed reports of the 2026-09-30 batch (certs/checks/143, Upshift earnAUSD
+and Morpho 0x802c..4e44) for the run evidence.

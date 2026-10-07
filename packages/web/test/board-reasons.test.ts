@@ -1,9 +1,23 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { toFunctionSelector } from 'viem';
-import { NATIVE_ASSET_REASON, RESTRICTED_ASSET_NOTE as CORE_RESTRICTED_NOTE, erc7575Reason, maxZeroNote } from '@specfirst/core';
 import {
+  MISSING_PRECOMPILE_NOTE as CORE_PRECOMPILE_NOTE,
+  NATIVE_ASSET_REASON,
+  RESTRICTED_ASSET_NOTE as CORE_RESTRICTED_NOTE,
+  erc7575Reason,
+  maxZeroNote,
+  belowBoundNote,
+  missingPrecompileNote,
+  setupPrecompileNote,
+} from '@specfirst/core';
+import {
+  ASYNC_MAX_NOTE,
+  asyncFailureNote,
+  traitBasis,
+  traitLabel,
   KNOWN_ERROR_SELECTORS,
+  MISSING_PRECOMPILE_NOTE,
   RESTRICTED_ASSET_NOTE,
   classifyReason,
   describeFailure,
@@ -21,6 +35,8 @@ const UPSHIFT_FAIL = 'withdraw(1) reverted with selector 0x75ed2e3e while maxWit
 describe('strings copied from @specfirst/core', () => {
   it('match core, so classification cannot drift from what the CLI writes', () => {
     expect(RESTRICTED_ASSET_NOTE).toBe(CORE_RESTRICTED_NOTE);
+    expect(MISSING_PRECOMPILE_NOTE).toBe(CORE_PRECOMPILE_NOTE);
+    expect(classifyReason('inconclusive', missingPrecompileNote('0x0000000000000000000000000000000000001000'))).toBe('missing-precompile');
     expect(classifyReason('not_applicable', maxZeroNote('maxWithdraw'))).toBe('max-zero');
     expect(classifyReason('not_applicable', NATIVE_ASSET_REASON)).toBe('native-asset');
     expect(classifyReason('not_applicable', erc7575Reason('0x1111111111111111111111111111111111111111'))).toBe('separate-share-token');
@@ -63,6 +79,12 @@ describe('explainResult', () => {
     expect(finding).toBe('maxWithdraw was 3, but withdraw(1) reverted with 0x75ed2e3e, WithdrawalRequestRequired().');
     expect(rule).toMatch(/^EIP-4626: maxWithdraw MUST return the maximum amount of assets withdraw accepts without reverting, and 0 while withdrawals are disabled\.$/);
     expect(explainResult({ status: 'fail', reason: UPSHIFT_FAIL })).toBe(`${finding} ${rule}`);
+  });
+
+  it("a max-honored failure with the runner's minimum-amount note still parses", () => {
+    const reason = `redeem(1) reverted with selector 0x03f7f64c while maxRedeem is 1; ${belowBoundNote(1)}`;
+    expect(parseMaxHonoredFailure(reason)).toEqual({ action: 'redeem', amount: '1', selector: '0x03f7f64c', maxName: 'maxRedeem', max: '1' });
+    expect(describeFailure(reason).finding).toBe('maxRedeem was 1, but redeem(1) reverted with 0x03f7f64c.');
   });
 
   it('groups digits of large amounts and keeps unknown selectors raw', () => {
@@ -112,6 +134,23 @@ describe('explainResult', () => {
   it('other inconclusive results', () => {
     expect(explainResult({ status: 'inconclusive', reason: 'fork RPC error, rerun or pass another --rpc: EVM error; database error: x' })).toMatch(/says nothing about the vault/);
     expect(explainResult({ status: 'inconclusive', reason: "the asset's balance slot cannot be written, x" })).toMatch(/could not be given the asset/);
+    expect(explainResult({ status: 'inconclusive', reason: missingPrecompileNote('0x0000000000000000000000000000000000001000') })).toBe(
+      "Not judged: every rejected input reached Monad precompile 0x0000000000000000000000000000000000001000, which forge's EVM does not have, and its call reverted on the fork only when that precompile gave no answer. These inputs were not judged.",
+    );
+    // Counts beside a verdict: refusals below the bound, and inputs not judged.
+    expect(explainResult({ status: 'pass', runs: 16, reason: belowBoundNote(3) })).toBe(
+      'No counterexample in 16 fuzz runs at this block. 3 amounts below the bound were refused; the bound itself was accepted.',
+    );
+    expect(explainResult({ status: 'fail', reason: `withdraw(5) reverted with selector 0x4e487b71 while maxWithdraw is 9; ${missingPrecompileNote('0x0000000000000000000000000000000000001001', 5)}` })).toBe(
+      "maxWithdraw was 9, but withdraw(5) reverted with 0x4e487b71. EIP-4626: maxWithdraw MUST return the maximum amount of assets withdraw accepts without reverting, and 0 while withdrawals are disabled. 5 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and were not judged.",
+    );
+    expect(explainResult({ status: 'inconclusive', reason: `\`vm.assume\` rejected too many inputs (4096 allowed); ${setupPrecompileNote('0x0000000000000000000000000000000000001000', 3923)}` })).toBe(
+      "Never exercised: the vault rejected nearly every amount the fuzzer tried, and forge gave up after 4096 discarded inputs. 3923 inputs were rejected because the setup deposit reached Monad precompile 0x0000000000000000000000000000000000001000, which forge's EVM does not have.",
+    );
+    // A property with unjudged inputs and no fail is inconclusive, never a pass (FeeLaunderVault).
+    expect(explainResult({ status: 'inconclusive', runs: 16, reason: missingPrecompileNote('0x0000000000000000000000000000000000001001', 2) })).toBe(
+      "Not judged: 2 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and behaved differently once it answered. A vault can tell such a stand-in from the real precompile, so a property with unjudged inputs never counts as a pass; no other input failed.",
+    );
     expect(explainResult({ status: 'inconclusive', reason: 'no result in forge output' })).toBe('Inconclusive: forge reported no result for this property.');
     expect(explainResult({ status: 'inconclusive', reason: 'forge status Skipped' })).toBe('Inconclusive: forge ended this property with status Skipped.');
     expect(explainResult({ status: 'inconclusive', reason: 'something new' })).toBe('Inconclusive: something new');
@@ -138,6 +177,8 @@ describe('effectiveSkipReason', () => {
     for (const s of ['native-asset', 'separate-share-token', 'asset-transfer-restricted', 'setup-reverted'] as const) {
       expect(explainSkip(s)).toMatch(/^No property applies\./);
     }
+    // Inconclusive, not inapplicable: the vault may well be checkable on a fork that has the precompile.
+    expect(explainSkip('missing-precompile')).toMatch(/^No property could be exercised\. .*Nothing here says the vault is wrong or right\.$/);
   });
 });
 
@@ -161,5 +202,37 @@ describe('verdictSentence and formatting', () => {
       'Implementation behind the proxy: same compiler metadata and same code with immutables masked',
     );
     expect(describeKeyKind({ of: 'self', hash: 'maskedCodeHash' })).toBe("The vault's own code: same code with immutables masked, no compiler metadata");
+  });
+});
+
+describe('vault traits', () => {
+  const trait = {
+    id: 'async-redeem' as const,
+    evidence: {
+      codeAddress: '0xA1f511E1442c61931ca5ace7616d2cC78497aFd2',
+      requestFunctions: ['requestRedeem(uint256,address,address)', 'requestRedeemGVault(uint256,address,address,uint64)'],
+      erc165: { asyncRedeem: true, asyncDeposit: false, operator: true },
+      run: 'not-exercised' as const,
+    },
+  };
+
+  it('label names the first request function; the basis says what it rests on', () => {
+    expect(traitLabel(trait)).toBe('Asynchronous withdrawals: exits go through requestRedeem');
+    expect(traitBasis(trait)).toBe(
+      'requestRedeem(uint256,address,address) and requestRedeemGVault(uint256,address,address,uint64) in the code at 0xA1f511E1442c61931ca5ace7616d2cC78497aFd2; ERC-165 declares ERC-7540 asynchronous redemption; the exits could not be run on the fork, so the label comes from the code and ERC-165 only.',
+    );
+    expect(traitBasis({ ...trait, evidence: { ...trait.evidence, requestFunctions: ['requestRedeem(uint256,address,address)'], erc165: null, run: 'exits-rejected' } })).toBe(
+      'requestRedeem(uint256,address,address) in the code at 0xA1f511E1442c61931ca5ace7616d2cC78497aFd2; in this check deposits worked while every withdraw and redeem reverted.',
+    );
+  });
+
+  it('the ERC-7540 sentence goes on failed max-withdraw and max-redeem properties of async vaults only', () => {
+    expect(ASYNC_MAX_NOTE).toBe('For an asynchronous vault, ERC-7540 still requires maxWithdraw and maxRedeem to report what can be claimed now.');
+    expect(asyncFailureNote({ id: 'sf-maxWithdraw-honored', status: 'fail' }, [trait])).toBe(ASYNC_MAX_NOTE);
+    expect(asyncFailureNote({ id: 'sf-maxRedeem-honored', status: 'fail' }, [trait])).toBe(ASYNC_MAX_NOTE);
+    expect(asyncFailureNote({ id: 'sf-maxDeposit-honored', status: 'fail' }, [trait])).toBeNull();
+    expect(asyncFailureNote({ id: 'sf-maxRedeem-honored', status: 'inconclusive' }, [trait])).toBeNull();
+    expect(asyncFailureNote({ id: 'sf-maxRedeem-honored', status: 'fail' }, [])).toBeNull();
+    expect(asyncFailureNote({ id: 'sf-maxRedeem-honored', status: 'fail' }, undefined)).toBeNull();
   });
 });

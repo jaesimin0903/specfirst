@@ -112,6 +112,14 @@ function logEvent(ctx: CliContext, e: StandardCheckEvent, network: string): void
       printLine(ctx, cont(pc.dim(`${e.forgeVersion ?? 'forge (version unknown)'}  seed ${e.seed}  sender ${e.sender}`)));
       printLine(ctx, cont(pc.dim(`forge ${e.args.join(' ')}  (minutes on a live RPC)`)));
       return;
+    case 'check-traits':
+      // Context only: a trait never changes a result.
+      for (const t of e.traits) {
+        const ev = t.evidence;
+        const erc165 = ev.erc165 ? `ERC-165 async redeem ${ev.erc165.asyncRedeem}` : 'no ERC-165';
+        printLine(ctx, cont(pc.cyan(`trait ${t.id}: exits go through ${ev.requestFunctions.join(', ')} (run ${ev.run}, ${erc165}, code of ${ev.codeAddress})`)));
+      }
+      return;
   }
 }
 
@@ -204,6 +212,7 @@ export function registerCheckCommand(program: Command): void {
           blockNumber: report.blockNumber,
           vaultKind: report.vaultKind,
           skipReason: report.skipReason,
+          traits: report.traits,
           summary: report.summary,
           implementationKey: report.identity.implementationKey,
           seed: report.seed,

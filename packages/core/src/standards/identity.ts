@@ -23,6 +23,7 @@ const beaconAbi = [
 const EIP1167 = /^0x363d3d373d3d3d363d73([0-9a-f]{40})5af43d82803e903d91602b57fd5bf3$/i;
 const DELEGATECALL = 0xf4;
 const PUSH1 = 0x60;
+const PUSH4 = 0x63;
 const PUSH32 = 0x7f;
 
 export type ProxyKind = 'eip1967' | 'eip1967-beacon' | 'eip1167';
@@ -151,6 +152,22 @@ function walkOpcodes(code: Uint8Array, end: number, visit: (op: number, at: numb
     visit(op, i);
     i += op >= PUSH1 && op <= PUSH32 ? 1 + (op - PUSH1 + 1) : 1;
   }
+}
+
+/**
+ * The 4-byte values the code pushes with PUSH4, CBOR tail excluded, as 0x-prefixed lowercase hex. solc compares
+ * the calldata selector against PUSH4 constants in its dispatcher, so a function the contract exposes shows up
+ * here (along with other 4-byte constants such as error selectors).
+ */
+export function pushedSelectors(code: Hex): Set<Hex> {
+  const bytes = hexBytes(code);
+  const meta = solidityMetadata(bytes);
+  const end = meta ? meta.start : bytes.length;
+  const out = new Set<Hex>();
+  walkOpcodes(bytes, end, (op, at) => {
+    if (op === PUSH4 && at + 5 <= end) out.add(toHex(bytes.slice(at + 1, at + 5)));
+  });
+  return out;
 }
 
 /** Fingerprint of runtime code, plus what the unknown-proxy heuristic needs. */

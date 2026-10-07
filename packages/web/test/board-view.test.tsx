@@ -80,6 +80,24 @@ describe('vault page', () => {
     expect(screen.getByRole('link', { name: 'Report JSON' })).toHaveAttribute('href', `/reports/143/${UPSHIFT}/109195820.json`);
   });
 
+  it('an asynchronous vault: the trait label sits next to the verdict, the ERC-7540 sentence joins both max failures, nothing else changes', () => {
+    const d = detailOf(unread, UPSHIFT);
+    // A schemaVersion 4 report of the same check would carry this; the fixture predates traits.
+    expect(d.row.traits).toEqual([]);
+    const trait = {
+      id: 'async-redeem' as const,
+      evidence: { codeAddress: '0xFd2F793C248Dd673C830DF610a95a045054de267', requestFunctions: ['requestRedeem(uint256,address,address)'], erc165: null, run: 'exits-rejected' as const },
+    };
+    render(<VaultView detail={{ ...d, row: { ...d.row, traits: [trait] }, report: { ...d.report, traits: [trait] } }} />);
+    expect(screen.getByText(/2 of 30 properties failed at block 109,195,820/)).toBeInTheDocument();
+    expect(screen.getByText('Asynchronous withdrawals: exits go through requestRedeem')).toBeInTheDocument();
+    const failed = screen.getByRole('region', { name: 'What failed' });
+    expect(within(failed).getAllByText('For an asynchronous vault, ERC-7540 still requires maxWithdraw and maxRedeem to report what can be claimed now.')).toHaveLength(2);
+    const table = screen.getByRole('region', { name: 'All 30 properties' });
+    expect(within(table).getAllByText('Fail')).toHaveLength(2);
+    expect(within(table).getAllByText(/^For an asynchronous vault, ERC-7540 still requires/)).toHaveLength(2);
+  });
+
   it('shows "could not read attestation status" when the registry read failed', () => {
     render(<VaultView detail={detailOf(unread, UPSHIFT)} />);
     const panel = screen.getByRole('region', { name: 'Onchain attestation' });
@@ -112,6 +130,19 @@ describe('vault table', () => {
     render(<BoardExplorer rows={rows} protocols={unread.board.protocols.map((p) => p.protocol).sort()} split={26} />);
     return rows;
   };
+
+  it('a row with the async-redeem trait carries its label', () => {
+    cleanup();
+    const trait = {
+      id: 'async-redeem' as const,
+      evidence: { codeAddress: '0xFd2F793C248Dd673C830DF610a95a045054de267', requestFunctions: ['requestRedeem(uint256,address,address)'], erc165: null, run: 'exits-rejected' as const },
+    };
+    const withTrait = unread.board.vaults.map((v) => (v.id === `143/${UPSHIFT}` ? { ...v, traits: [trait] } : v)).map(toExplorerRow);
+    expect(withTrait.find((r) => r.id === `143/${UPSHIFT}`)!.traits).toEqual([trait]);
+    expect(withTrait.filter((r) => r.traits).length).toBe(1);
+    render(<BoardExplorer rows={withTrait} protocols={unread.board.protocols.map((p) => p.protocol).sort()} split={26} />);
+    expect(screen.getAllByText('Asynchronous withdrawals: exits go through requestRedeem')).toHaveLength(1);
+  });
 
   it('lists every vault, mismatches first, with status in words', () => {
     setup();

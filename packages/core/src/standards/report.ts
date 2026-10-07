@@ -4,10 +4,10 @@ import { callsOf, extractJson, formatForgeCall, type ForgeTestResult } from '../
 import type { StandardProperty } from './erc4626.js';
 
 /**
- * 2 adds `vaultKind`, 3 adds `skipReason`. Reports of earlier versions (without those fields) still
- * validate, so reports written before a change, and attestations built from them, stay readable.
+ * 2 adds `vaultKind`, 3 adds `skipReason`, 4 adds `traits`. Reports of earlier versions (without those fields)
+ * still validate, so reports written before a change, and attestations built from them, stay readable.
  */
-export const STANDARD_CHECK_SCHEMA_VERSION = 3;
+export const STANDARD_CHECK_SCHEMA_VERSION = 4;
 /** CLI exit code when any standard property fails on the checked contract. */
 export const STANDARD_CHECK_FAILED_EXIT_CODE = 16;
 /**
@@ -35,23 +35,66 @@ export const vaultKindSchema = z.enum(['erc4626', 'erc7535', 'erc7575']);
 export type VaultKind = z.infer<typeof vaultKindSchema>;
 
 /**
- * Why no property was exercised, when that is the case (every result not_applicable); null otherwise.
+ * Why no property was exercised, when that is the case (every result not_applicable, or every result
+ * inconclusive with inputs that needed a precompile the fork lacks); null otherwise.
  * native-asset and separate-share-token come from the pre-checks (forge did not run);
- * asset-transfer-restricted from the harness's transfer probe; setup-reverted from any other setUp revert.
+ * asset-transfer-restricted from the harness's transfer probe; missing-precompile from its deposit probe;
+ * setup-reverted from any other setUp revert.
  */
-export const skipReasonSchema = z.enum(['native-asset', 'separate-share-token', 'asset-transfer-restricted', 'setup-reverted']);
+export const skipReasonSchema = z.enum(['native-asset', 'separate-share-token', 'asset-transfer-restricted', 'missing-precompile', 'setup-reverted']);
 export type SkipReason = z.infer<typeof skipReasonSchema>;
 
 /** The fixed prefix both suites' setUp revert with when test users cannot move the asset. */
 export const RESTRICTED_ASSET_PREFIX = 'specfirst: asset transfers are restricted for test users';
 /** Reason text of every property of a vault whose asset restricts transfers. */
 export const RESTRICTED_ASSET_NOTE = 'asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances';
+/**
+ * Start of the reason of a property whose inputs all needed a Monad precompile forge's EVM lacks (staking 0x1000,
+ * reserve balance 0x1001, P256 0x0100); see missingPrecompileNote.
+ */
+export const MISSING_PRECOMPILE_NOTE = 'a vault call reached Monad precompile';
 export type StandardName = z.infer<typeof standardNameSchema>;
 
 /**
+ * Request functions that mark an asynchronous exit when the code exposes them: ERC-7540's requestRedeem, and
+ * Magma gMON's requestRedeemGVault (the variant met in the Upshift and Magma sources on Monad; Upshift earnAUSD
+ * exposes requestRedeem itself).
+ */
+export const ASYNC_REDEEM_REQUEST_FUNCTIONS = ['requestRedeem(uint256,address,address)', 'requestRedeemGVault(uint256,address,address,uint64)'] as const;
+/** ERC-165 interface ids EIP-7540 defines: asynchronous redemption, asynchronous deposit, operator methods. */
+export const ERC7540_INTERFACE_IDS = { asyncRedeem: '0x620ee8e4', asyncDeposit: '0xce3bbe50', operator: '0xe3bc4e65' } as const;
+
+/**
+ * Why a vault carries the async-redeem trait. codeAddress: the code that was read (the implementation behind a
+ * proxy, else the vault). requestFunctions: the request functions whose selector that code pushes. erc165: what
+ * supportsInterface answered for the ERC-7540 ids, null when the vault does not implement ERC-165. run: what this
+ * check showed. exits-rejected: deposit worked while withdraw and redeem rejected every input (the upstream
+ * properties ran out of inputs and the sf- calls reverted within their max, or the max was 0). not-exercised: the
+ * fork could not run the vault (a Monad precompile it lacks), so the trait rests on the code and on the vault's
+ * own ERC-165 answer for asynchronous redemption.
+ */
+export const asyncRedeemEvidenceSchema = z
+  .object({
+    codeAddress: address,
+    requestFunctions: z.array(z.enum(ASYNC_REDEEM_REQUEST_FUNCTIONS)).min(1),
+    erc165: z.object({ asyncRedeem: z.boolean(), asyncDeposit: z.boolean(), operator: z.boolean() }).strict().nullable(),
+    run: z.enum(['exits-rejected', 'not-exercised']),
+  })
+  .strict();
+export type AsyncRedeemEvidence = z.infer<typeof asyncRedeemEvidenceSchema>;
+
+/**
+ * A capability of the vault, with the evidence for it. Context only: a trait never changes a property's status.
+ * async-redeem: exits go through a request function (ERC-7540 style). ERC-7540 still requires maxWithdraw and
+ * maxRedeem to report what can be claimed now, so such a vault that reports its full balance still fails.
+ */
+export const vaultTraitSchema = z.object({ id: z.literal('async-redeem'), evidence: asyncRedeemEvidenceSchema }).strict();
+export type VaultTrait = z.infer<typeof vaultTraitSchema>;
+
+/**
  * pass: the property held on every fuzz run. fail: forge found a counterexample.
- * inconclusive: the property could not be exercised (every input rejected, `deal` could not fund users, or
- * the fork RPC failed, including in setUp).
+ * inconclusive: the property could not be exercised (every input rejected, `deal` could not fund users, the
+ * fork RPC failed, or a vault call stopped at a precompile the fork lacks, including in setUp).
  * not_applicable: the suite could not start on this contract (setUp reverted, e.g. no asset()).
  * Policy: only pass counts as verified. inconclusive and not_applicable are "not verified" (exit 17), so a
  * contract that imitates a forge message to turn a fail into inconclusive gains nothing.
@@ -121,7 +164,7 @@ export type StandardCheckSummary = z.infer<typeof standardCheckSummarySchema>;
  */
 export const standardCheckReportSchema = z
   .object({
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(STANDARD_CHECK_SCHEMA_VERSION)]),
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(STANDARD_CHECK_SCHEMA_VERSION)]),
     chainId: z.number().int().positive(),
     address,
     /** Fork block, decimal without leading zeros. */
@@ -131,6 +174,8 @@ export const standardCheckReportSchema = z
     vaultKind: vaultKindSchema.optional(),
     /** Required (possibly null) from schemaVersion 3 on; absent before. */
     skipReason: skipReasonSchema.nullable().optional(),
+    /** Required (possibly empty) from schemaVersion 4 on; absent before. */
+    traits: z.array(vaultTraitSchema).optional(),
     upstream: z.object({ repo: z.string().url(), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
     harnessSha256: hex32,
     /** sha256 of Specfirst's own properties (SpecfirstMaxHonored.t.sol). */
@@ -171,6 +216,12 @@ export const standardCheckReportSchema = z
     }
     if (r.schemaVersion < 3 && r.skipReason !== undefined) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['skipReason'], message: `skipReason does not exist in schemaVersion ${r.schemaVersion}` });
+    }
+    if (r.schemaVersion >= 4 && r.traits === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['traits'], message: 'traits (empty when none) is required from schemaVersion 4 on' });
+    }
+    if (r.schemaVersion < 4 && r.traits !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['traits'], message: `traits does not exist in schemaVersion ${r.schemaVersion}` });
     }
     const expected = summarize(r.results);
     for (const k of Object.keys(expected) as Array<keyof StandardCheckSummary>) {
@@ -303,6 +354,93 @@ export interface ParseStandardOptions {
   depositRevertEvents?: string;
   /** Content of the sf- suite's max-zero event file for this run: one selector per input discarded for a max of 0. */
   maxZeroEvents?: string;
+  /** Content of the sf- suite's below-bound event file: one selector per input below the bound that was refused while the bound was accepted. */
+  belowBoundEvents?: string;
+  /** Content of the missing-precompile event file both suites write: "<selector> <precompile>" per input not judged. */
+  missingPrecompileEvents?: string;
+  /** Content of the setup-precompile event file: the same per input discarded in a setup deposit (a rejected input). */
+  setupPrecompileEvents?: string;
+}
+
+/** Note on an sf- property whose drawn amounts below the bound min(max, cap) were refused while the bound itself went through. */
+export function belowBoundNote(n: number): string {
+  return `${n} amounts below the bound were refused; the bound itself was accepted`;
+}
+
+/**
+ * Reason of a property every rejected input of which needed a Monad precompile forge's EVM lacks: those inputs
+ * were not judged, and no other input ran. With `n`, the note added to a property that also judged other inputs.
+ */
+export function missingPrecompileNote(precompile: string, n?: number): string {
+  return n === undefined
+    ? `${MISSING_PRECOMPILE_NOTE} ${precompile}, which forge lacks; these inputs were not judged`
+    : `${MISSING_PRECOMPILE_NOTE} ${precompile}, which forge lacks, in ${n} inputs; these inputs were not judged`;
+}
+
+/** Note on a property that ran out of inputs, `n` of which were rejected in a setup deposit that reached a missing precompile. */
+export function setupPrecompileNote(precompile: string, n: number): string {
+  return `${MISSING_PRECOMPILE_NOTE} ${precompile} in the setup deposit, which forge lacks, in ${n} inputs; these inputs were rejected`;
+}
+
+/**
+ * Test name -> how many inputs were not judged and the first precompile they needed, from the missing-precompile
+ * event file: one line "<selector of the test> <precompile address>" per input, written by the harness after a
+ * vault call reverted and SfForkGaps.precompileCause showed that the revert needed the precompile. Unknown
+ * selectors and malformed lines are ignored.
+ */
+export function missingPrecompilesOf(events: string, testKeys: Iterable<string>): Map<string, { count: number; precompile: string }> {
+  const bySelector = selectorsOf(testKeys);
+  const out = new Map<string, { count: number; precompile: string }>();
+  for (const line of events.split('\n')) {
+    const m = /^(0x[0-9a-fA-F]{8}) (0x[0-9a-fA-F]{40})$/.exec(line.trim());
+    const test = m ? bySelector.get(m[1]!.toLowerCase()) : undefined;
+    if (!test) continue;
+    const cur = out.get(test);
+    if (cur) cur.count++;
+    else out.set(test, { count: 1, precompile: m![2]! });
+  }
+  return out;
+}
+
+/**
+ * Inputs whose vault call reached a missing precompile and could not be judged. Unjudged inputs of the property
+ * itself (`unjudged`) rule out a pass: a vault can tell a mocked precompile from the real one (code at the address,
+ * gas, the answer), so such an input may be exactly the one that would have failed. A fail keeps its status and
+ * counterexample (another input failed) and gets the count; a pass becomes inconclusive with the count. Inputs
+ * discarded in a setup deposit (`setup`) never ran the property: they are rejected inputs, named in the reason of
+ * a property that ran out of inputs and otherwise not counted. A property whose rejected inputs were all of these
+ * kinds (at least forge's reject limit) is inconclusive with missingPrecompileNote alone. Applied to forge's own
+ * reason, before the other notes are added.
+ */
+function withMissingPrecompile(
+  r: StandardPropertyResult,
+  unjudged: { count: number; precompile: string } | undefined,
+  setup: { count: number; precompile: string } | undefined,
+): StandardPropertyResult {
+  if (!unjudged && !setup) return r;
+  const runs = r.runs !== undefined ? { runs: r.runs } : {};
+  const base = { id: r.id, test: r.test, description: r.description };
+  const limit = /^`vm\.assume` rejected too many inputs \((\d+) allowed\)$/.exec(r.reason ?? '');
+  const total = (unjudged?.count ?? 0) + (setup?.count ?? 0);
+  if (r.status === 'inconclusive' && limit && total >= Number(limit[1])) {
+    return { ...base, status: 'inconclusive', ...runs, reason: missingPrecompileNote((unjudged ?? setup)!.precompile) };
+  }
+  let out = r;
+  if (unjudged) {
+    const note = missingPrecompileNote(unjudged.precompile, unjudged.count);
+    out = out.status === 'pass' ? { ...base, status: 'inconclusive', ...runs, reason: note } : { ...out, reason: out.reason ? `${out.reason}; ${note}` : note };
+  }
+  if (setup && limit && out.status === 'inconclusive') {
+    const note = setupPrecompileNote(setup.precompile, setup.count);
+    out = { ...out, reason: `${out.reason}; ${note}` };
+  }
+  return out;
+}
+
+function withBelowBoundNote(r: StandardPropertyResult, n: number | undefined): StandardPropertyResult {
+  if (!n) return r;
+  const note = belowBoundNote(n);
+  return { ...r, reason: r.reason ? `${r.reason}; ${note}` : note };
 }
 
 /** Reason of an sf- property whose every discarded input had a max of 0. */
@@ -351,6 +489,9 @@ export function parseStandardForgeJson(
   const extra = [...byTest.keys()].filter((t) => !known.has(t)).map((t) => ({ test: t, id: t, description: 'not in the property table' }));
   const deposits = opts.depositRevertEvents ? depositRevertCounts(opts.depositRevertEvents, keys) : new Map<string, number>();
   const maxZero = opts.maxZeroEvents ? depositRevertCounts(opts.maxZeroEvents, keys) : new Map<string, number>();
+  const belowBound = opts.belowBoundEvents ? depositRevertCounts(opts.belowBoundEvents, keys) : new Map<string, number>();
+  const precompiles = opts.missingPrecompileEvents ? missingPrecompilesOf(opts.missingPrecompileEvents, keys) : new Map<string, { count: number; precompile: string }>();
+  const setupPrecompiles = opts.setupPrecompileEvents ? missingPrecompilesOf(opts.setupPrecompileEvents, keys) : new Map<string, { count: number; precompile: string }>();
   return [...properties, ...extra].map((p): StandardPropertyResult => {
     const base = { id: p.id, test: p.test, description: p.description };
     const r = byTest.get(p.test);
@@ -365,12 +506,16 @@ export function parseStandardForgeJson(
       return { ...base, status: 'not_applicable', reason: `setUp failed: ${setupFailure}` };
     }
     if (!r) return { ...base, status: 'inconclusive', reason: 'no result in forge output' };
-    return withMaxZero(withDepositNote(classify(p, r), deposits.get(p.test)), maxZero.get(p.test));
+    // Each rule reads forge's own reason first, so the order matters: max-zero, then the precompile inputs, then the notes.
+    const judged = withMissingPrecompile(withMaxZero(classify(p, r), maxZero.get(p.test)), precompiles.get(p.test), setupPrecompiles.get(p.test));
+    return withBelowBoundNote(withDepositNote(judged, deposits.get(p.test)), belowBound.get(p.test));
   });
 }
 
 /** skipReason of a run whose properties forge reported (the pre-checks set their own). */
 export function skipReasonOf(results: readonly Pick<StandardPropertyResult, 'status' | 'reason'>[]): SkipReason | null {
+  // No property ran, and every one had inputs that needed a Monad precompile the fork lacks (most often all of them).
+  if (results.length > 0 && results.every((r) => r.status === 'inconclusive' && r.reason?.includes(MISSING_PRECOMPILE_NOTE))) return 'missing-precompile';
   if (results.length === 0 || !results.every((r) => r.status === 'not_applicable')) return null;
   return results.every((r) => r.reason?.startsWith(RESTRICTED_ASSET_NOTE)) ? 'asset-transfer-restricted' : 'setup-reverted';
 }

@@ -5,6 +5,8 @@ pragma solidity >=0.8.0 <0.9.0;
 // directory at run time and never copied into this repository. See docs/adr/0003.
 import {ERC4626Test, IERC4626} from "erc4626-tests/ERC4626.test.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
+// Specfirst's own file (MIT): Monad precompiles the fork lacks and the event files, shared with the sf- properties.
+import {SfEvents, SfForkGaps} from "./SpecfirstMaxHonored.t.sol";
 
 interface IDecimals {
     function decimals() external view returns (uint8);
@@ -23,6 +25,9 @@ interface IDecimals {
 /// Users are EOAs above the precompile range and never the vault or its asset.
 /// A reverting maxDeposit or decimals is not held against every property: setUpVault falls back to the
 /// cap and decimals to 18, so a reverting maxDeposit fails test_maxDeposit ("MUST NOT revert") only.
+/// setUp probes the asset (transfers between test users); a refusal stops the suite with a fixed prefix the
+/// runner reads. A deposit in setUpVault that needed a Monad precompile the fork lacks discards that input
+/// with an event (SfForkGaps.precompileCause); nothing about the vault stops the whole suite.
 contract SpecfirstERC4626Test is ERC4626Test {
     using stdStorage for StdStorage;
 
@@ -31,6 +36,7 @@ contract SpecfirstERC4626Test is ERC4626Test {
     uint256 internal constant USER_POOL = 16;
 
     function setUp() public virtual override {
+        SfEvents.notReentered();
         _vault_ = vm.envAddress("SF_VAULT");
         _underlying_ = IERC4626(_vault_).asset();
         _delta_ = vm.envOr("SF_DELTA", uint256(0));
@@ -51,12 +57,7 @@ contract SpecfirstERC4626Test is ERC4626Test {
         address to = _poolMember(1);
         uint256 amount = _cap / 1_000_000;
         uint256 snap = vm.snapshotState();
-        bool given = true;
-        try this.__giveDeal(_underlying_, from, amount) {} catch {
-            try this.__givePacked(_underlying_, from, amount) {} catch {
-                given = false;
-            }
-        }
+        bool given = _tryGive(_underlying_, from, amount);
         bool ok;
         bytes memory ret;
         if (given) {
@@ -66,6 +67,17 @@ contract SpecfirstERC4626Test is ERC4626Test {
         vm.revertToStateAndDelete(snap);
         if (given && !(ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)))))) {
             revert(string.concat("specfirst: asset transfers are restricted for test users (", _refusal(ok, ret), ")"));
+        }
+    }
+
+    function _tryGive(address token, address to, uint256 amount) internal returns (bool) {
+        try this.__giveDeal(token, to, amount) {
+            return true;
+        } catch {}
+        try this.__givePacked(token, to, amount) {
+            return true;
+        } catch {
+            return false;
         }
     }
 
@@ -98,6 +110,8 @@ contract SpecfirstERC4626Test is ERC4626Test {
     }
 
     function setUpVault(Init memory init) public override {
+        // Every upstream property starts here: none runs when called back from inside a vault call.
+        SfEvents.notReentered();
         for (uint256 i = 0; i < N; i++) {
             init.user[i] = _poolUser(init.user[i]);
             address user = init.user[i];
@@ -116,11 +130,15 @@ contract SpecfirstERC4626Test is ERC4626Test {
             _give(_underlying_, user, shares);
             _approve(_underlying_, user, _vault_, shares);
             vm.prank(user);
-            try IERC4626(_vault_).deposit(shares, user) {} catch {
+            try IERC4626(_vault_).deposit(shares, user) {} catch (bytes memory ret) {
                 // EIP-4626: a deposit up to a positive maxDeposit must not revert. Upstream discards the input; so
                 // do we, but the discard is recorded so a vault cannot hide the violation behind rejected inputs.
-                // A revert under a maxDeposit of 0 is not recorded: 0 honestly says "not allowed".
-                if (advertised > 0 && shares > 0 && shares <= advertised) _recordDepositRevert();
+                // A revert under a maxDeposit of 0 is not recorded: 0 honestly says "not allowed". A revert that
+                // reached a Monad precompile the fork lacks and cannot be judged is recorded as that instead; the
+                // property never ran on this input, so the runner counts it as a rejected input.
+                address p = SfForkGaps.precompileCause(_vault_, user, abi.encodeCall(IERC4626.deposit, (shares, user)), ret);
+                if (p != address(0)) SfEvents.setupPrecompile(p);
+                else if (advertised > 0 && shares > 0 && shares <= advertised) _recordDepositRevert();
                 vm.assume(false);
             }
             _give(_underlying_, user, bound(init.asset[i], 0, _cap));
@@ -152,8 +170,6 @@ contract SpecfirstERC4626Test is ERC4626Test {
     /// sf-events/<SF_RUN_ID>.deposit-below-max.log. Files survive the per-run state reset, so the runner can
     /// count discards per property. No-op when SF_RUN_ID is unset.
     function _recordDepositRevert() internal {
-        string memory runId = vm.envOr("SF_RUN_ID", string(""));
-        if (bytes(runId).length == 0) return;
-        vm.writeLine(string.concat("sf-events/", runId, ".deposit-below-max.log"), vm.toString(abi.encodePacked(msg.sig)));
+        SfEvents.write("deposit-below-max", "");
     }
 }

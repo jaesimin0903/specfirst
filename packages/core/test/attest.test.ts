@@ -14,6 +14,8 @@ import {
   checkAttestationRegistryBytecode,
   checkReportHash,
   ERC4626_CHECK_PROPERTIES,
+  ERC4626_CHECK_PROPERTIES_V1,
+  STANDARD_PROPERTY_TABLES,
   identifyImplementation,
   parseCheckReport,
   propertiesHash,
@@ -37,8 +39,13 @@ const MORPHO_V2 = 'morpho-v2-143-109061472.json';
 const NON_ASCII = 'nonascii-revert-143-109061472.json';
 /** Computed with viem here, with abi.encode in CheckAttestationRegistry.t.sol and with `cast abi-encode`; all must agree. */
 const MORPHO_SUITE_HASH = '0x49a246fc992c88a122f878579e0ee415f79ff4cf8c5f021b21a12d703e83023e';
-/** keccak256 of the canonical JSON of ERC4626_CHECK_PROPERTIES; pinned in CheckAttestationRegistry.t.sol too. */
+/**
+ * keccak256 of the canonical JSON of ERC4626_CHECK_PROPERTIES_V1, the table of the reports before 2026-10-07 (the
+ * Morpho fixture among them); pinned in CheckAttestationRegistry.t.sol too.
+ */
 const ERC4626_PROPERTIES_HASH = '0x33117c4fed6c8e64829e6397d577a69153a43774fddd609e952264514e270204';
+/** keccak256 of the canonical JSON of ERC4626_CHECK_PROPERTIES, the current wording of the sf- descriptions. */
+const ERC4626_PROPERTIES_HASH_V2 = '0x7a2f06a57ed59d9c67aaf17b989e7d028c9346eb8d2679a5cc155f595667c5f5';
 /** keccak256("erc4626"), the registry's standardId; pinned in CheckAttestationRegistry.t.sol too. */
 const ERC4626_STANDARD_ID = '0x45f39c8c7e3105201fd8b1288ac068347728af9cfd16f3f08e97171ef955c9ab';
 
@@ -122,8 +129,12 @@ describe('attestation parameters from real check reports (Monad block 109061472)
 
   it('standardId is keccak256 of the standard name; propertiesHash is the canonical JSON of the property table', () => {
     expect(standardIdOf('erc4626')).toBe(ERC4626_STANDARD_ID);
-    expect(propertiesHash(ERC4626_CHECK_PROPERTIES)).toBe(ERC4626_PROPERTIES_HASH);
-    expect(ERC4626_PROPERTIES_HASH).toBe(keccak256(toHex(canonicalJson(ERC4626_CHECK_PROPERTIES))));
+    expect(propertiesHash(ERC4626_CHECK_PROPERTIES_V1)).toBe(ERC4626_PROPERTIES_HASH);
+    expect(ERC4626_PROPERTIES_HASH).toBe(keccak256(toHex(canonicalJson(ERC4626_CHECK_PROPERTIES_V1))));
+    expect(propertiesHash(ERC4626_CHECK_PROPERTIES)).toBe(ERC4626_PROPERTIES_HASH_V2);
+    // Only the sf- descriptions differ: same ids, tests and order, so bit i means the same property in both.
+    expect(ERC4626_CHECK_PROPERTIES.map(({ id, test }) => [id, test])).toEqual(ERC4626_CHECK_PROPERTIES_V1.map(({ id, test }) => [id, test]));
+    expect(STANDARD_PROPERTY_TABLES.erc4626).toEqual([ERC4626_CHECK_PROPERTIES, ERC4626_CHECK_PROPERTIES_V1]);
   });
 
   it('both reports ran the same suite, so they share suiteHash; any suite input changes it', () => {
@@ -157,6 +168,16 @@ describe('attestation parameters from real check reports (Monad block 109061472)
     expect(() => attestationParamsFromReport(renamed, { reportURI: 'u' })).toThrow(AttestationError);
     const short = { ...report, results: report.results.slice(0, 29), summary: { ...report.summary, pass: 29 } };
     expect(() => attestationParamsFromReport(short, { reportURI: 'u' })).toThrow(/29 results are not the erc4626 property table \(30 properties/);
+  });
+
+  it('a report in the current wording of the table attests with its own propertiesHash; one mixing the wordings is refused', () => {
+    const report = parseCheckReport(text(MORPHO));
+    const current = { ...report, results: report.results.map((r, i) => ({ ...r, description: ERC4626_CHECK_PROPERTIES[i]!.description })) };
+    const p = attestationParamsFromReport(current, { reportURI: 'u' });
+    expect(suiteOf(current).propertiesHash).toBe(ERC4626_PROPERTIES_HASH_V2);
+    expect(p.suiteHash).not.toBe(MORPHO_SUITE_HASH);
+    const mixed = { ...report, results: report.results.map((r, i) => (i === 26 ? { ...r, description: ERC4626_CHECK_PROPERTIES[i]!.description } : r)) };
+    expect(() => attestationParamsFromReport(mixed, { reportURI: 'u' })).toThrow(AttestationError);
   });
 
   it('refuses a reportURI over 512 UTF-8 bytes, the registry limit', () => {

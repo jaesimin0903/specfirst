@@ -84,7 +84,8 @@ export default function AboutPage() {
           </li>
           <li>
             <strong>Inconclusive</strong>: the property could not be exercised, because the vault rejected the amounts, test users could not be funded,
-            or the RPC failed. Only a pass counts as verified, so imitating one of these messages gains a vault nothing.
+            the RPC failed, or every input needed a Monad precompile the fork does not have. Only a pass counts as verified, so imitating one of these
+            messages gains a vault nothing.
           </li>
           <li>
             <strong>Not applicable</strong>: the suite cannot run on this contract. ERC-7575 vaults keep shares in a separate token, ERC-7535 vaults hold
@@ -108,6 +109,11 @@ export default function AboutPage() {
             harness.
           </li>
           <li>Public RPCs rate-limit. Properties that ended on an RPC error say nothing about the vault and should be rerun.</li>
+          <li>
+            forge has none of Monad&apos;s own precompiles (staking at 0x1000, the reserve balance check at 0x1001, P256 at 0x0100). An input whose
+            vault call needs one of them, such as a deposit into a liquid staking vault that stakes it, is not judged; a property whose inputs all
+            needed one is inconclusive. Inputs that only touch a precompile and revert anyway are judged as usual.
+          </li>
         </ul>
 
         <h2>Why we call them spec mismatches</h2>

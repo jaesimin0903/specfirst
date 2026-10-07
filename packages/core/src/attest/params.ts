@@ -1,6 +1,6 @@
 import { encodeAbiParameters, getAddress, keccak256, toHex, type Address, type Hex } from 'viem';
 import { canonicalJson } from '../spec/hash.js';
-import { ERC4626_CHECK_PROPERTIES, type StandardProperty } from '../standards/erc4626.js';
+import { ERC4626_CHECK_PROPERTIES, ERC4626_CHECK_PROPERTIES_V1, type StandardProperty } from '../standards/erc4626.js';
 import { standardCheckReportSchema, type StandardCheckReport, type StandardName } from '../standards/report.js';
 
 /** Most results one attestation can carry: one bit each in a uint256 bitmap. */
@@ -15,6 +15,14 @@ const MAX_UINT64 = 2n ** 64n - 1n;
  */
 export const STANDARD_PROPERTIES: Readonly<Record<StandardName, readonly StandardProperty[]>> = {
   erc4626: ERC4626_CHECK_PROPERTIES,
+};
+
+/**
+ * Every table a report of the standard may carry: the current one first, then earlier wordings of the same ids,
+ * tests and order (only descriptions changed). A report attests with the propertiesHash of its own table.
+ */
+export const STANDARD_PROPERTY_TABLES: Readonly<Record<StandardName, ReadonlyArray<readonly StandardProperty[]>>> = {
+  erc4626: [ERC4626_CHECK_PROPERTIES, ERC4626_CHECK_PROPERTIES_V1],
 };
 
 export class AttestationError extends Error {
@@ -88,8 +96,8 @@ export function standardIdOf(standard: string): Hex {
 
 /**
  * propertiesHash = keccak256 of the UTF-8 canonical JSON of [{id, test, description}, ...] in order. For a
- * report it is taken over its results; cert attest only accepts reports whose list is the standard's table
- * (STANDARD_PROPERTIES), so the value is the table's hash and bit i always names the same property.
+ * report it is taken over its results; cert attest only accepts reports whose list is one of the standard's
+ * tables (STANDARD_PROPERTY_TABLES), so the value is a table's hash and bit i always names the same property.
  */
 export function propertiesHash(properties: ReadonlyArray<Pick<StandardProperty, 'id' | 'test' | 'description'>>): Hex {
   return keccak256(toHex(canonicalJson(properties.map(({ id, test, description }) => ({ id, test, description })))));
@@ -182,9 +190,9 @@ export function attestationParamsFromReport(report: StandardCheckReport, opts: {
   if (blockNumber > MAX_UINT64) throw new AttestationError(`blockNumber ${blockNumber} does not fit uint64`);
   const table = STANDARD_PROPERTIES[report.standard];
   const suite = suiteOf(report);
-  if (suite.propertiesHash !== propertiesHash(table)) {
+  if (!STANDARD_PROPERTY_TABLES[report.standard].some((t) => propertiesHash(t) === suite.propertiesHash)) {
     throw new AttestationError(
-      `the report's ${report.results.length} results are not the ${report.standard} property table (${table.length} properties, same ids, tests and descriptions, same order); bit i of an attestation would not mean property i`,
+      `the report's ${report.results.length} results are not the ${report.standard} property table (${table.length} properties, same ids, tests and descriptions in one of its wordings, same order); bit i of an attestation would not mean property i`,
     );
   }
   const uriBytes = new TextEncoder().encode(opts.reportURI).length;
