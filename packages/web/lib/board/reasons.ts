@@ -11,8 +11,8 @@ import type { PropertyStatus, ReasonCategory, ReportResultView, SkipReason, Stat
 
 /** core RESTRICTED_ASSET_NOTE: reason of every property when test users cannot move the asset. */
 export const RESTRICTED_ASSET_NOTE = 'asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances';
-/** core MISSING_PRECOMPILE_NOTE: reason of a property stopped by a Monad precompile forge's EVM lacks, address in parentheses. */
-export const MISSING_PRECOMPILE_NOTE = "the vault calls a Monad precompile forge's EVM lacks, so the call reverts on the fork only; not attributable to the vault";
+/** core MISSING_PRECOMPILE_NOTE: start of the reason when every rejected input needed a Monad precompile forge's EVM lacks. */
+export const MISSING_PRECOMPILE_NOTE = 'a vault call reached Monad precompile';
 
 const TOO_MANY_REJECTS = /^`vm\.assume` rejected too many inputs \((\d+) allowed\)/;
 const DEPOSIT_BELOW_MAX = /deposit reverted below maxDeposit (\d+) times/;
@@ -28,7 +28,10 @@ const FORGE_STATUS = /^forge status (\S+)/;
  * then optionally the runner's notes after "; " (core minAmountNote).
  */
 const MAX_HONORED_FAIL = /^(deposit|mint|withdraw|redeem)\((\d+)\) reverted with (selector (0x[0-9a-fA-F]{8})|no revert data|short revert data) while (max(?:Deposit|Mint|Withdraw|Redeem)) is (\d+)(?:; [\s\S]*)?$/;
-const MISSING_PRECOMPILE = / \((0x[0-9a-fA-F]{40})\)$/;
+/** core missingPrecompileNote: the precompile, and with a count when other inputs were judged. */
+const MISSING_PRECOMPILE = /a vault call reached Monad precompile (0x[0-9a-fA-F]{40}), which forge lacks(?:, in (\d+) inputs)?; these inputs were not judged/;
+/** core belowBoundNote. */
+const BELOW_BOUND = /(\d+) amounts below the bound were refused; the bound itself was accepted/;
 
 /**
  * Custom errors seen in the Monad batch, named by matching the 4-byte selector against candidate signatures.
@@ -66,7 +69,7 @@ export const REASON_LABEL: Record<ReasonCategory, string> = {
   'max-zero': 'Max value was 0, nothing to honor',
   'unfundable-asset': 'Asset balance cannot be set for test users',
   'asset-transfer-restricted': 'Asset restricts transfers',
-  'missing-precompile': 'Vault calls a Monad precompile the fork lacks',
+  'missing-precompile': 'Inputs needed a Monad precompile the fork lacks',
   'rpc-error': 'RPC failed during the fork',
   'separate-share-token': 'ERC-7575, shares are a separate token',
   'native-asset': 'ERC-7535, native asset',
@@ -159,14 +162,33 @@ function refusalOf(reason: string): string {
   return '';
 }
 
+/**
+ * What the runner counted beside the verdict: refusals below the bound (an sf- property checks that the bound is
+ * accepted) and inputs not judged because they needed a missing precompile. Empty when there is neither.
+ */
+export function countedNotes(reason: string | undefined): string {
+  const r = reason ?? '';
+  const out: string[] = [];
+  const below = BELOW_BOUND.exec(r);
+  if (below) out.push(`${below[1]} amounts below the bound were refused; the bound itself was accepted.`);
+  const pre = MISSING_PRECOMPILE.exec(r);
+  if (pre?.[2]) out.push(`${pre[2]} inputs reached Monad precompile ${pre[1]}, which forge's EVM does not have, and were not judged.`);
+  return out.join(' ');
+}
+
+function withCounted(sentence: string, reason: string | undefined): string {
+  const notes = countedNotes(reason);
+  return notes ? `${sentence} ${notes}` : sentence;
+}
+
 /** A sentence for one property result, whatever its status. */
 export function explainResult(result: Pick<ReportResultView, 'status' | 'reason' | 'runs'>): string {
   const reason = result.reason ?? '';
   switch (result.status) {
     case 'pass':
-      return result.runs ? `No counterexample in ${result.runs} fuzz runs at this block.` : 'No counterexample at this block.';
+      return withCounted(result.runs ? `No counterexample in ${result.runs} fuzz runs at this block.` : 'No counterexample at this block.', result.reason);
     case 'fail':
-      return explainFailure(result.reason);
+      return withCounted(explainFailure(result.reason), result.reason);
     default:
       break;
   }
@@ -176,9 +198,12 @@ export function explainResult(result: Pick<ReportResultView, 'status' | 'reason'
       const limit = TOO_MANY_REJECTS.exec(reason)?.[1];
       const deposits = DEPOSIT_BELOW_MAX.exec(reason)?.[1];
       const base = `Never exercised: the vault rejected nearly every amount the fuzzer tried, and forge gave up after ${limit ?? 'too many'} discarded inputs.`;
-      return deposits
-        ? `${base} Along the way deposit reverted ${deposits} times at amounts up to maxDeposit; some of these may be tiny amounts that round to zero shares, which many vaults reject. Those inputs were discarded, as upstream does, so this stays inconclusive; whether deposit honors maxDeposit is judged by sf-maxDeposit-honored.`
-        : base;
+      return withCounted(
+        deposits
+          ? `${base} Along the way deposit reverted ${deposits} times at amounts up to maxDeposit; some of these may be tiny amounts that round to zero shares, which many vaults reject. Those inputs were discarded, as upstream does, so this stays inconclusive; whether deposit honors maxDeposit is judged by sf-maxDeposit-honored.`
+          : base,
+        reason,
+      );
     }
     case 'max-zero': {
       const maxName = MAX_ZERO.exec(reason)?.[1] ?? 'The max value';
@@ -190,7 +215,7 @@ export function explainResult(result: Pick<ReportResultView, 'status' | 'reason'
       return `Not applicable: the asset restricts transfers, through an allowlist or similar, and both suites need test balances that move freely.${refusalOf(reason)}`;
     case 'missing-precompile': {
       const at = MISSING_PRECOMPILE.exec(reason)?.[1];
-      return `Never exercised: the vault called a Monad precompile${at ? ` at ${at}` : ''} that forge's EVM does not have, so the call reverted on the fork while it goes through on Monad. This says nothing about the vault.`;
+      return `Not judged: every rejected input reached Monad precompile${at ? ` ${at}` : ''}, which forge's EVM does not have, and its call reverted on the fork only when that precompile gave no answer. These inputs were not judged.`;
     }
     case 'rpc-error':
       return 'Never exercised: the RPC failed while the fork was reading chain state. This says nothing about the vault; a rerun on another RPC should settle it.';
@@ -242,7 +267,7 @@ export function explainSkip(skip: SkipReason): string {
     case 'asset-transfer-restricted':
       return 'No property applies. The asset only moves between allowed parties, so test users cannot be funded and moved around as both suites require. Nothing here is attributed to the vault.';
     case 'missing-precompile':
-      return "No property could be exercised. The vault's deposit calls a Monad precompile that forge's EVM does not have, so on the fork it reverts while on Monad it goes through. Nothing here says the vault is wrong or right.";
+      return "No property could be exercised. Every property ran out of inputs, and its vault calls needed the answer of a Monad precompile that forge's EVM does not have; those inputs were not judged. Nothing here says the vault is wrong or right.";
     case 'setup-reverted':
       return 'No property applies. The suites could not start on this contract because setUp reverted. The reason is listed with each property below.';
   }
@@ -268,7 +293,7 @@ export function traitBasis(trait: VaultTraitView): string {
   const run =
     e.run === 'exits-rejected'
       ? 'in this check deposits worked while every withdraw and redeem reverted'
-      : 'this check could not run the vault on the fork, so the run says nothing about exits';
+      : 'the exits could not be run on the fork, so the label comes from the code and ERC-165 only';
   return [code, erc165, run].filter(Boolean).join('; ') + '.';
 }
 
@@ -324,7 +349,7 @@ export const REASON_DETAIL: Record<ReasonCategory, string> = {
   'max-zero': 'The vault reported a max of 0 for every test user, which EIP-4626 allows, so there was no promised amount to test.',
   'unfundable-asset': "The asset keeps balances where forge-std cannot write them, such as rebasing tokens, so test users could not be funded.",
   'asset-transfer-restricted': 'The asset only moves between allowed parties, and both suites need test users who can send it freely.',
-  'missing-precompile': "The vault calls a Monad precompile, such as staking at 0x1000, that forge's EVM does not have, so the call reverts on the fork only.",
+  'missing-precompile': "Every rejected input reached a Monad precompile, such as staking at 0x1000, that forge's EVM does not have; those inputs were not judged.",
   'rpc-error': 'The public RPC failed while the fork read chain state. A rerun on another RPC should settle it.',
   'separate-share-token': 'Shares live in a separate token, as EIP-7575 allows, while both suites treat the vault as its own share token.',
   'native-asset': "The vault holds the chain's native coin, and the harness funds users with ERC-20 transfers.",

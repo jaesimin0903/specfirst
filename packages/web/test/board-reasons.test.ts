@@ -7,7 +7,8 @@ import {
   RESTRICTED_ASSET_NOTE as CORE_RESTRICTED_NOTE,
   erc7575Reason,
   maxZeroNote,
-  minAmountNote,
+  belowBoundNote,
+  missingPrecompileNote,
 } from '@specfirst/core';
 import {
   ASYNC_MAX_NOTE,
@@ -34,7 +35,7 @@ describe('strings copied from @specfirst/core', () => {
   it('match core, so classification cannot drift from what the CLI writes', () => {
     expect(RESTRICTED_ASSET_NOTE).toBe(CORE_RESTRICTED_NOTE);
     expect(MISSING_PRECOMPILE_NOTE).toBe(CORE_PRECOMPILE_NOTE);
-    expect(classifyReason('inconclusive', `${CORE_PRECOMPILE_NOTE} (0x0000000000000000000000000000000000001000)`)).toBe('missing-precompile');
+    expect(classifyReason('inconclusive', missingPrecompileNote('0x0000000000000000000000000000000000001000'))).toBe('missing-precompile');
     expect(classifyReason('not_applicable', maxZeroNote('maxWithdraw'))).toBe('max-zero');
     expect(classifyReason('not_applicable', NATIVE_ASSET_REASON)).toBe('native-asset');
     expect(classifyReason('not_applicable', erc7575Reason('0x1111111111111111111111111111111111111111'))).toBe('separate-share-token');
@@ -80,7 +81,7 @@ describe('explainResult', () => {
   });
 
   it("a max-honored failure with the runner's minimum-amount note still parses", () => {
-    const reason = `redeem(1) reverted with selector 0x03f7f64c while maxRedeem is 1; ${minAmountNote(1)}`;
+    const reason = `redeem(1) reverted with selector 0x03f7f64c while maxRedeem is 1; ${belowBoundNote(1)}`;
     expect(parseMaxHonoredFailure(reason)).toEqual({ action: 'redeem', amount: '1', selector: '0x03f7f64c', maxName: 'maxRedeem', max: '1' });
     expect(describeFailure(reason).finding).toBe('maxRedeem was 1, but redeem(1) reverted with 0x03f7f64c.');
   });
@@ -132,8 +133,15 @@ describe('explainResult', () => {
   it('other inconclusive results', () => {
     expect(explainResult({ status: 'inconclusive', reason: 'fork RPC error, rerun or pass another --rpc: EVM error; database error: x' })).toMatch(/says nothing about the vault/);
     expect(explainResult({ status: 'inconclusive', reason: "the asset's balance slot cannot be written, x" })).toMatch(/could not be given the asset/);
-    expect(explainResult({ status: 'inconclusive', reason: `${MISSING_PRECOMPILE_NOTE} (0x0000000000000000000000000000000000001000)` })).toBe(
-      "Never exercised: the vault called a Monad precompile at 0x0000000000000000000000000000000000001000 that forge's EVM does not have, so the call reverted on the fork while it goes through on Monad. This says nothing about the vault.",
+    expect(explainResult({ status: 'inconclusive', reason: missingPrecompileNote('0x0000000000000000000000000000000000001000') })).toBe(
+      "Not judged: every rejected input reached Monad precompile 0x0000000000000000000000000000000000001000, which forge's EVM does not have, and its call reverted on the fork only when that precompile gave no answer. These inputs were not judged.",
+    );
+    // Counts beside a verdict: refusals below the bound, and inputs not judged.
+    expect(explainResult({ status: 'pass', runs: 16, reason: belowBoundNote(3) })).toBe(
+      'No counterexample in 16 fuzz runs at this block. 3 amounts below the bound were refused; the bound itself was accepted.',
+    );
+    expect(explainResult({ status: 'pass', runs: 16, reason: missingPrecompileNote('0x0000000000000000000000000000000000001001', 5) })).toBe(
+      "No counterexample in 16 fuzz runs at this block. 5 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and were not judged.",
     );
     expect(explainResult({ status: 'inconclusive', reason: 'no result in forge output' })).toBe('Inconclusive: forge reported no result for this property.');
     expect(explainResult({ status: 'inconclusive', reason: 'forge status Skipped' })).toBe('Inconclusive: forge ended this property with status Skipped.');
@@ -203,7 +211,7 @@ describe('vault traits', () => {
   it('label names the first request function; the basis says what it rests on', () => {
     expect(traitLabel(trait)).toBe('Asynchronous withdrawals: exits go through requestRedeem');
     expect(traitBasis(trait)).toBe(
-      'requestRedeem(uint256,address,address) and requestRedeemGVault(uint256,address,address,uint64) in the code at 0xA1f511E1442c61931ca5ace7616d2cC78497aFd2; ERC-165 declares ERC-7540 asynchronous redemption; this check could not run the vault on the fork, so the run says nothing about exits.',
+      'requestRedeem(uint256,address,address) and requestRedeemGVault(uint256,address,address,uint64) in the code at 0xA1f511E1442c61931ca5ace7616d2cC78497aFd2; ERC-165 declares ERC-7540 asynchronous redemption; the exits could not be run on the fork, so the label comes from the code and ERC-165 only.',
     );
     expect(traitBasis({ ...trait, evidence: { ...trait.evidence, requestFunctions: ['requestRedeem(uint256,address,address)'], erc165: null, run: 'exits-rejected' } })).toBe(
       'requestRedeem(uint256,address,address) in the code at 0xA1f511E1442c61931ca5ace7616d2cC78497aFd2; in this check deposits worked while every withdraw and redeem reverted.',
