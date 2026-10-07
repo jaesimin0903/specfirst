@@ -633,6 +633,8 @@ export {
 export {
   allocationGateCreationCodeHash,
   DEFAULT_GATE_MAX_AGE_SEC,
+  DEFAULT_GATE_SLIPPAGE_BPS,
+  GATE_FRESH_ATTESTATION_HINT,
   deployAllocationGate,
   mintDemoToken,
   AllocationGateClient,

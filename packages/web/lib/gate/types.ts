@@ -54,6 +54,8 @@ export interface GateViewJson {
   owner: string;
   subjectChainId: string;
   standardId: string;
+  /** The suite the gate pins; all zeros accepts any. */
+  suiteHash: string;
   maxAttestationAge: string;
   idle: string;
   /** Head block and its timestamp (unix seconds) when the page was read. */

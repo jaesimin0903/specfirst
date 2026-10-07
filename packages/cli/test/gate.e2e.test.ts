@@ -45,6 +45,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
   let token: Address;
   let a: Address;
   let b: Address;
+  let c: Address;
   let gate: Address;
   const savedEnv = { ...process.env };
 
@@ -118,16 +119,20 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
     token = event(await demo('deploy', '--token'), 'watch-demo-deployed').token as Address;
     a = event(await demo('vault', '--asset', token), 'watch-demo-vault').vault as Address;
     b = event(await demo('vault', '--asset', token), 'watch-demo-vault').vault as Address;
+    c = event(await demo('vault', '--asset', token), 'watch-demo-vault').vault as Address;
 
     const noRegistry = await cli('watch', 'demo', 'gate', 'deploy', '--asset', token, '--network', 'anvil', '--registry-attest', '0x0000000000000000000000000000000000000001');
     expect(noRegistry.code).toBe(19);
     expect(noRegistry.err).toMatch(/WithoutCode/);
+    const badSuite = await demo('gate', 'deploy', '--asset', token, '--suite-hash', '0x12');
+    expect(badSuite.code).toBe(19);
+    expect(badSuite.err).toMatch(/--suite-hash must be a 0x bytes32/);
 
     const d = await demo('gate', 'deploy', '--asset', token, '--max-age', '3600', '--fund', '100');
     expect(d.err).toBe('');
     expect(d.code).toBe(0);
     expect(d.events.map((e) => e.type)).toEqual(['watch-demo-gate-deployed', 'watch-demo-gate-funded']);
-    expect(event(d, 'watch-demo-gate-deployed')).toMatchObject({ chainId: 31337, registry: process.env.SPECFIRST_ATTEST_REGISTRY_31337, asset: token, owner: DEPLOYER, standard: 'erc4626', maxAttestationAge: '3600', envName: 'SPECFIRST_GATE_31337' });
+    expect(event(d, 'watch-demo-gate-deployed')).toMatchObject({ chainId: 31337, registry: process.env.SPECFIRST_ATTEST_REGISTRY_31337, asset: token, owner: DEPLOYER, standard: 'erc4626', suiteHash: `0x${'00'.repeat(32)}`, maxAttestationAge: '3600', envName: 'SPECFIRST_GATE_31337' });
     gate = event(d, 'watch-demo-gate-deployed').gate as Address;
     process.env.SPECFIRST_GATE_31337 = gate;
     const s = await reader().summary();
@@ -146,13 +151,26 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
     await attest(b, false);
     const r = await demo('gate', 'allocate', a, '10');
     expect(r.err).toBe('');
-    expect(event(r, 'watch-demo-gate-allocated')).toMatchObject({ vault: a, attestationId: idA, assets: parseEther('10').toString(), shares: parseEther('10').toString() });
+    // No --min-shares: the vault's previewDeposit less 1%.
+    expect(event(r, 'watch-demo-gate-allocated')).toMatchObject({ vault: a, attestationId: idA, assets: parseEther('10').toString(), shares: parseEther('10').toString(), minShares: parseEther('9.9').toString() });
+    const floor = await demo('gate', 'allocate', b, '1', '--min-shares', '2');
+    expect(floor.code).toBe(19);
+    expect(floor.err).toMatch(/allocation refused \(TooFewShares\)/);
     expect((await demo('gate', 'allocate', b, '20.5')).code).toBe(0);
     expect(await reader().position(a)).toMatchObject({ shares: parseEther('10'), assetsIn: parseEther('10') });
 
+    // The deployer owns the gate: the CLI asks for --as-owner before it pulls money out of a healthy vault.
     const ex = await demo('gate', 'exit', a);
     expect(ex.code).toBe(19);
-    expect(ex.err).toMatch(/exit refused: the vault is Compliant/);
+    expect(ex.err).toMatch(/exit refused: the vault is Compliant; you are the gate's owner and may exit it anyway with --as-owner/);
+    process.env.DEPLOYER_PRIVATE_KEY = KEEPER_KEY;
+    try {
+      const stranger = await demo('gate', 'exit', a);
+      expect(stranger.code).toBe(19);
+      expect(stranger.err).toMatch(/exit refused: the vault is Compliant, .*; only the gate's owner may exit it now/);
+    } finally {
+      process.env.DEPLOYER_PRIVATE_KEY = DEPLOYER_KEY;
+    }
     const keep = await demo('gate', 'keep', '--once');
     expect(keep.code).toBe(0);
     expect(event(keep, 'watch-demo-gate-pass')).toMatchObject({ vaults: 2, due: 0, exited: 0 });
@@ -202,13 +220,31 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
     expect(nothing.err).toMatch(/the gate holds no shares of/);
   });
 
+  it('the owner exits a healthy vault with --as-owner; an hour later allocate is Stale and says how to get a fresh attestation', async () => {
+    await attest(c, false);
+    expect((await demo('gate', 'allocate', c, '5')).code).toBe(0);
+    const ex = await demo('gate', 'exit', c, '--as-owner');
+    expect(ex.err).toBe('');
+    expect(event(ex, 'watch-demo-gate-exit')).toMatchObject({ vault: c, exited: true, verdict: 'Compliant', assets: parseEther('5').toString() });
+
+    await clients.publicClient.request({ method: 'evm_increaseTime' as never, params: [3601] as never });
+    await clients.publicClient.request({ method: 'anvil_mine' as never, params: ['0x1'] as never });
+    const stale = await demo('gate', 'allocate', c, '1');
+    expect(stale.code).toBe(19);
+    expect(event(stale, 'watch-demo-gate-refused')).toMatchObject({ vault: c, verdict: 'Stale' });
+    expect(stale.err).toMatch(/allocation refused \(Stale\): .*unchanged re-checks of the watcher are not attested.*specfirst cert attest/);
+    // Stale opens no exit for others; the keeper leaves c alone (nothing held anyway) and the rest is exited.
+    expect(event(await demo('gate', 'keep', '--once'), 'watch-demo-gate-pass')).toMatchObject({ vaults: 3, due: 0 });
+  });
+
   it('human output names each vault, its verdict and its latest attestation', async () => {
     const r = await human('watch', 'demo', 'gate', 'status', '--network', 'anvil');
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/AllocationGate 0x[0-9a-fA-F]{40}/);
-    expect(r.out).toMatch(/idle 100, 2 vaults/);
+    expect(r.out).toMatch(/any suite, attestations fresh for 3600 s/);
+    expect(r.out).toMatch(/idle 100, 3 vaults/);
     expect(r.out).toMatch(new RegExp(`${a}\\s+NotCompliant`));
     expect(r.out).toMatch(/0 shares, 10 in, 10 out, last exit attempt block \d+/);
-    expect(r.out).toMatch(/attestation \d+: Valid, 29 pass 1 fail 0 inconclusive 0 n\/a, issuer 0x[0-9a-fA-F]{40}, \d+ s ago/);
+    expect(r.out).toMatch(/attestation \d+: Valid, 29 pass 1 fail 0 inconclusive 0 n\/a, issuer 0x[0-9a-fA-F]{40}, \d+ (s|min) ago/);
   });
 });

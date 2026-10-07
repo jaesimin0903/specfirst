@@ -8,7 +8,7 @@ import {DemoToken} from "../src/demo/DemoToken.sol";
 import {DemoVault, DemoVaultFactory} from "../src/demo/DemoVaultFactory.sol";
 
 /// @notice Drives a gate over three DemoVaults with random allocations, bugs switched on and off and attested,
-///         revocations, keeper exits, yield, other depositors, idle withdrawals and time jumps. Every action is
+///         revocations, keeper and owner exits, yield, other depositors, idle withdrawals and time jumps. Every action is
 ///         guarded so it never reverts (fail_on_revert = true); a refused allocation is asserted to be refused.
 contract GateHandler is Test {
     bytes32 internal constant ERC4626 = 0x45f39c8c7e3105201fd8b1288ac068347728af9cfd16f3f08e97171ef955c9ab;
@@ -79,17 +79,19 @@ contract GateHandler is Test {
         (AllocationGate.Verdict verdict,) = gate.verdictOf(address(v));
         if (verdict != AllocationGate.Verdict.Compliant) {
             vm.prank(owner);
-            try gate.allocate(address(v), amount) {
+            try gate.allocate(address(v), amount, 0) {
                 fail("allocated into a vault that is not compliant");
             } catch {
                 ++refusals;
             }
             return;
         }
-        if (v.convertToShares(amount) == 0) return; // NoSharesMinted
+        uint256 quoted = v.convertToShares(amount);
+        if (quoted == 0) return; // NoSharesMinted
         AllocationGate.Position memory before = gate.positionOf(address(v));
         vm.prank(owner);
-        uint256 shares = gate.allocate(address(v), amount);
+        uint256 shares = gate.allocate(address(v), amount, quoted);
+        assertEq(shares, quoted);
         assertEq(gate.positionOf(address(v)).shares, before.shares + shares);
         ghostIn += amount;
         ++allocations;
@@ -120,6 +122,18 @@ contract GateHandler is Test {
         vm.prank(keeper);
         assertTrue(gate.exit(address(v)));
         assertEq(gate.idle() - idle, expected);
+        ghostOut += expected;
+        ++exits;
+    }
+
+    /// The owner leaves a vault on any verdict, healthy or not.
+    function ownerExit(uint256 seed) external {
+        DemoVault v = vaults[seed % vaults.length];
+        uint256 shares = gate.positionOf(address(v)).shares;
+        if (shares == 0) return;
+        uint256 expected = v.previewRedeem(shares);
+        vm.prank(owner);
+        assertTrue(gate.exit(address(v)));
         ghostOut += expected;
         ++exits;
     }
@@ -178,6 +192,7 @@ contract AllocationGateInvariantTest is Test {
             address(reg),
             uint64(block.chainid),
             0x45f39c8c7e3105201fd8b1288ac068347728af9cfd16f3f08e97171ef955c9ab,
+            bytes32(0),
             address(token),
             owner,
             1 days

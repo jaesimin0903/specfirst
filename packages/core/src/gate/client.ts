@@ -8,8 +8,20 @@ import { allocationGateAbi, allocationGateBytecode, exitAllowed, gateExitPathOf,
 /** keccak256 of the bundled creation code; `watch demo gate deploy` prints it so a deploy can be matched to a build. */
 export const allocationGateCreationCodeHash: Hex = keccak256(allocationGateBytecode);
 
-/** Default maxAttestationAge of `watch demo gate deploy`: a day, the watcher's default sweep period. */
+/**
+ * Default maxAttestationAge of `watch demo gate deploy`: a day. The age runs from the attestation's issuedAt, and the
+ * watcher's unchanged re-checks are not attested, so a day after a vault's last attested change allocate is refused
+ * (Stale) until a new check is attested: a desk request, or `specfirst check` and `specfirst cert attest`. Stale
+ * never opens exit to anyone but the owner.
+ */
 export const DEFAULT_GATE_MAX_AGE_SEC = 86_400n;
+
+/** What a stale attestation needs, for people reading a refusal. */
+export const GATE_FRESH_ATTESTATION_HINT =
+  'unchanged re-checks of the watcher are not attested, so get a new attestation of the vault: a desk request (`specfirst desk request`), or `specfirst check <vault>` and then `specfirst cert attest <report>` with an issuer key';
+
+/** Default slippage of `watch demo gate allocate` when no --min-shares is given: 1%, in basis points. */
+export const DEFAULT_GATE_SLIPPAGE_BPS = 100n;
 
 /** AllocationGate.Position as viem decodes it. */
 export interface GatePosition {
@@ -25,6 +37,8 @@ export interface GateSummary {
   registry: Address;
   subjectChainId: bigint;
   standardId: Hex;
+  /** The suite the gate pins; zero accepts any. */
+  suiteHash: Hex;
   asset: Address;
   owner: Address;
   maxAttestationAge: bigint;
@@ -108,6 +122,8 @@ export interface DeployGateInput {
   /** Must be the chain the gate is deployed on (WrongSubjectChain otherwise): the vaults live next to it. */
   subjectChainId: bigint;
   standardId: Hex;
+  /** The registry's suiteHash the gate accepts; omitted or zero accepts any suite. */
+  suiteHash?: Hex;
   asset: Address;
   owner: Address;
   /** Seconds; 1 to 2^64 - 1. */
@@ -123,7 +139,7 @@ export async function deployAllocationGate(i: DeployGateInput): Promise<{ addres
   const data = encodeDeployData({
     abi: allocationGateAbi,
     bytecode: allocationGateBytecode,
-    args: [i.registry, i.subjectChainId, i.standardId, i.asset, i.owner, i.maxAttestationAge],
+    args: [i.registry, i.subjectChainId, i.standardId, i.suiteHash ?? ZERO_HASH, i.asset, i.owner, i.maxAttestationAge],
   });
   let gas: bigint;
   try {
@@ -154,6 +170,12 @@ export async function mintDemoToken(i: { client: SpecfirstPublicClient; wallet: 
 }
 
 type Mined = GateTx & { receipt: TransactionReceipt };
+
+const ZERO_HASH: Hex = `0x${'00'.repeat(32)}`;
+
+const previewAbi = [
+  { type: 'function', name: 'previewDeposit', stateMutability: 'view', inputs: [{ name: 'assets', type: 'uint256' }], outputs: [{ name: 'shares', type: 'uint256' }] },
+] as const;
 
 /**
  * Thin client over AllocationGate. Writes are simulated first so custom errors surface by name; amounts come from the
@@ -197,17 +219,18 @@ export class AllocationGateClient {
   }
 
   async summary(): Promise<GateSummary> {
-    const [registry, subjectChainId, standardId, asset, owner, maxAttestationAge, idle, vaults] = await Promise.all([
+    const [registry, subjectChainId, standardId, suiteHash, asset, owner, maxAttestationAge, idle, vaults] = await Promise.all([
       this.read<Address>('registry'),
       this.read<bigint>('subjectChainId'),
       this.read<Hex>('standardId'),
+      this.read<Hex>('suiteHash'),
       this.read<Address>('asset'),
       this.read<Address>('owner'),
       this.read<bigint>('maxAttestationAge'),
       this.read<bigint>('idle'),
       this.read<readonly Address[]>('vaults'),
     ]);
-    return { address: this.address, registry, subjectChainId, standardId, asset, owner, maxAttestationAge, idle, vaults: [...vaults] };
+    return { address: this.address, registry, subjectChainId, standardId, suiteHash, asset, owner, maxAttestationAge, idle, vaults: [...vaults] };
   }
 
   position(vault: Address): Promise<GatePosition> {
@@ -225,16 +248,33 @@ export class AllocationGateClient {
     return { vault, position, verdict, attestationId, canExit: position.shares > 0n && exitAllowed(verdict) };
   }
 
-  /** Owner only. The vault must be Compliant and hold the gate's asset; assets and shares come from Allocated. */
-  async allocate(vault: Address, assets: bigint): Promise<GateTx & { vault: Address; attestationId: bigint; assets: bigint; shares: bigint }> {
-    const out = await this.write('allocate', [vault, assets]);
+  /**
+   * The vault's own quote for `assets` (previewDeposit) less `slippageBps`: a minShares for allocate. Read from the
+   * vault, so it guards against a share price that moves between this read and the deposit, not against a vault
+   * that misquotes.
+   */
+  async minSharesFor(vault: Address, assets: bigint, slippageBps: bigint = DEFAULT_GATE_SLIPPAGE_BPS): Promise<bigint> {
+    if (slippageBps < 0n || slippageBps > 10_000n) throw new GateError(`slippage ${slippageBps} bps must be 0 to 10000`);
+    const quote = (await this.client.readContract({ address: vault, abi: previewAbi, functionName: 'previewDeposit', args: [assets] })) as bigint;
+    return (quote * (10_000n - slippageBps)) / 10_000n;
+  }
+
+  /**
+   * Owner only. The vault must be Compliant and hold the gate's asset, and its balanceOf(gate) must rise by at least
+   * `minShares` (TooFewShares); assets and shares come from Allocated.
+   */
+  async allocate(vault: Address, assets: bigint, minShares: bigint): Promise<GateTx & { vault: Address; attestationId: bigint; assets: bigint; shares: bigint }> {
+    const out = await this.write('allocate', [vault, assets, minShares]);
     const ev = this.events(out, 'Allocated');
     if (ev.length !== 1) throw new GateError(`allocate tx ${out.hash}: expected one Allocated event from ${this.address}, found ${ev.length}`);
     const e = ev[0]!.args;
     return { ...AllocationGateClient.strip(out), vault: getAddress(e.vault), attestationId: e.attestationId, assets: e.assets, shares: e.shares };
   }
 
-  /** Anyone. Refused (StillCompliant) while the vault is Compliant or Stale; a vault that refuses gives exited false. */
+  /**
+   * Anyone, once the vault is neither Compliant nor Stale (StillCompliant otherwise); the owner on any verdict. A vault
+   * that moves nothing gives exited false (ExitFailed).
+   */
   async exit(vault: Address): Promise<GateExitOutcome> {
     const out = await this.write('exit', [vault]);
     const tx = AllocationGateClient.strip(out);

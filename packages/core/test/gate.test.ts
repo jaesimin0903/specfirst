@@ -37,13 +37,14 @@ describe('AllocationGate enums', () => {
     expect(gateVerdictOf(0)).toBe('Compliant');
     expect(gateVerdictOf(3n)).toBe('NotCompliant');
     expect(gateExitPathOf(1)).toBe('Withdraw');
-    expect(() => gateVerdictOf(6)).toThrow(/unknown AllocationGate verdict 6/);
+    expect(gateVerdictOf(7)).toBe('OtherSuite');
+    expect(() => gateVerdictOf(8)).toThrow(/unknown AllocationGate verdict 8/);
     expect(() => gateExitPathOf(2)).toThrow(/unknown AllocationGate exit path 2/);
   });
 
-  it('allocate needs Compliant; exit is open on everything but Compliant and Stale', () => {
+  it('allocate needs Compliant; exit is open to anyone on everything but Compliant and Stale', () => {
     expect(GATE_VERDICTS.filter(allocationAllowed)).toEqual(['Compliant']);
-    expect(GATE_VERDICTS.filter(exitAllowed)).toEqual(['NoAttestation', 'NotCompliant', 'UntrustedIssuer', 'CodeMismatch']);
+    expect(GATE_VERDICTS.filter(exitAllowed)).toEqual(['NoAttestation', 'NotCompliant', 'UntrustedIssuer', 'CodeMismatch', 'FutureBlock', 'OtherSuite']);
   });
 });
 

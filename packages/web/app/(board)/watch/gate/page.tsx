@@ -24,8 +24,8 @@ export default async function GatePage() {
         <h1 className="sb-claim">A contract that reads the attestations before it moves money.</h1>
         <p className="sb-sub">
           AllocationGate deposits into an ERC-4626 vault only while the registry&apos;s latest attestation of that vault passed every property, is fresh, comes
-          from a current issuer and is about the code at that address. When a newer attestation fails, is revoked or its issuer is removed, anyone can make the
-          gate pull its money out; nobody has to hold the owner&apos;s key. It trusts the issuers of the registry, nothing more.
+          from a current issuer, is about the code at that address and of a block that exists. When a newer attestation fails, is revoked or its issuer is
+          removed, anyone can make the gate pull its money out; nobody has to hold the owner&apos;s key. It trusts the issuers of the registry, nothing more.
         </p>
       </header>
       <GateView data={data} />

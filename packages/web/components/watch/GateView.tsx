@@ -38,6 +38,8 @@ const VERDICT_LABEL: Readonly<Record<GateVerdict, string>> = {
   NotCompliant: 'Not compliant',
   UntrustedIssuer: 'Issuer removed',
   CodeMismatch: 'Other code',
+  FutureBlock: 'Future block',
+  OtherSuite: 'Other suite',
 };
 
 export function VerdictChip({ verdict }: { verdict: GateVerdict | null }) {
@@ -77,7 +79,7 @@ function eventLine(e: GateEventJson, d: number): string {
     case 'Exited':
       return `${formatTokens(e.assets, d)} back by ${e.path.toLowerCase()} of ${formatTokens(e.shares, d)} shares; verdict ${VERDICT_LABEL[e.verdict].toLowerCase()}, attestation #${e.attestationId}`;
     case 'ExitFailed':
-      return `the vault refused redeem (${e.redeemError}) and withdraw (${e.withdrawError}); ${formatTokens(e.shares, d)} shares stay`;
+      return `the vault moved nothing on redeem (${e.redeemError}) or withdraw (${e.withdrawError}); ${formatTokens(e.shares, d)} shares stay`;
     case 'IdleWithdrawn':
       return `${formatTokens(e.amount, d)} idle withdrawn by the owner`;
   }
@@ -105,9 +107,15 @@ function Events({ view }: { view: GateViewJson }) {
               <td>{'vault' in e ? <Addr a={e.vault} /> : <span className="soft">none</span>}</td>
               <td>
                 {eventLine(e, view.assetDecimals)}
-                {'caller' in e && e.caller.toLowerCase() !== view.owner.toLowerCase() ? (
+                {'caller' in e ? (
                   <span className="sb-vault-sub">
-                    called by <Addr a={e.caller} />, not the owner
+                    {e.caller.toLowerCase() === view.owner.toLowerCase() ? (
+                      'called by the owner, who may exit on any verdict'
+                    ) : (
+                      <>
+                        called by <Addr a={e.caller} />, not the owner
+                      </>
+                    )}
                   </span>
                 ) : null}
               </td>
@@ -216,8 +224,13 @@ export function GateView({ data }: { data: GatePageJson }) {
           <dd>
             <Addr a={v.owner} />
           </dd>
+          <dt>Suite</dt>
+          <dd>{/^0x0*$/.test(v.suiteHash) ? 'any suite' : <span className="mono">{v.suiteHash}</span>}</dd>
           <dt>Fresh for</dt>
-          <dd>{formatDuration(Number(v.maxAttestationAge))} after an attestation is issued</dd>
+          <dd>
+            {formatDuration(Number(v.maxAttestationAge))} after an attestation is issued; unchanged re-checks are not attested, so new money needs a
+            new attestation after that
+          </dd>
           <dt>Idle</dt>
           <dd>
             {formatTokens(v.idle, v.assetDecimals)} {unit}
@@ -232,7 +245,7 @@ export function GateView({ data }: { data: GatePageJson }) {
         </h2>
         <p className="sb-lede">
           The owner can allocate only into a vault whose verdict is Compliant. Once a vault is anything but Compliant or Stale, anyone can call exit and the
-          gate redeems its shares; amounts are in {unit}.
+          gate redeems its shares; the owner can exit on any verdict. Amounts are in {unit}.
         </p>
         <Positions view={v} />
       </section>

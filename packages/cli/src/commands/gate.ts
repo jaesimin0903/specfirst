@@ -5,10 +5,13 @@ import {
   AttestationRegistryClient,
   badChecksum,
   DEFAULT_GATE_MAX_AGE_SEC,
+  DEFAULT_GATE_SLIPPAGE_BPS,
   deployAllocationGate,
   errorText,
   exitDueVaults,
+  GATE_FRESH_ATTESTATION_HINT,
   GATE_VERDICT_TEXT,
+  exitAllowed,
   GateError,
   mintDemoToken,
   standardIdOf,
@@ -19,7 +22,7 @@ import {
 } from '@specfirst/core';
 import type { Command } from 'commander';
 import pc from 'picocolors';
-import { formatEther, getAddress, parseEther, type Address } from 'viem';
+import { formatEther, getAddress, parseEther, type Address, type Hex } from 'viem';
 import { contextFrom, emitEvent, printLine, type CliContext } from '../lib/context.js';
 import { ConfigError, DEPLOYER_KEY_ENV, resolveAttestRegistry, resolveKey, resolveNetwork, type ResolvedNetwork } from '../lib/network.js';
 import { StageError } from '../lib/pipeline.js';
@@ -35,6 +38,7 @@ export function gateEnvVar(chainId: number): string {
 export const WEB_GATE_ENV = 'NEXT_PUBLIC_SPECFIRST_GATE_10143';
 
 const STANDARD = 'erc4626';
+const ZERO_HASH: Hex = `0x${'00'.repeat(32)}`;
 
 /** allocate's refusals, by error name, as the verdict they stand for. */
 const REFUSALS: Readonly<Record<string, GateVerdict>> = {
@@ -42,8 +46,14 @@ const REFUSALS: Readonly<Record<string, GateVerdict>> = {
   NotCompliant: 'NotCompliant',
   UntrustedIssuer: 'UntrustedIssuer',
   CodeMismatch: 'CodeMismatch',
+  FutureBlock: 'FutureBlock',
+  OtherSuite: 'OtherSuite',
   StaleAttestation: 'Stale',
 };
+
+function refusalText(v: GateVerdict): string {
+  return `allocation refused (${v}): ${GATE_VERDICT_TEXT[v]}${v === 'Stale' ? `; ${GATE_FRESH_ATTESTATION_HINT}` : ''}`;
+}
 
 interface GateGlobals {
   network: string;
@@ -103,7 +113,7 @@ function printOutcome(ctx: CliContext, o: GateExitOutcome): void {
   if (o.exited) {
     printLine(ctx, stage('gate', `exited ${pc.bold(o.vault)} by ${o.path.toLowerCase()}: ${formatEther(o.assets)} back for ${formatEther(o.shares)} shares  ${pc.dim(`${o.verdict}, attestation ${o.attestationId}, block ${o.blockNumber}, tx ${o.hash}`)}`));
   } else {
-    printLine(ctx, stage('gate', `${pc.red('vault refused')} ${pc.bold(o.vault)}: redeem ${o.redeemError}, withdraw ${o.withdrawError}; ExitFailed recorded, the position stays  ${pc.dim(`tx ${o.hash}`)}`));
+    printLine(ctx, stage('gate', `${pc.red('vault moved nothing')} ${pc.bold(o.vault)}: redeem ${o.redeemError}, withdraw ${o.withdrawError}; ExitFailed recorded, the position stays  ${pc.dim(`tx ${o.hash}`)}`));
   }
 }
 
@@ -125,12 +135,15 @@ export function registerWatchDemoGate(demo: Command): void {
     .requiredOption('--asset <address>', 'the DemoToken the gate holds (from `watch demo deploy --token`)')
     .option('--max-age <sec>', 'seconds after it was issued that a compliant attestation still lets the owner allocate', DEFAULT_GATE_MAX_AGE_SEC.toString())
     .option('--fund <tokens>', 'DemoToken to mint to the gate after the deploy (0: none)', '100')
-    .action(async (opts: { asset: string; maxAge: string; fund: string }, command: Command) => {
+    .option('--suite-hash <bytes32>', "accept only attestations of this suite (the registry's suiteHash); default: any suite")
+    .action(async (opts: { asset: string; maxAge: string; fund: string; suiteHash?: string }, command: Command) => {
       const ctx = contextFrom(command);
       await runStage(ctx, 'watch demo gate deploy', WATCH_FAILED_EXIT_CODE, async () => {
         const asset = address(opts.asset, '--asset');
         if (!/^[1-9]\d*$/.test(opts.maxAge) || BigInt(opts.maxAge) >= 2n ** 64n) throw new ConfigError(`--max-age must be a positive number of seconds below 2^64, got "${opts.maxAge}"`);
         const fund = tokens(opts.fund, '--fund');
+        if (opts.suiteHash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(opts.suiteHash)) throw new ConfigError(`--suite-hash must be a 0x bytes32, got "${opts.suiteHash}"`);
+        const suiteHash = (opts.suiteHash?.toLowerCase() ?? ZERO_HASH) as Hex;
         const net = network(command);
         const registry = resolveAttestRegistry(net, { ...(globals(command).registryAttest ? { registryAttest: globals(command).registryAttest! } : {}) });
         const wallet = net.clients.wallet(resolveKey(net, DEPLOYER_KEY_ENV));
@@ -144,12 +157,14 @@ export function registerWatchDemoGate(demo: Command): void {
             registry,
             subjectChainId: BigInt(chainId),
             standardId: standardIdOf(STANDARD),
+            suiteHash,
             asset,
             owner: wallet.account.address,
             maxAttestationAge: BigInt(opts.maxAge),
           });
           printLine(ctx, stage('gate', `AllocationGate ${pc.bold(out.address)}  ${pc.dim(`${net.name} ${chainId}, tx ${out.tx.hash}`)}`));
-          printLine(ctx, cont(`registry ${registry}, asset ${asset}, owner ${wallet.account.address}, ${STANDARD}, attestations fresh for ${opts.maxAge} s`));
+          printLine(ctx, cont(`registry ${registry}, asset ${asset}, owner ${wallet.account.address}, ${STANDARD}, ${suiteHash === ZERO_HASH ? 'any suite' : `suite ${suiteHash}`}, attestations fresh for ${opts.maxAge} s`));
+          printLine(ctx, cont(pc.dim(`fresh means issued in the last ${opts.maxAge} s: ${GATE_FRESH_ATTESTATION_HINT}`)));
           printLine(ctx, cont(`export ${gateEnvVar(chainId)}=${out.address}${chainId === 10143 ? `  (the web reads ${WEB_GATE_ENV})` : ''}`));
           emitEvent(ctx, {
             type: 'watch-demo-gate-deployed',
@@ -160,6 +175,7 @@ export function registerWatchDemoGate(demo: Command): void {
             owner: wallet.account.address,
             standard: STANDARD,
             standardId: standardIdOf(STANDARD),
+            suiteHash,
             maxAttestationAge: opts.maxAge,
             creationCodeKeccak: allocationGateCreationCodeHash,
             txHash: out.tx.hash,
@@ -179,26 +195,33 @@ export function registerWatchDemoGate(demo: Command): void {
 
   gate
     .command('allocate <vault> <amount>')
-    .description("Owner: deposit <amount> tokens of the gate's idle asset into <vault>. Refused unless the vault's latest attestation is compliant, fresh, from a current issuer and about its code.")
-    .action(async (vaultArg: string, amountArg: string, _opts: unknown, command: Command) => {
+    .description("Owner: deposit <amount> tokens of the gate's idle asset into <vault>. Refused unless the vault's latest attestation is compliant, fresh, from a current issuer, about its code and of a block that exists.")
+    .option('--min-shares <shares>', `fewest vault shares (18 decimals) the deposit must mint; default: the vault's previewDeposit less ${DEFAULT_GATE_SLIPPAGE_BPS} bps`)
+    .action(async (vaultArg: string, amountArg: string, opts: { minShares?: string }, command: Command) => {
       const ctx = contextFrom(command);
       await runStage(ctx, 'watch demo gate allocate', WATCH_FAILED_EXIT_CODE, async () => {
         const vault = address(vaultArg, '<vault>');
         const amount = tokens(amountArg, '<amount>');
         if (amount === 0n) throw new ConfigError('<amount> must be above 0');
+        const explicitMin = opts.minShares !== undefined ? tokens(opts.minShares, '--min-shares') : null;
         const net = network(command);
         const at = gateAddress(net, command);
         const wallet = net.clients.wallet(resolveKey(net, DEPLOYER_KEY_ENV));
         const g = new AllocationGateClient(at, net.clients.publicClient, wallet);
         try {
-          const out = await g.allocate(vault, amount);
+          const minShares = explicitMin ?? (await g.minSharesFor(vault, amount));
+          const out = await g.allocate(vault, amount, minShares);
           printLine(ctx, stage('gate', `allocated ${formatEther(out.assets)} into ${pc.bold(vault)} for ${formatEther(out.shares)} shares  ${pc.dim(`attestation ${out.attestationId}, block ${out.blockNumber}, tx ${out.hash}`)}`));
-          emitEvent(ctx, { type: 'watch-demo-gate-allocated', chainId: net.clients.chain.id, gate: at, vault, attestationId: out.attestationId, assets: out.assets, shares: out.shares, txHash: out.hash, blockNumber: out.blockNumber, gasCostWei: out.gasCostWei });
+          emitEvent(ctx, { type: 'watch-demo-gate-allocated', chainId: net.clients.chain.id, gate: at, vault, attestationId: out.attestationId, assets: out.assets, shares: out.shares, minShares, txHash: out.hash, blockNumber: out.blockNumber, gasCostWei: out.gasCostWei });
         } catch (err) {
           const verdict = err instanceof GateError && err.errorName ? REFUSALS[err.errorName] : undefined;
           if (verdict) {
             emitEvent(ctx, { type: 'watch-demo-gate-refused', chainId: net.clients.chain.id, gate: at, vault, verdict, error: err instanceof GateError ? err.errorName : undefined });
-            throw new StageError(WATCH_FAILED_EXIT_CODE, `allocation refused (${verdict}): ${GATE_VERDICT_TEXT[verdict]}`);
+            throw new StageError(WATCH_FAILED_EXIT_CODE, refusalText(verdict));
+          }
+          if (err instanceof GateError && err.errorName === 'TooFewShares') {
+            emitEvent(ctx, { type: 'watch-demo-gate-refused', chainId: net.clients.chain.id, gate: at, vault, verdict: null, error: 'TooFewShares' });
+            throw new StageError(WATCH_FAILED_EXIT_CODE, 'allocation refused (TooFewShares): the deposit would mint fewer shares than --min-shares; the share price moved, or the vault quotes more than it mints');
           }
           failed(err);
         }
@@ -207,8 +230,9 @@ export function registerWatchDemoGate(demo: Command): void {
 
   gate
     .command('exit <vault>')
-    .description("Anyone (this command signs with the deployer key): pull the gate's shares out of <vault> once its verdict is neither Compliant nor Stale.")
-    .action(async (vaultArg: string, _opts: unknown, command: Command) => {
+    .description("Pull the gate's shares out of <vault>: anyone once its verdict is neither Compliant nor Stale, the owner on any verdict with --as-owner. Signs with the deployer key.")
+    .option('--as-owner', "as the gate's owner, exit even a Compliant or Stale vault")
+    .action(async (vaultArg: string, opts: { asOwner?: boolean }, command: Command) => {
       const ctx = contextFrom(command);
       await runStage(ctx, 'watch demo gate exit', WATCH_FAILED_EXIT_CODE, async () => {
         const vault = address(vaultArg, '<vault>');
@@ -216,20 +240,28 @@ export function registerWatchDemoGate(demo: Command): void {
         const at = gateAddress(net, command);
         const wallet = net.clients.wallet(resolveKey(net, DEPLOYER_KEY_ENV));
         const g = new AllocationGateClient(at, net.clients.publicClient, wallet);
+        // The owner's exit is open on any verdict; ask for that on purpose rather than drain a healthy vault by habit.
+        const { verdict: now } = await g.verdict(vault).catch(() => ({ verdict: null as GateVerdict | null }));
+        if (now && !exitAllowed(now) && !opts.asOwner) {
+          const owner = (await g.summary().catch(() => null))?.owner;
+          if (owner && owner.toLowerCase() === wallet.account.address.toLowerCase()) {
+            throw new StageError(WATCH_FAILED_EXIT_CODE, `exit refused: the vault is ${now}; you are the gate's owner and may exit it anyway with --as-owner`);
+          }
+        }
         let out: GateExitOutcome;
         try {
           out = await g.exit(vault);
         } catch (err) {
           if (err instanceof GateError && err.errorName === 'StillCompliant') {
             const { verdict } = await g.verdict(vault);
-            throw new StageError(WATCH_FAILED_EXIT_CODE, `exit refused: the vault is ${verdict}, ${GATE_VERDICT_TEXT[verdict]}`);
+            throw new StageError(WATCH_FAILED_EXIT_CODE, `exit refused: the vault is ${verdict}, ${GATE_VERDICT_TEXT[verdict]}; only the gate's owner may exit it now`);
           }
           if (err instanceof GateError && err.errorName === 'NothingToExit') throw new StageError(WATCH_FAILED_EXIT_CODE, `exit refused: the gate holds no shares of ${vault}`);
           failed(err);
         }
         printOutcome(ctx, out);
         emitEvent(ctx, outcomeEvent(net.clients.chain.id, at, out));
-        if (!out.exited) throw new StageError(WATCH_FAILED_EXIT_CODE, `the vault refused redeem and withdraw (ExitFailed in tx ${out.hash}); the shares stay in the gate's books`);
+        if (!out.exited) throw new StageError(WATCH_FAILED_EXIT_CODE, `the vault moved nothing on redeem or withdraw (ExitFailed in tx ${out.hash}); the shares stay in the gate's books`);
       });
     });
 
@@ -294,7 +326,7 @@ export function registerWatchDemoGate(demo: Command): void {
           const registry = new AttestationRegistryClient(s.registry, client);
           const now = (await client.getBlock({ blockTag: 'latest' })).timestamp;
           printLine(ctx, stage('gate', `AllocationGate ${pc.bold(at)}  ${pc.dim(`${net.name} ${net.clients.chain.id}`)}`));
-          printLine(ctx, cont(`registry ${s.registry}, asset ${s.asset}, owner ${s.owner}, attestations fresh for ${s.maxAttestationAge} s`));
+          printLine(ctx, cont(`registry ${s.registry}, asset ${s.asset}, owner ${s.owner}, ${s.suiteHash === ZERO_HASH ? 'any suite' : `suite ${s.suiteHash}`}, attestations fresh for ${s.maxAttestationAge} s`));
           printLine(ctx, cont(`idle ${formatEther(s.idle)}, ${s.vaults.length} vault${s.vaults.length === 1 ? '' : 's'}`));
           const vaults: Array<Record<string, unknown>> = [];
           for (const vault of s.vaults) {
@@ -314,7 +346,7 @@ export function registerWatchDemoGate(demo: Command): void {
               attestation: a ? { id: latest!.id, status: ATTESTATION_STATUS[a.status] ?? a.status, passCount: a.passCount, failCount: a.failCount, inconclusiveCount: a.inconclusiveCount, notApplicableCount: a.notApplicableCount, issuer: a.issuer, issuerAllowed: isIssuer, issuedAt: a.issuedAt, blockNumber: a.blockNumber } : null,
             });
           }
-          emitEvent(ctx, { type: 'watch-demo-gate-status', chainId: net.clients.chain.id, gate: at, registry: s.registry, asset: s.asset, owner: s.owner, maxAttestationAge: s.maxAttestationAge, idle: s.idle, now, vaults });
+          emitEvent(ctx, { type: 'watch-demo-gate-status', chainId: net.clients.chain.id, gate: at, registry: s.registry, asset: s.asset, owner: s.owner, suiteHash: s.suiteHash, maxAttestationAge: s.maxAttestationAge, idle: s.idle, now, vaults });
         } catch (err) {
           failed(err);
         }

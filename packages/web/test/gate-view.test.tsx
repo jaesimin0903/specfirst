@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { encodeAbiParameters, encodeEventTopics, getAddress, type Log } from 'viem';
-import { GateView, formatTokens } from '../components/watch/GateView';
+import { GateView, VerdictChip, formatTokens } from '../components/watch/GateView';
 import { allocationGateAbi, gateAddress } from '../lib/gate/contract';
 import { gateEventsOf, readGateView, RECENT_LOG_BLOCKS, type GateChainReader } from '../lib/gate/read';
 import { gatePageView } from '../lib/gate/service';
@@ -53,7 +53,7 @@ function chain(over: { failLatestOf?: string; logsFail?: boolean } = {}) {
     readContract: async ({ address, functionName, args }) => {
       const v = (args?.[1] ?? args?.[0]) as string | undefined;
       if (address === GATE) {
-        const answers: Record<string, unknown> = { registry: REGISTRY, subjectChainId: 10143n, standardId: STD, asset: TOKEN, owner: OWNER, maxAttestationAge: 86_400n, idle: 91n * E18, vaults: [BROKEN, OK, NEW] };
+        const answers: Record<string, unknown> = { registry: REGISTRY, subjectChainId: 10143n, standardId: STD, suiteHash: `0x${'00'.repeat(32)}`, asset: TOKEN, owner: OWNER, maxAttestationAge: 86_400n, idle: 91n * E18, vaults: [BROKEN, OK, NEW] };
         if (functionName in answers) return answers[functionName];
         if (functionName === 'positionOf') {
           if (v === BROKEN) return { shares: 0n, assetsIn: 20n * E18, assetsOut: 21n * E18, lastAllocatedBlock: 1_200n, lastExitBlock: 4_950n };
@@ -152,6 +152,23 @@ describe('GateView', () => {
     expect(screen.getByText(/21 back by redeem of 20 shares; verdict not compliant, attestation #7/)).toBeInTheDocument();
     expect(screen.getByText(/not the owner/)).toBeInTheDocument();
     expect(screen.getByText('91 sfTKN')).toBeInTheDocument();
+    expect(screen.getByText('any suite')).toBeInTheDocument();
+  });
+
+  it('names the verdicts added for a future block and a pinned suite, and an owner exit', async () => {
+    render(
+      <>
+        <VerdictChip verdict="FutureBlock" />
+        <VerdictChip verdict="OtherSuite" />
+      </>,
+    );
+    expect(screen.getByText('Future block')).toHaveAttribute('title', expect.stringMatching(/a block this chain has not reached/));
+    expect(screen.getByText('Other suite')).toHaveAttribute('title', expect.stringMatching(/another suite than the one the gate pins/));
+    cleanup();
+    const view = await readGateView(chain(), GATE);
+    const byOwner = { ...view, events: view.events.map((e) => (e.kind === 'Exited' ? { ...e, caller: OWNER } : e)) };
+    render(<GateView data={{ deployed: true, address: GATE, view: byOwner, error: null }} />);
+    expect(screen.getByText('called by the owner, who may exit on any verdict')).toBeInTheDocument();
   });
 
   it('says why the gate could not be read', () => {

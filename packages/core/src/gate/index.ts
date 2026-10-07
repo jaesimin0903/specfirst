@@ -6,7 +6,7 @@ import { allocationGateAbi, allocationGateBytecode } from './artifact.js';
 export { allocationGateAbi, allocationGateBytecode };
 
 /** AllocationGate.Verdict by its uint8 value. */
-export const GATE_VERDICTS = ['Compliant', 'Stale', 'NoAttestation', 'NotCompliant', 'UntrustedIssuer', 'CodeMismatch'] as const;
+export const GATE_VERDICTS = ['Compliant', 'Stale', 'NoAttestation', 'NotCompliant', 'UntrustedIssuer', 'CodeMismatch', 'FutureBlock', 'OtherSuite'] as const;
 export type GateVerdict = (typeof GATE_VERDICTS)[number];
 
 /** AllocationGate.ExitPath by its uint8 value: which vault call brought the assets back. */
@@ -21,6 +21,8 @@ export const GATE_VERDICT_TEXT: Readonly<Record<GateVerdict, string>> = {
   NotCompliant: 'the latest attestation is revoked, or has a failed, inconclusive or not-applicable result',
   UntrustedIssuer: 'the latest attestation passed, but its issuer is no longer an issuer of the registry',
   CodeMismatch: 'the latest attestation passed for other code than the code at this address',
+  FutureBlock: 'the latest attestation is of a block this chain has not reached, so it is not about this vault',
+  OtherSuite: 'the latest attestation passed with another suite than the one the gate pins',
 };
 
 /** The verdict named by its uint8 value; throws on a value the contract does not have. */
@@ -41,7 +43,7 @@ export function allocationAllowed(v: GateVerdict): boolean {
   return v === 'Compliant';
 }
 
-/** exit is open on every verdict but Compliant and Stale (a position is needed too). */
+/** exit is open to anyone on every verdict but Compliant and Stale (a position is needed too); the owner's always is. */
 export function exitAllowed(v: GateVerdict): boolean {
   return v !== 'Compliant' && v !== 'Stale';
 }
