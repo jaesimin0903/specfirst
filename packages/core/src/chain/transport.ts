@@ -121,10 +121,19 @@ export function isContractFailureMessage(err: unknown): boolean {
 }
 
 /**
+ * True when the node says the call ran out of gas. That depends on the node's eth_call gas cap as much as on the
+ * contract, so rpcTransport asks every URL before it lets one stand.
+ */
+export function isOutOfGasMessage(err: unknown): boolean {
+  return chain(err).some((e) => /out ?of ?gas/i.test(`${e.message ?? ''} ${e.details ?? ''}`));
+}
+
+/**
  * A JSON-RPC answer that reports a failure of the node rather than of the request: -32603 "Internal error"
  * (rpc1.monad.xyz answers "Error getting block by number" for some archive blocks), "missing trie node",
  * "header not found". Another node may serve the same request. A -32603 whose message says the call ran out of
- * gas or reverted is the contract's answer, not the node's failure: every node gives it.
+ * gas or reverted is the contract's answer, not the node's failure; rpcTransport still asks every URL about an
+ * out-of-gas before it lets one stand (isOutOfGasMessage).
  */
 export function isNodeError(err: unknown): boolean {
   if (isContractFailureMessage(err)) return false;
@@ -188,7 +197,10 @@ export class WriteTargetError extends Error {
 
 /**
  * viem transport over a list of RPC URLs: one shared token bucket, exponential backoff on 429 per URL,
- * failover to the next URL on transport failures or exhausted retries (plan 3.6 item 4).
+ * failover to the next URL on transport failures or exhausted retries (plan 3.6 item 4). An out-of-gas answer
+ * also goes to the next URL, since a node with a low eth_call gas cap gives it to a contract another node runs:
+ * it is thrown, and so taken for the contract's answer, only when every URL gave it; when another URL failed in
+ * another way, that failure is thrown instead (an RPC failure, tried again later).
  */
 export function rpcTransport(urls: readonly string[], opts: RpcTransportOptions = {}): Transport {
   if (urls.length === 0) throw new Error('rpcTransport needs at least one RPC URL');
@@ -217,6 +229,8 @@ export function rpcTransport(urls: readonly string[], opts: RpcTransportOptions 
 
   const request = async (args: { method: string; params?: unknown }): Promise<unknown> => {
     let lastErr: unknown;
+    let outOfGas: unknown = null;
+    let otherFailure: unknown = null;
     const isSend = SEND_METHODS.has(args.method);
     for (const { url, request: send } of inner) {
       if (isSend) {
@@ -242,7 +256,13 @@ export function rpcTransport(urls: readonly string[], opts: RpcTransportOptions 
             await sleep(delayMs);
             continue;
           }
+          if (!isSend && isOutOfGasMessage(err)) {
+            outOfGas = err;
+            opts.onRetry?.({ url, attempt: attempt + 1, delayMs: 0, reason: 'out-of-gas' });
+            break;
+          }
           if (isRateLimited(err) || isTransportFailure(err) || opts.failoverIf?.(err)) {
+            otherFailure = err;
             opts.onRetry?.({ url, attempt: attempt + 1, delayMs: 0, reason: 'failover' });
             break;
           }
@@ -250,6 +270,7 @@ export function rpcTransport(urls: readonly string[], opts: RpcTransportOptions 
         }
       }
     }
+    if (outOfGas !== null) throw otherFailure ?? outOfGas;
     throw lastErr;
   };
 

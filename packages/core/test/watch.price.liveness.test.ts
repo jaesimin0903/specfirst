@@ -113,6 +113,34 @@ describe('the read round stays live', { timeout: 60_000 }, () => {
     expect(reads.slice(3).map((r) => r.subject)).toEqual([S[0]]);
   });
 
+  it('review: a read that never answers is given up at what is left of the round, as an RPC failure, and its late answer is not used', async () => {
+    const h = await harness();
+    const { prices, reads } = withPrices(h);
+    for (const s of S.slice(0, 2)) {
+      known(h, s, true);
+      prices.set(s.toLowerCase(), E18);
+    }
+    h.store.state.cursor = '1991';
+    const read = h.effects.sharePrice!;
+    let release: (() => void) | null = null;
+    h.effects.sharePrice = async (subject, block, k) => {
+      if (subject === S[0]) await new Promise<void>((r) => (release = r));
+      return read(subject, block, k);
+    };
+    const w = h.watcher({ priceRoundMs: 50 });
+    const t0 = Date.now();
+    await w.pass();
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(h.events.filter((e) => e.type === 'watch-error' && e.step === 'price').map((e) => (e as { error: string }).error)).toEqual([
+      `${S[0]}: share value not read at block 1990, not a verdict: no answer within 50 ms, the rest of the round`,
+    ]);
+    // The round stopped there: the second vault waits for the next pass.
+    expect(reads.map((r) => r.subject)).toEqual([]);
+    release!();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(h.store.state.prices).toEqual({});
+  });
+
   it('review C and M5: a failed first subscription read after a restart keeps the reference, so a drop across the restart is found', async () => {
     const h = await harness();
     const { prices } = withPrices(h);

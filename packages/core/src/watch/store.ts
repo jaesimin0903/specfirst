@@ -199,18 +199,20 @@ export const watchStateSchema = z
             scale: count.default(0),
             assetsPerShare: decimal,
             block: decimal,
-            readAssetsPerShare: decimal,
+            /** Absent in states written before rises waited for a second read (b30a051): the reference then. */
+            readAssetsPerShare: decimal.optional(),
             readBlock: decimal,
             readAt: iso,
             drop: z.object({ assetsPerShare: decimal, block: decimal, at: iso, misses: count.default(0) }).strict().optional(),
             /** Since when the subject is not followed (no subscription, no attestation, no --price-all); forgotten 24 hours later. */
             unfollowedAt: iso.optional(),
-            /** Price-drop events of this subject on one UTC day, against maxPriceDropsPerDay. */
-            dropsDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), count }).strict().optional(),
+            /** Price-drop events of this subject on one UTC day, against maxPriceDropsPerDay, and the largest of them in bps. */
+            dropsDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), count, maxBps: count.default(0) }).strict().optional(),
             /** When a drop last queued a re-check of the subject (one per upgradeCooldownMs). */
             recheckAt: iso.optional(),
           })
-          .strict(),
+          .strict()
+          .transform((t) => ({ ...t, readAssetsPerShare: t.readAssetsPerShare ?? t.assetsPerShare })),
       )
       .default({}),
     /** Vaults whose share value is too small to measure a drop in at any scale, and when that was found. */

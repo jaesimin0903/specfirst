@@ -35,7 +35,18 @@ const VAULT = getAddress('0x00000000000000000000000000000000000000a1');
 const BURNER_CODE: Hex = '0x5b600056';
 const E18 = 10n ** 18n;
 
-/** A JSON-RPC stub that answers eth_call with `error` and the rest with fixed values; counts the requests it got. */
+const word = (n: bigint): Hex => `0x${n.toString(16).padStart(64, '0')}`;
+/** What a vault worth one asset unit per base unit answers: decimals() 18, totalSupply() and convertToAssets(x) x. */
+const VAULT_ANSWERS: Record<string, (data: string) => Hex> = {
+  '0x313ce567': () => word(18n),
+  '0x18160ddd': () => word(E18),
+  '0x07a2d13a': (data) => `0x${data.slice(10, 74)}` as Hex,
+};
+
+/**
+ * A JSON-RPC stub that answers eth_call with `error`, or without one as the vault above, the rest with fixed values;
+ * counts the requests it got.
+ */
 async function stub(error: { code: number; message: string } | null): Promise<{ url: string; server: Server; hits: () => number }> {
   let hits = 0;
   const server = createServer((req, res) => {
@@ -43,8 +54,10 @@ async function stub(error: { code: number; message: string } | null): Promise<{ 
     req.on('data', (c) => (body += c));
     req.on('end', () => {
       hits++;
-      const { id, method } = JSON.parse(body) as { id: number; method: string };
-      const answer = method === 'eth_call' && error ? { error } : { result: method === 'eth_getCode' ? '0x6001' : method === 'eth_chainId' ? '0x7a69' : '0x8f' };
+      const { id, method, params } = JSON.parse(body) as { id: number; method: string; params?: Array<{ data?: string }> };
+      const data = params?.[0]?.data ?? '0x';
+      const call = (VAULT_ANSWERS[data.slice(0, 10)] ?? (() => '0x8f'))(data);
+      const answer = method === 'eth_call' && error ? { error } : { result: method === 'eth_call' ? call : method === 'eth_getCode' ? '0x6001' : method === 'eth_chainId' ? '0x7a69' : '0x8f' };
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id, ...answer }));
     });
   });
@@ -58,7 +71,7 @@ describe('review M3d: an out-of-gas from the node is the contract answering', ()
     for (const s of servers.splice(0)) s.close();
   });
 
-  it('a real viem error for -32603 "EVM error OutOfGas" is a contract answer, not a node error, and is not failed over', async () => {
+  it('a real viem error for -32603 "EVM error OutOfGas" is a contract answer, not a node error', async () => {
     const oog = await stub({ code: -32603, message: 'EVM error OutOfGas' });
     const good = await stub(null);
     servers.push(oog.server, good.server);
@@ -75,10 +88,27 @@ describe('review M3d: an out-of-gas from the node is the contract answering', ()
     // The share value read and the desk's pre-check take it as the contract's answer.
     expect(await readSharePrice(client, VAULT, 7n)).toMatchObject({ ok: false, reason: expect.stringMatching(/^decimals\(\) at block 7: out of gas on decimals\(\)/) });
     expect(await precheckErc4626(client, VAULT, 7n)).toMatchObject({ ok: false, reason: expect.stringMatching(/^asset\(\) failed at block 7: /) });
-    // The watcher's subject transport fails over on node errors: an out-of-gas is not one, every node would give it.
-    const watching = createPublicClient({ transport: rpcTransport([oog.url, good.url], { failoverIf: isNodeError }) });
-    expect(await readSharePrice(watching, VAULT, 7n)).toMatchObject({ ok: false });
-    expect(good.hits()).toBe(0);
+  });
+
+  it('review: an out-of-gas is asked of every URL; it stands only when all give it, another failure on the way is an RPC failure', async () => {
+    const oog = await stub({ code: -32603, message: 'EVM error OutOfGas' });
+    const oog2 = await stub({ code: -32603, message: 'EVM error OutOfGas' });
+    const good = await stub(null);
+    const down = await stub(null);
+    down.server.close();
+    servers.push(oog.server, oog2.server, good.server);
+    const over = (urls: string[], failoverIf?: (e: unknown) => boolean) => createPublicClient({ transport: rpcTransport(urls, { ...(failoverIf ? { failoverIf } : {}), maxRetries: 0 }) });
+    // A node with a low eth_call gas cap: the next one answers, for the watcher's transport and the desk's alike.
+    for (const failoverIf of [isNodeError, undefined]) {
+      expect(await readSharePrice(over([oog.url, good.url], failoverIf), VAULT, 7n)).toEqual({ ok: true, assetsPerShare: E18, shareDecimals: 18, scale: 0 });
+    }
+    expect(good.hits()).toBeGreaterThan(0);
+    // Every URL ran out of gas: a gas burner, the contract's answer.
+    expect(await readSharePrice(over([oog.url, oog2.url]), VAULT, 7n)).toMatchObject({ ok: false, reason: expect.stringMatching(/out of gas on decimals\(\)/) });
+    expect(oog2.hits()).toBeGreaterThan(0);
+    // One URL out of gas, the other unreachable: they do not agree, so it is an RPC failure, never "no value".
+    await expect(readSharePrice(over([oog.url, down.url]), VAULT, 7n)).rejects.toThrow();
+    await expect(readSharePrice(over([down.url, oog.url]), VAULT, 7n)).rejects.toThrow();
   });
 
   it('a node error under the same code is still a node error and still fails over', async () => {

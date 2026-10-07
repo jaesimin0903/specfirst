@@ -1198,7 +1198,7 @@ export class Watcher {
         if (d.rank <= 1) continue;
         return;
       }
-      if ((await this.readPrice(getAddress(d.lower), block)) === 'rpc') return;
+      if ((await this.readPrice(getAddress(d.lower), block, this.config.priceRoundMs - (now - started))) === 'rpc') return;
     }
   }
 
@@ -1206,21 +1206,29 @@ export class Watcher {
    * One share value read and what follows from it (priceStep), with the subject's decimals and scale when it has a
    * track. An RPC failure says nothing about the share value: nothing is recorded ('rpc'). A contract that gives no
    * value (a revert, a totalSupply of 0) is passed over the same way ('none'); a value too small to measure marks the
-   * vault low-resolution. Either counts as a miss of a pending drop.
+   * vault low-resolution. Either counts as a miss of a pending drop. A read gets what is left of the round's budget
+   * (`budgetMs`): one that gives no answer by then is an RPC failure too, and its late answer is never used.
    */
-  private async readPrice(subject: Address, block: bigint): Promise<'value' | 'none' | 'rpc'> {
+  private async readPrice(subject: Address, block: bigint, budgetMs: number): Promise<'value' | 'none' | 'rpc'> {
     const st = this.state;
     const lower = subject.toLowerCase();
     const now = this.effects.now().getTime();
     this.priceTriedAt.set(lower, now);
     const prev = st.prices[lower];
     let read: SharePriceRead;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const wait = Math.max(1, Math.floor(budgetMs));
     try {
-      read = await this.effects.sharePrice!(subject, block, prev ? { decimals: prev.decimals, scale: prev.scale } : undefined);
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error(`no answer within ${wait} ms, the rest of the round`), { name: 'PriceReadTimeoutError' })), wait);
+      });
+      read = await Promise.race([this.effects.sharePrice!(subject, block, prev ? { decimals: prev.decimals, scale: prev.scale } : undefined), timeout]);
     } catch (err) {
       this.emit({ type: 'watch-error', step: 'price', error: `${subject}: share value not read at block ${block}, not a verdict: ${classifiedErrorText(err)}` });
       this.priceMissed(subject, block, now);
       return 'rpc';
+    } finally {
+      clearTimeout(timer);
     }
     if (!read.ok) {
       if (read.lowResolution && !prev) st.priceLowResolution[lower] = this.nowIso();
@@ -1251,7 +1259,7 @@ export class Watcher {
       this.emit({ type: 'watch-price', subject, step: 'cleared', ...value, reason: `the fall seen at block ${step.cleared.block} ${why}` });
     }
     if (step.kind === 'pending') this.emit({ type: 'watch-price', subject, step: 'pending', ...value, dropBps: dropBpsOf(n.assetsPerShare, read.assetsPerShare) });
-    if (step.kind === 'confirmed') await this.priceDropped(subject, step.change, step.pendingBlock);
+    if (step.kind === 'confirmed') await this.priceDropped(subject, step.change, step.pendingBlock, track!);
     return 'value';
   }
 
@@ -1276,27 +1284,33 @@ export class Watcher {
    * it is delivered to the subject's active subscribers through the alert sink, so a crash while delivering never
    * confirms or alerts the same drop twice; then a re-check of the subject, since its state changed, at most one per
    * upgradeCooldownMs (a vault whose value saws up and down buys no forge runs that way). At most maxPriceDropsPerDay
-   * drops of a subject a UTC day reach the feed and the alerts; the rest are logged. A drop is never attested: the
-   * re-check meets the attest rule and the policy like any other check.
+   * drops of a subject a UTC day reach the feed and the alerts, except one larger than every drop announced that day or
+   * of at least ten times the threshold. A drop over the cap is logged and the reference stays where it was (`before`,
+   * the track before this read), so the loss is not lost: it adds up and is announced once the cap allows (the next
+   * day, or when it outgrows the day's largest). A drop is never attested: the re-check meets the attest rule and the
+   * policy like any other check.
    */
-  private async priceDropped(subject: Address, change: PriceDropChange, pendingBlock: bigint): Promise<void> {
+  private async priceDropped(subject: Address, change: PriceDropChange, pendingBlock: bigint, before: PriceTrack): Promise<void> {
     const lower = subject.toLowerCase();
     const track = this.state.prices[lower]!;
     const day = this.today();
-    const used = track.dropsDay?.day === day ? track.dropsDay.count : 0;
-    if (used >= this.config.maxPriceDropsPerDay) {
+    const today = track.dropsDay?.day === day ? track.dropsDay : { day, count: 0, maxBps: 0 };
+    const large = change.dropBps > today.maxBps || change.dropBps >= 10 * this.config.priceDropBps;
+    if (today.count >= this.config.maxPriceDropsPerDay && !large) {
+      track.assetsPerShare = before.assetsPerShare.toString();
+      track.block = before.block.toString();
       this.emit({
         type: 'watch-price',
         subject,
         block: change.toBlock,
         step: 'capped',
         dropBps: change.dropBps,
-        reason: `${used} price-drop events of this vault today, the most there are (--max-price-drops-per-day): logged only`,
+        reason: `${today.count} price-drop events of this vault today, the most there are (--max-price-drops-per-day), and this one is not larger than them: logged only, the reference stays at block ${before.block}`,
       });
       await this.save();
       return;
     }
-    track.dropsDay = { day, count: used + 1 };
+    track.dropsDay = { day, count: today.count + 1, maxBps: Math.max(today.maxBps, change.dropBps) };
     const now = this.effects.now().getTime();
     const recheck = !track.recheckAt || now - Date.parse(track.recheckAt) >= this.config.upgradeCooldownMs;
     const held = recheck ? '' : `; no re-check: a drop queued one at ${track.recheckAt}, within ${this.config.upgradeCooldownMs / HOUR_MS} hours`;

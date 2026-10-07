@@ -136,7 +136,9 @@ describe('the watcher follows the share value', { timeout: 60_000 }, () => {
     expect(drops(feed)).toHaveLength(4);
     expect(drops(feed).slice(1).every((e) => /; no re-check: a drop queued one at .*, within 6 hours$/.test(e.reason!))).toBe(true);
     expect(priceEvents(h).filter((e) => e.step === 'capped')).toHaveLength(1);
-    expect(priceEvents(h).find((e) => e.step === 'capped')!.reason).toBe('4 price-drop events of this vault today, the most there are (--max-price-drops-per-day): logged only');
+    expect(priceEvents(h).find((e) => e.step === 'capped')!.reason).toMatch(
+      /^4 price-drop events of this vault today, the most there are \(--max-price-drops-per-day\), and this one is not larger than them: logged only, the reference stays at block \d+$/,
+    );
     expect(feed.filter((e) => e.kind === 'queued')).toHaveLength(1);
     expect(h.checks).toHaveLength(1);
     expect(h.registry.list).toHaveLength(1);
@@ -178,5 +180,106 @@ describe('the watcher follows the share value', { timeout: 60_000 }, () => {
     later(h, MIN);
     await h.watcher().pass();
     expect(h.store.state.prices).toEqual({});
+  });
+});
+
+describe('the daily cap of drop events never swallows a loss', { timeout: 60_000 }, () => {
+  /** Runs reads of `p` until a drop is confirmed or capped (pending, waiting, then 2 minutes and 10 blocks later). */
+  const fallTo = async (h: Awaited<ReturnType<typeof harness>>, w: { pass(): Promise<unknown> }, prices: Map<string, unknown>, p: bigint) => {
+    prices.set(V.toLowerCase(), p);
+    for (let i = 0; i < 3; i++) await step(h, w, 61 * SEC, 15n);
+  };
+
+  it('review N1: after the day\'s 4 small drops, a 50% loss is still announced (at least 10x the threshold)', async () => {
+    const h = await harness();
+    const { prices } = withPrices(h);
+    known(h, V, true);
+    let value = 100_000_000n;
+    prices.set(V.toLowerCase(), value);
+    h.store.state.cursor = '1991';
+    const w = h.watcher({ priceMinutes: 1 });
+    await w.pass();
+    for (let i = 0; i < 4; i++) {
+      value -= value / 500n; // 20 bps
+      await fallTo(h, w, prices, value);
+    }
+    const small = drops(await h.feed()).map((e) => (e.change as { dropBps: number }).dropBps);
+    expect(small).toHaveLength(4);
+    expect(small.every((bps) => bps >= 19 && bps <= 20)).toBe(true);
+    await fallTo(h, w, prices, value / 2n);
+    expect(drops(await h.feed()).map((e) => (e.change as { dropBps: number }).dropBps)).toEqual([...small, 5_000]);
+    expect(priceEvents(h).filter((e) => e.step === 'capped')).toEqual([]);
+  });
+
+  it('a capped drop keeps the reference, so a staged drain is announced as it adds up, from the last announced block', async () => {
+    const h = await harness();
+    const { prices } = withPrices(h);
+    known(h, V, true);
+    prices.set(V.toLowerCase(), 1_000_000n);
+    h.store.state.cursor = '1991';
+    const w = h.watcher({ priceMinutes: 1, maxPriceDropsPerDay: 1 });
+    await w.pass();
+    // Steps of 0.5%, under ten times the threshold (1%).
+    await fallTo(h, w, prices, 995_000n);
+    const [first] = drops(await h.feed());
+    expect(first!.change).toMatchObject({ fromAssetsPerShare: '1000000', toAssetsPerShare: '995000', dropBps: 50 });
+    await fallTo(h, w, prices, 990_025n);
+    expect(drops(await h.feed())).toHaveLength(1);
+    expect(priceEvents(h).filter((e) => e.step === 'capped').at(-1)!.reason).toMatch(/not larger than them: logged only, the reference stays at block /);
+    expect(h.store.state.prices[V.toLowerCase()]).toMatchObject({ assetsPerShare: '995000', block: (first!.change as { toBlock: string }).toBlock });
+    // The next step makes the fall from the held reference larger than the day's largest: announced, measured from there.
+    await fallTo(h, w, prices, 985_075n);
+    const all = drops(await h.feed());
+    expect(all).toHaveLength(2);
+    expect(all[1]!.change).toMatchObject({ fromAssetsPerShare: '995000', fromBlock: (first!.change as { toBlock: string }).toBlock, toAssetsPerShare: '985075', dropBps: 99 });
+  });
+
+  it('a loss held by the cap is announced the next UTC day', async () => {
+    const h = await harness();
+    const { prices } = withPrices(h);
+    known(h, V, true);
+    prices.set(V.toLowerCase(), 1_000_000n);
+    h.store.state.cursor = '1991';
+    const w = h.watcher({ priceMinutes: 1, maxPriceDropsPerDay: 1 });
+    await w.pass();
+    await fallTo(h, w, prices, 995_000n);
+    await fallTo(h, w, prices, 992_000n);
+    expect(drops(await h.feed())).toHaveLength(1);
+    expect(priceEvents(h).filter((e) => e.step === 'capped')).toHaveLength(1);
+    later(h, 12 * 60 * MIN);
+    await fallTo(h, w, prices, 992_000n);
+    expect(drops(await h.feed()).map((e) => e.change)).toEqual([
+      expect.objectContaining({ dropBps: 50 }),
+      expect.objectContaining({ fromAssetsPerShare: '995000', toAssetsPerShare: '992000', dropBps: 30 }),
+    ]);
+  });
+});
+
+describe('state written before the review fixes', () => {
+  it('a state.json of b30a051 loads: the last read defaults to the reference, the scale to 0, the misses to 0', async () => {
+    const h = await harness();
+    const dir = path.join(h.dir, '.specfirst/watch/143');
+    const { mkdirSync } = await import('node:fs');
+    mkdirSync(dir, { recursive: true });
+    const old = {
+      ...JSON.parse(JSON.stringify(h.store.state)),
+      prices: {
+        [V.toLowerCase()]: { decimals: 18, assetsPerShare: '1000', block: '10', readBlock: '12', readAt: '2026-10-07T00:00:00.000Z', drop: { assetsPerShare: '900', block: '12', at: '2026-10-07T00:00:00.000Z' } },
+      },
+    };
+    delete old.priceLowResolution;
+    writeFileSync(path.join(dir, 'state.json'), JSON.stringify(old));
+    const store = await h.reload();
+    expect(store.state.prices[V.toLowerCase()]).toEqual({
+      decimals: 18,
+      scale: 0,
+      assetsPerShare: '1000',
+      block: '10',
+      readAssetsPerShare: '1000',
+      readBlock: '12',
+      readAt: '2026-10-07T00:00:00.000Z',
+      drop: { assetsPerShare: '900', block: '12', at: '2026-10-07T00:00:00.000Z', misses: 0 },
+    });
+    expect(store.state.priceLowResolution).toEqual({});
   });
 });
