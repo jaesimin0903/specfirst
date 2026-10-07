@@ -396,18 +396,23 @@ export function missingPrecompilesOf(events: string, testKeys: Iterable<string>)
 }
 
 /**
- * Inputs not judged because their vault call needed a missing precompile. A property that ran out of inputs
- * with at least as many of them as forge's reject limit had no other rejected input: it is inconclusive with
- * missingPrecompileNote. Any other property keeps its status (a fail keeps its counterexample) and gets the
- * count in its reason. Applied to forge's own reason, before the other notes are added.
+ * Inputs not judged because their vault call needed a missing precompile. A property with any such input is
+ * never a pass: a vault can tell a mocked precompile from the real one (code at the address, gas, the answer),
+ * so an unjudged input may be exactly the one that would have failed. A fail keeps its status and
+ * counterexample (another input failed) and gets the count; a pass becomes inconclusive with the count; a
+ * property that ran out of inputs with at least as many of them as forge's reject limit had no other rejected
+ * input and is inconclusive with missingPrecompileNote alone. Applied to forge's own reason, before the other
+ * notes are added.
  */
 function withMissingPrecompile(r: StandardPropertyResult, ev: { count: number; precompile: string } | undefined): StandardPropertyResult {
   if (!ev) return r;
+  const runs = r.runs !== undefined ? { runs: r.runs } : {};
   const limit = /^`vm\.assume` rejected too many inputs \((\d+) allowed\)$/.exec(r.reason ?? '');
   if (r.status === 'inconclusive' && limit && ev.count >= Number(limit[1])) {
-    return { id: r.id, test: r.test, description: r.description, status: 'inconclusive', ...(r.runs !== undefined ? { runs: r.runs } : {}), reason: missingPrecompileNote(ev.precompile) };
+    return { id: r.id, test: r.test, description: r.description, status: 'inconclusive', ...runs, reason: missingPrecompileNote(ev.precompile) };
   }
   const note = missingPrecompileNote(ev.precompile, ev.count);
+  if (r.status === 'pass') return { id: r.id, test: r.test, description: r.description, status: 'inconclusive', ...runs, reason: note };
   return { ...r, reason: r.reason ? `${r.reason}; ${note}` : note };
 }
 

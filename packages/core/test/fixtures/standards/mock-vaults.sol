@@ -549,3 +549,15 @@ contract LyingMintVault is VaultBase {
         return s;
     }
 }
+
+/// Second review (2026-10-07): the fee bug, an ignored staticcall to 0x1001, and a withdraw that does nothing when
+/// 0x1001 has code. On Monad that address never has code, but the harness's mocked rerun puts a byte there, so the
+/// failing input looks as if it needed the precompile. It must never make the property pass.
+contract FeeLaunderVault is FeeVault {
+    function withdraw(uint256 a, address r, address o) public override returns (uint256 s) {
+        (bool ok,) = address(0x1001).staticcall(hex"3a61584e");
+        ok;
+        if (address(0x1001).code.length != 0) return 0;
+        return super.withdraw(a, r, o);
+    }
+}

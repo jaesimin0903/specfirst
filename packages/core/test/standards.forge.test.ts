@@ -195,6 +195,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
       'WindowVault',
       'ReenterVault',
       'LyingMintVault',
+      'FeeLaunderVault',
     ]) {
       const art = JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${name}.json`), 'utf8')) as { deployedBytecode: { object: string } };
       code[name] = art.deployedBytecode.object;
@@ -231,6 +232,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000095', code.WindowVault]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000096', code.ReenterVault]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000097', code.LyingMintVault]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000098', code.FeeLaunderVault]);
     await rpc('anvil_mine', ['0x1']);
   });
   afterAll(async () => {
@@ -374,6 +376,17 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     }
     expect(touch.results.map((x) => [x.id, x.status])).toEqual(plain.results.map((x) => [x.id, x.status]));
     expect(touch.results.some((x) => (x.reason ?? '').includes(MISSING_PRECOMPILE_NOTE))).toBe(false);
+  });
+
+  it('FeeLaunderVault (withdraw does nothing when 0x1001 has code, as only the mocked rerun gives it): sf-maxWithdraw is never a pass', async () => {
+    const report = await check('0x5F00000000000000000000000000000000000098', 16);
+    const x = report.results.find((r) => r.id === 'sf-maxWithdraw-honored')!;
+    expect(x.status).not.toBe('pass');
+    expect(x.reason).toMatch(/a vault call reached Monad precompile 0x0000000000000000000000000000000000001001, which forge lacks, in \d+ inputs; these inputs were not judged/);
+    expect(standardCheckExitCode(report.summary)).not.toBe(0);
+    // FeeVault, the same bug without the trick, fails it outright.
+    const plain = await check('0x5F00000000000000000000000000000000000091', 16);
+    expect(plain.results.find((r) => r.id === 'sf-maxWithdraw-honored')!.status).toBe('fail');
   });
 
   it('WindowVault (refuses 500,000 to 1,000,000 tokens, accepts the bound): sf-maxDeposit passes and counts the refusals below the bound', async () => {
@@ -544,10 +557,11 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
   });
 
 
-  it('ThresholdPrecompileVault (deposits above 10 tokens are staked): the staked inputs are not judged, never fail; withdraw and redeem are judged with a smaller deposit', async () => {
+  it('ThresholdPrecompileVault (deposits above 10 tokens are staked): the staked inputs are not judged, so deposit and mint are inconclusive, never pass or fail; withdraw and redeem are judged with a smaller deposit', async () => {
     const r = await sf('0x5f00000000000000000000000000000000000072');
     expect([...r.values()].filter((x) => x.status === 'fail')).toEqual([]);
     for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored']) {
+      expect(r.get(id)!.status).toBe('inconclusive');
       expect(r.get(id)!.reason ?? '').toMatch(/a vault call reached Monad precompile 0x0000000000000000000000000000000000001000, which forge lacks(, in \d+ inputs)?; these inputs were not judged/);
     }
     expect(r.get('sf-maxWithdraw-honored')!.status).toBe('pass');

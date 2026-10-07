@@ -68,8 +68,9 @@ library SfForkGaps {
      * 1. with state diffs recorded, to see whether the call reaches a missing precompile at all;
      * 2. when it does, with every missing precompile answering plausibly (vm.mockCall over a byte of code): a
      *    vault that only touches a precompile and reverts anyway (an ignored staticcall, a fee bug) reverts
-     *    the same way again and keeps its verdict; one whose call goes through, or reverts differently, needed
-     *    the precompile, and the input is not judged.
+     *    the same way again and is judged on that revert; one whose call goes through, or reverts differently,
+     *    is not judged. That second outcome can be staged (a vault sees the byte of code), so the runner never
+     *    passes a property with an unjudged input; the mocked rerun only keeps real fails.
      * Runs only after a revert. forge 1.5.1 keeps state diff recording on after stopAndReturnStateDiff for the
      * rest of the fuzz run, and every caller here either discards the input or ends the run soon after, so the
      * properties do not pay for it.
@@ -165,9 +166,9 @@ library SfEvents {
 /// Two more rules keep other causes off the max properties. An amount below the bound min(max, cap) that
 /// reverts is tried again at the bound: EIP-4626 constrains max as an upper bound of what is accepted, so when
 /// the bound goes through the input is discarded and counted, and when it reverts too the property fails. And
-/// a revert that needed a precompile Monad has and this fork lacks (SfForkGaps.precompileCause) discards that
-/// input with an event; other inputs keep being judged, and the runner reports the property inconclusive only
-/// when such inputs alone used up forge's reject limit.
+/// a revert that needed a precompile Monad has and this fork lacks (SfForkGaps.precompileCause) leaves that input
+/// unjudged with an event; other inputs keep being judged, and the runner never reports a property with an
+/// unjudged input as a pass (a fail elsewhere stays a fail, otherwise it is inconclusive).
 contract SpecfirstMaxHonored is Test {
     using stdStorage for StdStorage;
 

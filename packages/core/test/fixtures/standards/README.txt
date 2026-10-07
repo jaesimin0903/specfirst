@@ -90,13 +90,14 @@ local-restricted-asset.json, local-partial-restricted.json, local-hook-blocked.j
 
 Monad precompiles, mint funding and refusals below the bound (mock-vaults.sol, used live by
 standards.forge.test.ts on a local anvil fork started with --chain-id 143, no recorded JSON). An input whose vault
-call needed a missing precompile is discarded with an event; a property is inconclusive on that only when such
-inputs used up the reject limit.
+call needed a missing precompile is left unjudged with an event; a property with any unjudged input is never a
+pass (a fail elsewhere stays a fail, otherwise inconclusive).
   PrecompileVault (0x5f..71)           deposit and mint stake through Monad's staking precompile 0x1000, like
                                        Magma gMON: every input needs it, 30 inconclusive, skipReason
                                        missing-precompile.
-  ThresholdPrecompileVault (0x5f..72)  stakes only deposits and mints above 10 tokens: no fail, the staked inputs
-                                       counted, sf-maxWithdraw and sf-maxRedeem judged with a one-token deposit.
+  ThresholdPrecompileVault (0x5f..72)  stakes only deposits and mints above 10 tokens: no fail, sf-maxDeposit and
+                                       sf-maxMint inconclusive with the staked inputs counted, sf-maxWithdraw and
+                                       sf-maxRedeem judged with a one-token deposit and passing.
   FakePrecompileTextVault (0x5f..73)   maxMint and withdraw revert with precompile-sounding text and call no
                                        precompile: maxMint and sf-maxWithdraw-honored stay fail.
   FakePrecompileSetupVault (0x5F..74)  asset() reverts with that text: 30 not_applicable, setup-reverted.
@@ -120,6 +121,9 @@ fuzzer must reach a fee bug:
   ReenterVault (0x5f..96)              calls setUp and an sf- property back from its deposit: the guard refuses,
                                        30 pass, no event.
   LyingMintVault (0x5F..97)            mint pulls more than it returns: test_mint fails, sf-maxMint passes.
+  FeeLaunderVault (0x5f..98)           second review: FeeVault's bug, an ignored staticcall to 0x1001 and a withdraw
+                                       that does nothing when 0x1001 has code (only the mocked rerun gives it code).
+                                       sf-maxWithdraw-honored is never a pass; FeeVault fails it.
 review/M.sol Vault mode 5 deposits through 0x1000; review/Exp.t.sol ForkGaps covers SfForkGaps (the list only on
 chains 143 and 10143, a precompile the EVM has is left out, a staking deposit needs 0x1000, a touch that does not
 matter and a call without any precompile are the vault's own reverts, reverted frames are seen) and the SfEvents

@@ -503,11 +503,20 @@ describe('inputs not judged because they needed a Monad precompile (missing-prec
     expect(r!.counterexample).toEqual({ calls: ['test_sf_maxDeposit_honored(1, 2)'], calldata: '0xab', logs: [] });
   });
 
-  it('a pass keeps its status with the count; a setUp revert is never read as a precompile', () => {
+  it('a pass with any unjudged input is inconclusive with the count; a setUp revert is never read as a precompile', () => {
     const [r] = parseStandardForgeJson(doc({ [depKey]: { status: 'Success', reason: null, counterexample: null, kind: { Fuzz: { runs: 16 } } } }), [sfDeposit], {
-      missingPrecompileEvents: lines(depKey, 3),
+      missingPrecompileEvents: lines(depKey, 2, '0x0000000000000000000000000000000000001001'),
     })!;
-    expect(r).toMatchObject({ status: 'pass', runs: 16, reason: missingPrecompileNote(STAKING, 3) });
+    // FeeLaunderVault: the one unjudged input can be the failing one, so this is never a pass.
+    expect(r).toEqual({
+      id: sfDeposit.id,
+      test: sfDeposit.test,
+      description: sfDeposit.description,
+      status: 'inconclusive',
+      runs: 16,
+      reason: missingPrecompileNote('0x0000000000000000000000000000000000001001', 2),
+    });
+    expect(standardCheckExitCode(summarize([r!]))).toBe(17);
     const setUp = JSON.stringify({ 't:S': { test_results: { 'setUp()': { status: 'Failure', reason: 'specfirst: fork lacks a Monad precompile the vault calls (0x1000)', counterexample: null } } } });
     const results = parseStandardForgeJson(setUp, [sfDeposit], { missingPrecompileEvents: `${toFunctionSelector('setUp()')} ${STAKING}` })!;
     expect(results[0]).toMatchObject({ status: 'not_applicable' });
