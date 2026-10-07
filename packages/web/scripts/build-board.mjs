@@ -11,6 +11,8 @@
 // Registry: CheckAttestationRegistry on Monad testnet, read with eth_call only ($SPECFIRST_BOARD_REGISTRY,
 // $SPECFIRST_BOARD_RPC). --offline or SPECFIRST_BOARD_OFFLINE=1 skips it; a failed read never fails the build.
 // --if-missing does nothing when data/board.json already exists (used by `build` and `dev`).
+// Chains: only Monad mainnet (143) by default; $SPECFIRST_BOARD_CHAINS takes a comma separated list (the watcher's
+// testnet demo reports live under certs/checks/10143 and are not board material).
 //
 // The pipeline itself is TypeScript (lib/board/pipeline.ts), loaded with Node's built-in type stripping.
 import { existsSync } from 'node:fs';
@@ -67,6 +69,11 @@ async function main() {
   }
 
   const rawSource = args.source ?? process.env.SPECFIRST_BOARD_SOURCE ?? 'certs/checks';
+  const chains = (process.env.SPECFIRST_BOARD_CHAINS ?? '143').split(',').map((c) => c.trim()).filter(Boolean);
+  if (chains.length === 0 || chains.some((c) => !/^\d{1,12}$/.test(c))) {
+    console.error(`board:build: SPECFIRST_BOARD_CHAINS must list chain ids, got "${process.env.SPECFIRST_BOARD_CHAINS}"`);
+    process.exit(2);
+  }
   const sourceDir = path.resolve(repoRoot, rawSource);
   const registry = {
     chainId: ATTESTATION_CHAIN_ID,
@@ -88,6 +95,7 @@ async function main() {
   const meta = await readVaultMeta(path.join(dataDir, 'vault-meta.json'));
   const txHashes = await readAttestationTxs(path.join(dataDir, 'attestation-txs.json'), registry.chainId, registry.address);
   const result = await buildBoard({
+    chains,
     sourceDir,
     sourceLabel: sourceLabel(sourceDir),
     dataDir,

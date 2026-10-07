@@ -59,13 +59,14 @@ function zodMessage(err: { issues: { path: (string | number)[]; message: string 
 /**
  * Reads `<chainId>/<address>/*.json` under `sourceDir`. forge's own output (`*.forge.json`, kept next to each
  * report by `specfirst check`) is ignored. Any other file that is not a valid StandardCheckReport, or that lies
- * under another chain or address than it names, is listed in `skipped` and left out.
+ * under another chain or address than it names, is listed in `skipped` and left out. With `chains`, only those
+ * chain directories are read (the board is about Monad mainnet; the watcher also keeps testnet demo reports there).
  */
-export async function collectReports(sourceDir: string): Promise<CollectResult> {
+export async function collectReports(sourceDir: string, opts: { chains?: readonly string[] } = {}): Promise<CollectResult> {
   if (!(await isDir(sourceDir))) return { candidates: [], skipped: [], sourceExists: false };
   const candidates: CheckCandidate[] = [];
   const skipped: { file: string; error: string }[] = [];
-  const chains = (await readdir(sourceDir)).filter((d) => CHAIN_DIR.test(d)).sort();
+  const chains = (await readdir(sourceDir)).filter((d) => CHAIN_DIR.test(d) && (!opts.chains || opts.chains.includes(d))).sort();
   for (const chain of chains) {
     const chainPath = path.join(sourceDir, chain);
     if (!(await isDir(chainPath))) continue;
@@ -186,6 +187,8 @@ export function assembleBoard(i: AssembleInput): Assembled {
 
 export interface BuildBoardOptions {
   sourceDir: string;
+  /** Chain directories of sourceDir to read; all when unset. */
+  chains?: readonly string[];
   /** Shown on the board; defaults to sourceDir. */
   sourceLabel?: string;
   /** packages/web/data */
@@ -219,7 +222,7 @@ async function writeJson(file: string, value: unknown): Promise<void> {
  */
 export async function buildBoard(o: BuildBoardOptions): Promise<BuildBoardResult> {
   const now = o.now ?? (() => new Date());
-  const { candidates, skipped, sourceExists } = await collectReports(o.sourceDir);
+  const { candidates, skipped, sourceExists } = await collectReports(o.sourceDir, o.chains ? { chains: o.chains } : {});
   const latest = pickLatest(candidates);
   const subjects = latest.map((c) => ({ chainId: c.report.chainId, address: c.report.address }));
   const read =

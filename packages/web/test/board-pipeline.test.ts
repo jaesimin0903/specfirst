@@ -96,6 +96,12 @@ describe('collectReports', () => {
     expect(skipped.find((s) => s.file.includes('0x3333'))!.error).toMatch(/not a StandardCheckReport/);
   });
 
+  it('reads only the chain directories it is given', async () => {
+    const all = await collectReports(SOURCE);
+    expect((await collectReports(SOURCE, { chains: ['143'] })).candidates.length).toBe(all.candidates.length);
+    expect((await collectReports(SOURCE, { chains: ['10143'] })).candidates).toEqual([]);
+  });
+
   it('treats a missing source directory as empty, not as an error', async () => {
     const r = await collectReports(path.join(here, 'fixtures/board/does-not-exist'));
     expect(r).toEqual({ candidates: [], skipped: [], sourceExists: false });
