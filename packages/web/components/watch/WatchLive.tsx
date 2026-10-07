@@ -176,7 +176,7 @@ export function WatchLive({ initialStatus, initialFeed }: { initialStatus: Watch
         <Fig n={s.counts?.detected24h} label="Found" note="vault signals, last 24 h" />
         <Fig n={s.counts?.checked24h} label="Checked" note="30 properties each, last 24 h" />
         <Fig n={s.counts?.attested24h} label="Attested" note="on Monad testnet, last 24 h" tone="seal" />
-        <Fig n={s.counts?.changed24h} label="Changed" note="results that moved, last 24 h" />
+        <Fig n={s.counts?.changed24h} label="Changed" note={changedNote(s.counts?.priceDrops24h)} />
         <Fig
           n={s.attestBudget ? `${s.attestBudget.usedToday}/${s.attestBudget.perDay}` : undefined}
           label="Attestations today"
@@ -310,6 +310,12 @@ export function WatchLive({ initialStatus, initialFeed }: { initialStatus: Watch
       </div>
     </>
   );
+}
+
+/** The note under "Changed": results that moved, and apart from them the share value drops when the watcher counts them. */
+export function changedNote(priceDrops: number | undefined): string {
+  if (!priceDrops) return 'results that moved, last 24 h';
+  return `results that moved, last 24 h; apart from them ${priceDrops} share value drop${priceDrops === 1 ? '' : 's'}`;
 }
 
 function Fig({ n, label, note, tone }: { n: number | string | undefined; label: string; note: string; tone?: string }) {

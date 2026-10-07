@@ -36,6 +36,7 @@ describe('feed.ndjson events', () => {
       'sweep',
       'subscribed',
       'backfill',
+      'price-drop',
     ]);
     expect(events.map((e) => e.seq)).toEqual([...events.keys()].map((i) => i + 1));
   });
@@ -50,7 +51,7 @@ describe('feed.ndjson events', () => {
       supersedes: expect.stringMatching(/^\d+$/),
     });
     const fresh = events.find((e) => e.change?.kind === 'new')!;
-    expect(fresh.change!.from).toBeNull();
+    expect(fresh.change).toMatchObject({ kind: 'new', from: null });
     const failedDelivery = events.find((e) => e.alert && !e.alert.ok)!;
     expect(failedDelivery.alert).toMatchObject({ channel: 'webhook', ok: false, status: 500 });
   });
@@ -70,6 +71,8 @@ describe('feed.ndjson events', () => {
       ['block as a number', { ...base, block: 110977300 }],
       ['time without zone', { ...base, at: '2026-10-06 09:00' }],
       ['change kind', { ...base, change: { kind: 'worse', from: null, to: { summary: { pass: 1, fail: 0, inconclusive: 0, notApplicable: 0 }, failed: [] } } }],
+      ['price-drop with a check change shape', { ...base, change: { kind: 'price-drop', from: null, to: { summary: { pass: 1, fail: 0, inconclusive: 0, notApplicable: 0 }, failed: [] } } }],
+      ['price-drop without its blocks', { ...base, change: { kind: 'price-drop', fromAssetsPerShare: '2', toAssetsPerShare: '1', dropBps: 5000 } }],
       ['alert channel', { ...base, alert: { subscriptionId: '1', subscriber: base.subject, channel: 'sms', ok: true } }],
       [
         'report hash length',
@@ -88,6 +91,13 @@ describe('feed.ndjson events', () => {
       ],
     ];
     for (const [why, line] of bad) expect(feedEventSchema.safeParse(line).success, why).toBe(false);
+  });
+
+  it('a share value drop is a changed event whose change carries both values and both blocks', () => {
+    const change = { kind: 'price-drop', fromAssetsPerShare: '1000000', toAssetsPerShare: '995800', dropBps: 42, fromBlock: '110977300', toBlock: '110977400' } as const;
+    const line = { ...base, kind: 'changed', source: 'price-drop', block: '110977400', change };
+    expect(feedEventSchema.parse(line).change).toEqual(change);
+    expect(parseFeedText(`${JSON.stringify({ ...line, seq: 1 })}\n`)).toMatchObject({ events: [{ change }], skipped: 0 });
   });
 });
 

@@ -9,7 +9,10 @@ import {
   deployDemoToken,
   deployDemoVault,
   depositIntoDemoVault,
+  dropPercentText,
+  LEGACY_DEMO_FACTORY_ADDRESS,
   setDemoVaultBroken,
+  setDemoVaultLoss,
   ANVIL_CHAIN_ID,
   ANVIL_DEFAULT_RPC,
   AttestationRegistryClient,
@@ -111,6 +114,11 @@ interface WatchOptions {
   sweepHours: string;
   sweepPerHour: string;
   subscribedMinutes: string;
+  priceMinutes: string;
+  priceDropBps: string;
+  priceAll?: boolean;
+  priceReadsPerMinute: string;
+  maxPriceDropsPerDay: string;
   maxAttestPerDay: string;
   maxUnsolicitedPerDay: string;
   maxAttestPerSubject: string;
@@ -252,7 +260,7 @@ async function verifyFixturesOnChain(
 }
 
 /** A read-only client over `urls` that also fails over on node errors, and refuses an RPC of another chain. */
-async function subjectClientFor(urls: string[], chainId: number): Promise<StandardCheckClient & SubjectClient & Pick<PublicClient, 'request'>> {
+async function subjectClientFor(urls: string[], chainId: number): Promise<StandardCheckClient & SubjectClient & Pick<PublicClient, 'request' | 'multicall'>> {
   const chain = Object.values(NETWORKS).find((c) => c.id === chainId);
   const client = createPublicClient({ ...(chain ? { chain } : {}), transport: rpcTransport(urls, { failoverIf: isNodeError }) });
   let reported: number;
@@ -262,7 +270,7 @@ async function subjectClientFor(urls: string[], chainId: number): Promise<Standa
     throw new ConfigError(`the subject RPC ${urls.join(', ')} did not answer eth_chainId: ${errorText(err)}`);
   }
   if (reported !== chainId) throw new ConfigError(`the subject RPC ${urls[0]} serves chain ${reported}, not --subject-chain ${chainId}`);
-  return client as unknown as StandardCheckClient & SubjectClient & Pick<PublicClient, 'request'>;
+  return client as unknown as StandardCheckClient & SubjectClient & Pick<PublicClient, 'request' | 'multicall'>;
 }
 
 /** The host of an RPC URL, for logs: the path and query of a provider URL often carry an API key. */
@@ -297,8 +305,13 @@ function feedLine(e: FeedEvent): string {
     }
     case 'attested':
       return cont(`${pc.green('attested')}  ${who}  attestation ${e.attestation!.id}${e.attestation!.supersedes ? ` supersedes ${e.attestation!.supersedes}` : ''}  ${pc.dim(`tx ${e.attestation!.txHash}`)}`);
-    case 'changed':
-      return cont(`${pc.yellow('changed')}  ${who}  ${e.change!.kind}  ${pc.dim(e.change!.from ? `failed [${e.change!.from.failed.join(' ')}] to [${e.change!.to.failed.join(' ')}]` : `failed [${e.change!.to.failed.join(' ')}]`)}`);
+    case 'changed': {
+      const c = e.change!;
+      if (c.kind === 'price-drop') {
+        return cont(`${pc.yellow('changed')}  ${who}  price-drop  ${pc.red(`share value fell ${dropPercentText(c.dropBps)}`)}  ${pc.dim(`block ${c.fromBlock} to ${c.toBlock}, ${c.fromAssetsPerShare} to ${c.toAssetsPerShare} per share`)}`);
+      }
+      return cont(`${pc.yellow('changed')}  ${who}  ${c.kind}  ${pc.dim(c.from ? `failed [${c.from.failed.join(' ')}] to [${c.to.failed.join(' ')}]` : `failed [${c.to.failed.join(' ')}]`)}`);
+    }
     case 'alerted':
       return cont(`${pc.magenta('alerted')}  ${who}  subscription ${e.alert?.subscriptionId ?? '?'}  ${e.alert?.channel ?? ''} ${e.alert?.ok ? 'ok' : pc.red('failed')}`);
     case 'error':
@@ -322,6 +335,10 @@ function logWatchEvent(ctx: CliContext, e: WatchEvent): void {
       return;
     case 'watch-attest-replaced':
       printLine(ctx, cont(pc.yellow(`attest tx ${e.replaces} still pending, sent again with a higher fee (${e.bump}): ${e.hash}`)));
+      return;
+    case 'watch-price':
+      if (e.step === 'pending') printLine(ctx, cont(`${pc.yellow('share value')}  ${short(e.subject)}  fell ${dropPercentText(e.dropBps ?? 0)} at block ${e.block}  ${pc.dim('waiting for a read at a later block')}`));
+      else if (e.step === 'cleared') printLine(ctx, cont(pc.dim(`share value  ${short(e.subject)}  ${e.reason ?? 'the fall was not there at a later block'}`)));
       return;
     case 'watch-pass-done':
       if (e.checked > 0) printLine(ctx, cont(pc.dim(`head ${e.head}  cursor ${e.cursor}  queue ${e.queue}`)));
@@ -358,6 +375,19 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
     .option('--sweep-hours <h>', 're-check every known vault at most once per this many hours', String(DEFAULT_WATCH_CONFIG.sweepHours))
     .option('--sweep-per-hour <n>', 'start at most this many sweep checks per hour (0: no sweep)', String(DEFAULT_WATCH_CONFIG.sweepPerHour))
     .option('--subscribed-minutes <m>', 're-check subscribed subjects this often', String(DEFAULT_WATCH_CONFIG.subscribedMinutes))
+    .option(
+      '--price-minutes <m>',
+      'read the share value (convertToAssets of one share) of attested subjects this often; subscribed subjects at every pass (0: no share value reads)',
+      String(DEFAULT_WATCH_CONFIG.priceMinutes),
+    )
+    .option('--price-drop-bps <n>', 'a fall of the share value of more than this many basis points, seen again at a later block, is a price-drop event', String(DEFAULT_WATCH_CONFIG.priceDropBps))
+    .option('--price-all', 'also follow the share value of known vaults nobody subscribed to and nobody attested')
+    .option(
+      '--price-reads-per-minute <n>',
+      'share value reads per minute, all subjects together (one eth_call each with Multicall3, else three); a quarter is kept for attested vaults',
+      String(DEFAULT_WATCH_CONFIG.maxPriceReadsPerMinute),
+    )
+    .option('--max-price-drops-per-day <n>', 'price-drop events (and alerts) of one vault per UTC day; more are logged only', String(DEFAULT_WATCH_CONFIG.maxPriceDropsPerDay))
     .option('--max-attest-per-day <n>', 'attestations per UTC day, every class; more wait for the next day', String(DEFAULT_WATCH_CONFIG.maxAttestPerDay))
     .option('--max-unsolicited-per-day <n>', 'of those, attestations nobody subscribed to (factory, fail, attested-change)', String(DEFAULT_WATCH_CONFIG.maxUnsolicitedPerDay))
     .option('--max-attest-per-subject <n>', 'attestations of one subject per UTC day', String(DEFAULT_WATCH_CONFIG.maxAttestPerSubjectPerDay))
@@ -387,6 +417,10 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         const sweepHours = Number(positive(opts.sweepHours, '--sweep-hours', 10_000n));
         const sweepPerHour = Number(nonNegative(opts.sweepPerHour, '--sweep-per-hour', 10_000n));
         const subscribedMinutes = Number(positive(opts.subscribedMinutes, '--subscribed-minutes', 1_000_000n));
+        const priceMinutes = Number(nonNegative(opts.priceMinutes, '--price-minutes', 1_000_000n));
+        const priceDropBps = Number(positive(opts.priceDropBps, '--price-drop-bps', 9_999n));
+        const maxPriceReadsPerMinute = Number(positive(opts.priceReadsPerMinute, '--price-reads-per-minute', 100_000n));
+        const maxPriceDropsPerDay = Number(nonNegative(opts.maxPriceDropsPerDay, '--max-price-drops-per-day', 1_000n));
         const maxAttestPerDay = Number(nonNegative(opts.maxAttestPerDay, '--max-attest-per-day', 1_000_000n));
         const maxUnsolicitedPerDay = Number(nonNegative(opts.maxUnsolicitedPerDay, '--max-unsolicited-per-day', 1_000_000n));
         const maxAttestPerSubjectPerDay = Number(nonNegative(opts.maxAttestPerSubject, '--max-attest-per-subject', 1_000n));
@@ -487,6 +521,11 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             sweepHours,
             sweepPerHour,
             subscribedMinutes,
+            priceMinutes,
+            priceDropBps,
+            priceAll: Boolean(opts.priceAll),
+            maxPriceReadsPerMinute,
+            maxPriceDropsPerDay,
             maxAttestPerDay,
             maxUnsolicitedPerDay,
             maxAttestPerSubjectPerDay,
@@ -538,6 +577,16 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             ctx,
             cont(
               pc.dim(
+                priceMinutes > 0
+                  ? `share value: subscribed every ${DEFAULT_WATCH_CONFIG.priceUrgentSec}s, ${opts.priceAll ? 'attested and every other known vault' : 'attested'} every ${priceMinutes} min, a drop over ${priceDropBps} bps confirmed at a later block, ${maxPriceReadsPerMinute} reads a minute, ${maxPriceDropsPerDay} drops a vault a day`
+                  : 'share value not read (--price-minutes 0)',
+              ),
+            ),
+          );
+          printLine(
+            ctx,
+            cont(
+              pc.dim(
                 alerting
                   ? `subscriptions ${alerting.subs} on ${net.name}  webhooks ${rel(alerting.webhooksFile)}${opts.webhookLocalOrigin.length ? `  local origins ${opts.webhookLocalOrigin.join(', ')}` : ''}`
                   : deps.hooks
@@ -569,6 +618,11 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             maxUnsolicitedPerDay,
             maxAttestPerSubjectPerDay,
             minBalanceWei: minBalanceWei.toString(),
+            priceMinutes,
+            priceDropBps,
+            priceAll: Boolean(opts.priceAll),
+            maxPriceReadsPerMinute,
+            maxPriceDropsPerDay,
             reportBaseUrl: base,
             subs: alerting?.subs ?? null,
             webhooks: alerting ? rel(alerting.webhooksFile) : null,
@@ -660,7 +714,7 @@ function address(raw: string, what: string): Address {
 }
 
 /**
- * `specfirst watch demo deploy|vault|deposit|set-broken`: the contracts of the watcher demo (ADR 0006) on
+ * `specfirst watch demo deploy|vault|deposit|set-broken|loss`: the contracts of the watcher demo (ADR 0006) on
  * monad-testnet or anvil, signed with DEPLOYER_PRIVATE_KEY through the guarded wallet. They take --network and
  * --rpc of `watch`; monad-mainnet is refused before a key is read.
  */
@@ -763,6 +817,37 @@ function registerWatchDemo(watch: Command): void {
           const tx = await setDemoVaultBroken({ client, wallet, vault, broken: state === 'on' });
           printLine(ctx, stage('demo', `${pc.bold(vault)} previewDeposit bug ${state === 'on' ? pc.red('on') : pc.green('off')}  ${pc.dim(`block ${tx.blockNumber}  tx ${tx.hash}`)}`));
           emitEvent(ctx, { type: 'watch-demo-set-broken', chainId: net.clients.chain.id, vault, broken: state === 'on', txHash: tx.hash, blockNumber: tx.blockNumber.toString() });
+        } catch (err) {
+          failed(err);
+        }
+      });
+    });
+
+  demo
+    .command('loss <vault> <bps>')
+    .description(
+      `Send <bps> basis points (1 to 9999) of the vault's assets away (operator only): one share is then worth that much less, which the watcher reports as a price-drop. Vaults of the factory before setLoss (${LEGACY_DEMO_FACTORY_ADDRESS}) cannot.`,
+    )
+    .action(async (vaultArg: string, bpsArg: string, _opts: unknown, command: Command) => {
+      const ctx = contextFrom(command);
+      await runStage(ctx, 'watch demo loss', WATCH_FAILED_EXIT_CODE, async () => {
+        const vault = address(vaultArg, '<vault>');
+        if (!/^[1-9]\d{0,3}$/.test(bpsArg) || Number(bpsArg) > 9_999) throw new ConfigError(`<bps> must be a whole number of basis points from 1 to 9999, got "${bpsArg}"`);
+        const bps = Number(bpsArg);
+        const { net, client, wallet } = signer(command);
+        try {
+          const tx = await setDemoVaultLoss({ client, wallet, vault, bps });
+          const event = { type: 'watch-demo-loss', chainId: net.clients.chain.id, vault, bps, assets: tx.assets.toString() };
+          if (!tx.sent) {
+            printLine(ctx, stage('demo', `${pc.bold(vault)} nothing changed: ${dropPercentText(bps)} of its ${tx.totalAssets} base units of assets rounds to 0, so the share value stays; nothing sent`));
+            emitEvent(ctx, { ...event, changed: false, totalAssets: tx.totalAssets.toString(), txHash: null, blockNumber: null });
+          } else if (tx.assets === 0n) {
+            printLine(ctx, stage('demo', `${pc.bold(vault)} nothing changed: the loss rounded to 0 base units, so the share value stays  ${pc.dim(`block ${tx.blockNumber}  tx ${tx.hash}`)}`));
+            emitEvent(ctx, { ...event, changed: false, txHash: tx.hash, blockNumber: tx.blockNumber.toString() });
+          } else {
+            printLine(ctx, stage('demo', `${pc.bold(vault)} lost ${dropPercentText(bps)} of its assets (${tx.assets} base units)  ${pc.dim(`block ${tx.blockNumber}  tx ${tx.hash}`)}`));
+            emitEvent(ctx, { ...event, changed: true, txHash: tx.hash, blockNumber: tx.blockNumber.toString() });
+          }
         } catch (err) {
           failed(err);
         }

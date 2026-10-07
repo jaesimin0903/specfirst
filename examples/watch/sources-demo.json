@@ -1,10 +1,18 @@
 {
   "v": 1,
   "chainId": 10143,
-  "description": "Watcher demo on Monad testnet (docs/adr/0006): DemoVaultFactory at its CREATE2 address announces new vaults; Deposit, Upgraded and BeaconUpgraded only re-check vaults the watcher already knows, so other testnet contracts do not become candidates. A subscription to a demo vault re-checks it every --subscribed-minutes, which is how switching its bug shows up.",
+  "description": "Watcher demo on Monad testnet (docs/adr/0006): DemoVaultFactory at its CREATE2 address announces new vaults, and so does the factory from before DemoVault had setLoss, whose vaults stay known; Deposit, Upgraded and BeaconUpgraded only re-check vaults the watcher already knows, so other testnet contracts do not become candidates. A subscription to a demo vault re-checks it every --subscribed-minutes, which is how switching its bug shows up, and reads its share value at every pass, which is how setLoss shows up.",
   "sources": [
     {
       "name": "Specfirst DemoVaultFactory",
+      "signal": "factory",
+      "address": "0xE1FC8fa26Cb7496A68DD4e0ba896Ed8CAE2238FB",
+      "event": "event VaultDeployed(address indexed vault, address indexed asset)",
+      "vault": "vault",
+      "topic0": "0x09d75e12e349f79020715b0ea7b2c707e8acf1889b6d6f1337fce7f4e1b9e5c7"
+    },
+    {
+      "name": "Specfirst DemoVaultFactory before setLoss",
       "signal": "factory",
       "address": "0x27eFcf4d95B8AB853b31b65EFB3Adb1cAd93D432",
       "event": "event VaultDeployed(address indexed vault, address indexed asset)",

@@ -3,8 +3,8 @@ import { vaultStatusOf, type VaultMeta } from '../board/aggregate';
 import { txUrl as testnetTxUrl } from '../board/attestations';
 import { chainName } from '../board/reproduce';
 import type { StatusCounts } from '../board/types';
-import type { FeedEvent, FeedSource, WatchStatus, WatchVault } from './core';
-import type { FeedEventJson, FoundJson, OutcomeJson, VaultLabelJson, WatchStatusJson } from './types';
+import type { FeedChange, FeedEvent, FeedSource, WatchStatus, WatchVault } from './core';
+import type { ChangeJson, FeedEventJson, FoundJson, OutcomeJson, VaultLabelJson, WatchStatusJson } from './types';
 
 /*
  * Pure functions from the watcher's files to the JSON the pages show. No I/O: service.ts reads the files, the
@@ -76,6 +76,7 @@ const SOURCE_TEXT: Readonly<Record<FeedSource, string>> = {
   sweep: 'scheduled re-check',
   subscribed: 'subscriber re-check',
   backfill: 'backfill scan',
+  'price-drop': 'share value fell',
 };
 
 export function sourceText(source: FeedSource | undefined | null, factory?: { name: string } | null): string | null {
@@ -86,6 +87,11 @@ export function sourceText(source: FeedSource | undefined | null, factory?: { na
 
 export function outcomeOf(o: { summary: StatusCounts; failed: string[] }): OutcomeJson {
   return { summary: { ...o.summary }, failed: [...o.failed], status: vaultStatusOf(o.summary) };
+}
+
+export function changeJson(c: FeedChange): ChangeJson {
+  if (c.kind === 'price-drop') return { ...c };
+  return { kind: c.kind, from: c.from ? outcomeOf(c.from) : null, to: outcomeOf(c.to) };
 }
 
 /** Lowercase subject -> its first detected event, and the factories that announced subjects. */
@@ -162,7 +168,7 @@ export function eventJson(e: FeedEvent, ctx: LabelContext, report: ReportInfo = 
     attestation: e.attestation
       ? { id: e.attestation.id, txHash: e.attestation.txHash, txUrl: testnetTxUrl(e.attestation.txHash), supersedes: e.attestation.supersedes }
       : null,
-    change: e.change ? { kind: e.change.kind, from: e.change.from ? outcomeOf(e.change.from) : null, to: outcomeOf(e.change.to) } : null,
+    change: e.change ? changeJson(e.change) : null,
     alert: e.alert
       ? {
           subscriptionId: e.alert.subscriptionId,

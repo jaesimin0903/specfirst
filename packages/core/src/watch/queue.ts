@@ -19,7 +19,8 @@ export interface QueueEntry {
 
 /**
  * Queue priorities (docs/adr/0006, "Pipeline"), highest first: a subscribed subject, a new candidate, an
- * upgrade or implementation change of a known vault, a first deposit, the sweep.
+ * upgrade or implementation change of a known vault, a first deposit, the sweep (and the re-check after a confirmed
+ * fall of the share value of a subject nobody subscribed to: a vault can make its value saw up and down for free).
  */
 export const QUEUE_PRIORITY = { subscribed: 0, candidate: 1, upgrade: 2, firstDeposit: 3, sweep: 4 } as const;
 

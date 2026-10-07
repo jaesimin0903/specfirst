@@ -4,7 +4,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Address, PublicClient } from 'viem';
-import { isContractAnswer, isNodeError, isRateLimited, isRpcServerError, isTransportFailure } from '../chain/transport.js';
+import { isContractAnswer, isContractFailureMessage, isNodeError, isRateLimited, isRpcServerError, isTransportFailure } from '../chain/transport.js';
 import {
   runStandardCheck,
   StandardCheckError,
@@ -115,7 +115,10 @@ export function classifiedErrorText(err: unknown): string {
   const fn = links.map((e) => e.functionName).find((f): f is string => typeof f === 'string' && f !== '');
   const on = fn ? ` on ${fn}()` : '';
   const words = oneLine(links.map((e) => e.details).find((d): d is string => typeof d === 'string' && d !== '') ?? errorText(err));
-  if (isContractAnswer(err)) return `${links.some((e) => /Revert/.test(String(e.name))) ? 'revert' : 'contract answer'}${on}: ${errorText(err)}`;
+  if (isContractAnswer(err)) {
+    const oog = isContractFailureMessage(err) && /out ?of ?gas/i.test(errorText(err) + links.map((e) => ` ${String(e.details ?? '')}`).join(''));
+    return `${oog ? 'out of gas' : links.some((e) => /Revert/.test(String(e.name))) ? 'revert' : 'contract answer'}${on}: ${errorText(err)}`;
+  }
   if (isRateLimited(err)) return `rate limit${on}: ${words}`;
   if (isTransportFailure(err)) return `transport failure${on}: ${words}`;
   if (isNodeError(err) || isRpcServerError(err)) return `RPC node error${on}: ${words}`;

@@ -172,6 +172,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch with subscriptions and webhooks fro
     expect(hits[0]!.body).toEqual({
       v: 1,
       kind: 'change',
+      key: `change:31337:${vault.toLowerCase()}:${feed[4]!.check!.block}`,
       subscriptionId: '0',
       subscriptionIds: ['0'],
       subject: vault,

@@ -4,6 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { FeedItem } from '../components/watch/FeedItem';
+import { VaultHistory } from '../components/watch/VaultHistory';
+import { alertPayloadSchema } from '../lib/watch/demoHook';
+import { alertSummary, inboxNote } from '../lib/watch/words';
+import { changedNote } from '../components/watch/WatchLive';
+import type { FeedEvent } from '../lib/watch/core';
 import { WatcherVaultView } from '../components/watch/WatcherVaultView';
 import { RevenueView } from '../components/watch/RevenueView';
 import { BoardExplorer } from '../components/board/BoardExplorer';
@@ -64,6 +69,97 @@ describe('FeedItem', () => {
     expect(screen.getByText(/Now failing: sf-maxWithdraw-honored, sf-maxRedeem-honored/)).toBeInTheDocument();
     expect(screen.getByText('Alert failed')).toBeInTheDocument();
     expect(screen.getByText(/Webhook delivery for subscription #3, HTTP 500, failed after the retries/)).toBeInTheDocument();
+  });
+});
+
+describe('a share value drop', () => {
+  const change = { kind: 'price-drop', fromAssetsPerShare: '1004200', toAssetsPerShare: '1000000', dropBps: 41, fromBlock: '110977300', toBlock: '110977400' } as const;
+  const drop: FeedEvent = {
+    v: 1,
+    seq: 40,
+    at: '2026-10-07T09:00:00.000Z',
+    kind: 'changed',
+    chainId: 143,
+    subject: '0xFEeD000000000000000000000000000000000001',
+    source: 'price-drop',
+    block: '110977400',
+    change,
+    reason: 'confirmed by a second read at block 110977400 after block 110977350',
+  };
+
+  it('in the feed, the vault history and the inbox: how much, between which blocks, both values; no verdict', () => {
+    const e = eventJson(drop, ctx);
+    expect(e.change).toEqual(change);
+    expect(e.sourceText).toBe('share value fell');
+    const watch: VaultWatchJson = {
+      chainId: 143,
+      address: MORPHO,
+      watched: true,
+      found: null,
+      lastCheck: null,
+      lastAttestationId: null,
+      label: e.label,
+      history: [e],
+      readAt: '2026-10-07T09:00:01.000Z',
+    };
+    render(
+      <>
+        <ol>
+          <FeedItem e={e} />
+        </ol>
+        <VaultHistory watch={watch} />
+        <ol>
+          <FeedItem e={e} note={`${inboxNote('change', e.change!.kind)}, subscription #3`} />
+        </ol>
+      </>,
+    );
+    expect(screen.getAllByText('Share value fell')).toHaveLength(3);
+    for (const label of screen.getAllByText('Share value fell')) expect(label).toHaveAttribute('data-change', 'price-drop');
+    expect(screen.getAllByText('Share value fell 0.41% between block 110,977,300 and block 110,977,400.')).toHaveLength(3);
+    expect(screen.getAllByText(/convertToAssets of one share, in the asset's base units: 1,004,200 at block 110,977,300, 1,000,000 at block 110,977,400/)).toHaveLength(3);
+    expect(screen.getByText('Share value fell, subscription #3')).toBeInTheDocument();
+    // A fact about two blocks: no pass or fail chip, no failing properties.
+    expect(screen.queryByText(/Now failing/)).toBeNull();
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+
+  it('values of 10 ** scale shares say so', () => {
+    render(
+      <ol>
+        <FeedItem e={eventJson({ ...drop, change: { ...change, fromAssetsPerShare: '99900', toAssetsPerShare: '90000', dropBps: 990, scale: 3 } }, ctx)} />
+      </ol>,
+    );
+    expect(screen.getByText(/convertToAssets of 1,000 shares, in the asset's base units: 99,900 at block 110,977,300, 90,000 at block 110,977,400/)).toBeInTheDocument();
+  });
+
+  it('review L4: the 24 h figure of changed results names the share value drops apart', () => {
+    expect(changedNote(undefined)).toBe('results that moved, last 24 h');
+    expect(changedNote(0)).toBe('results that moved, last 24 h');
+    expect(changedNote(1)).toBe('results that moved, last 24 h; apart from them 1 share value drop');
+    expect(changedNote(3)).toBe('results that moved, last 24 h; apart from them 3 share value drops');
+  });
+
+  it('the demo receiver takes the price-drop payload as an alert and says what fell; review L5: a kind it does not know is still an alert', () => {
+    const payload = {
+      v: 1,
+      kind: 'price-drop',
+      key: 'price-drop:143:0xfeed000000000000000000000000000000000001:110977300',
+      subscriptionId: '3',
+      subscriptionIds: ['3'],
+      subject: drop.subject,
+      chainId: 143,
+      change,
+      check: null,
+      attestation: null,
+      reportURL: null,
+    };
+    expect(alertPayloadSchema.safeParse(payload).success).toBe(true);
+    expect(alertPayloadSchema.safeParse({ ...payload, kind: 'price-rise', future: 1 }).success).toBe(true);
+    expect(alertSummary({ ...payload, kind: 'price-rise', change: null })).toBe('Subscription #3: price-rise on 0xFEeD...0001, chain 143');
+    expect(alertPayloadSchema.safeParse({ ...payload, v: 2 }).success).toBe(false);
+    expect(alertSummary(payload)).toBe('Subscription #3: share value fell 0.41% between block 110977300 and block 110977400 on 0xFEeD...0001, chain 143');
+    expect(alertSummary({ ...payload, kind: 'change', change: { kind: 'regressed' } })).toBe('Subscription #3: regressed on 0xFEeD...0001, chain 143');
+    expect(alertSummary({ ...payload, change: { ...change, dropBps: '<b>' } })).toBe('Subscription #3: price-drop on 0xFEeD...0001, chain 143');
   });
 });
 

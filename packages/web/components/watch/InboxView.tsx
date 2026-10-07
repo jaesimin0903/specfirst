@@ -210,7 +210,8 @@ export function InboxView({ contract, rpc, faucet }: { contract: string | null; 
               Alerts
             </h2>
             <p className="sb-lede">
-              For each active subscription: every change in its vault&apos;s result since it started, the first check after it started, and what was delivered.
+              For each active subscription: every change in its vault&apos;s result since it started, every confirmed fall of its share value, the first check
+              after it started, and what was delivered.
               Newest first.
             </p>
             {!data || data.items.length === 0 ? (
@@ -300,7 +301,8 @@ function WebhookForm({
         Webhook
       </h2>
       <p className="sb-lede">
-        The watcher POSTs a JSON alert to this URL for every change on a vault you watch, and once for its first check after you subscribe, up to 3 attempts. Registering it is a signature, not a transaction:
+        The watcher POSTs a JSON alert to this URL for every change on a vault you watch, for every confirmed fall of its share value, and once for its first
+        check after you subscribe, up to 3 attempts. Registering it is a signature, not a transaction:
         the text below is signed by {shortAddress(subscriber)} and checked by this server, which keeps the latest URL per address and never shows it in full,
         since a webhook URL can be a secret.
       </p>

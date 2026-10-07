@@ -10,7 +10,7 @@ import type { StandardCheckReport } from '../standards/report.js';
 import { defaultCacheDir } from '../standards/workspace.js';
 import { ATTEST_CLASSES, outcomeOfReport } from './decide.js';
 import {
-  CHANGE_KINDS,
+  CHECK_CHANGE_KINDS,
   FEED_KINDS,
   FEED_SOURCES,
   feedEventSchema,
@@ -79,7 +79,12 @@ export const queueEntrySchema = z
  * same nonce sent before with a lower fee, any of which may still be mined. A deferred entry's `nonce` resends
  * with the nonce of a transaction the node dropped, so at most one of the two can be mined. upgrades: Upgraded
  * or BeaconUpgraded of known vaults whose fingerprint could not be read yet, carried to the next pass.
- * implementations: the implementation each known vault ran at its last check.
+ * implementations: the implementation each known vault ran at its last check. prices: the share value of each
+ * subject whose value is followed (docs/adr/0006, "Share value"): the reference a drop is measured from
+ * (assetsPerShare of 10 ** (decimals + scale) shares at `block`), the last read, a drop over the threshold waiting
+ * for its confirming read, and the per-subject limits of drops. priceLowResolution: vaults whose share value is too
+ * small to measure, not read again for six hours. recent entries of a price-drop carry drop: true, so status.json
+ * counts them apart from changes of a result.
  */
 export const watchStateSchema = z
   .object({
@@ -107,7 +112,7 @@ export const watchStateSchema = z
     subscriptions: z.record(decimal, z.object({ firstCheckAt: iso }).strict()),
     sweeps: z.array(iso),
     attestDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), used: count, unsolicited: count.default(0), candidateFails: count.default(0) }).strict(),
-    recent: z.array(z.object({ kind: z.enum(FEED_KINDS), at: iso }).strict()),
+    recent: z.array(z.object({ kind: z.enum(FEED_KINDS), at: iso, drop: z.literal(true).optional() }).strict()),
     sourcesSeen: z.record(z.string(), count),
     deferred: z.record(
       lowerAddress,
@@ -149,7 +154,7 @@ export const watchStateSchema = z
             firstCheck: z.boolean(),
             attempts: count,
             /** The change the second check must agree on; absent in states written before it was recorded. */
-            kind: z.enum(CHANGE_KINDS).optional(),
+            kind: z.enum(CHECK_CHANGE_KINDS).optional(),
             /** The fuzz seed of the pending check, which its confirmation reuses. */
             seed: hex32.optional(),
           })
@@ -185,6 +190,33 @@ export const watchStateSchema = z
       .record(lowerAddress, z.object({ source, block: decimal, txHash: hex32.optional(), failures: count, notBefore: iso.optional() }).strict())
       .default({}),
     implementations: z.record(lowerAddress, lowerAddress).default({}),
+    prices: z
+      .record(
+        lowerAddress,
+        z
+          .object({
+            decimals: count,
+            scale: count.default(0),
+            assetsPerShare: decimal,
+            block: decimal,
+            /** Absent in states written before rises waited for a second read (b30a051): the reference then. */
+            readAssetsPerShare: decimal.optional(),
+            readBlock: decimal,
+            readAt: iso,
+            drop: z.object({ assetsPerShare: decimal, block: decimal, at: iso, misses: count.default(0) }).strict().optional(),
+            /** Since when the subject is not followed (no subscription, no attestation, no --price-all); forgotten 24 hours later. */
+            unfollowedAt: iso.optional(),
+            /** Price-drop events of this subject on one UTC day, against maxPriceDropsPerDay, and the largest of them in bps. */
+            dropsDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), count, maxBps: count.default(0) }).strict().optional(),
+            /** When a drop last queued a re-check of the subject (one per upgradeCooldownMs). */
+            recheckAt: iso.optional(),
+          })
+          .strict()
+          .transform((t) => ({ ...t, readAssetsPerShare: t.readAssetsPerShare ?? t.assetsPerShare })),
+      )
+      .default({}),
+    /** Vaults whose share value is too small to measure a drop in at any scale, and when that was found. */
+    priceLowResolution: z.record(lowerAddress, iso).default({}),
   })
   .strict();
 export type WatchState = z.output<typeof watchStateSchema>;
@@ -223,6 +255,8 @@ export function emptyWatchState(chainId: number): WatchState {
     attesting: {},
     upgrades: {},
     implementations: {},
+    prices: {},
+    priceLowResolution: {},
   };
 }
 
@@ -373,7 +407,7 @@ export class WatchStore {
     this.state.seq = seq;
     const since = new Date(now.getTime() - DAY_MS).toISOString();
     this.state.recent = this.state.recent.filter((r) => r.at >= since);
-    for (const e of stamped) if (COUNTED.has(e.kind)) this.state.recent.push({ kind: e.kind, at: e.at });
+    for (const e of stamped) if (COUNTED.has(e.kind)) this.state.recent.push({ kind: e.kind, at: e.at, ...(e.change?.kind === 'price-drop' ? { drop: true as const } : {}) });
     return stamped;
   }
 

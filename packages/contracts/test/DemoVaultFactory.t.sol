@@ -12,6 +12,7 @@ contract DemoVaultFactoryTest is Test {
         address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares
     );
     event BrokenSet(bool broken);
+    event LossSet(uint256 bps, uint256 assets);
 
     DemoToken internal token;
     DemoVaultFactory internal factory;
@@ -122,6 +123,59 @@ contract DemoVaultFactoryTest is Test {
         vm.prank(alice);
         v.setBroken(false);
         assertFalse(v.broken());
+    }
+
+    function test_setLoss_onlyOperator_boundsChecked() public {
+        DemoVault v = _vault(false);
+        _fund(bob, v, 100e18);
+        vm.prank(bob);
+        v.deposit(100e18, bob);
+        vm.prank(bob);
+        vm.expectRevert(DemoVault.NotOperator.selector);
+        v.setLoss(42);
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(DemoVault.BadLoss.selector, 0));
+        v.setLoss(0);
+        vm.expectRevert(abi.encodeWithSelector(DemoVault.BadLoss.selector, 10_000));
+        v.setLoss(10_000);
+        vm.stopPrank();
+    }
+
+    function test_setLoss_sendsAssetsAway_shareValueFalls() public {
+        DemoVault v = _vault(false);
+        _fund(bob, v, 1e18);
+        vm.prank(bob);
+        v.deposit(1e18, bob);
+        assertEq(v.convertToAssets(1e18), 1e18);
+
+        vm.expectEmit(false, false, false, true, address(v));
+        emit LossSet(42, 42e14);
+        vm.prank(alice);
+        v.setLoss(42);
+        assertEq(token.balanceOf(v.LOSS_SINK()), 42e14);
+        assertEq(v.totalAssets(), 1e18 - 42e14);
+        assertEq(v.totalSupply(), 1e18, "no share is burned");
+        assertEq(v.convertToAssets(1e18), 9958e14, "one share is worth 0.42% less");
+
+        // Still a working vault: the holder redeems what is left.
+        vm.prank(bob);
+        assertEq(v.redeem(1e18, bob, bob), 9958e14);
+    }
+
+    function testFuzz_setLoss_shareValueFallsByTheBps(uint96 deposit, uint16 rawBps) public {
+        uint256 bps = bound(rawBps, 1, 9_999);
+        uint256 amount = bound(deposit, 1e6, type(uint96).max);
+        DemoVault v = _vault(false);
+        _fund(bob, v, amount);
+        vm.prank(bob);
+        v.deposit(amount, bob);
+        uint256 before = v.convertToAssets(1e18);
+        vm.prank(alice);
+        v.setLoss(bps);
+        uint256 afterLoss = v.convertToAssets(1e18);
+        assertLt(afterLoss, before);
+        // The fall in bps of the share value, rounded either way by the integer divisions, is the bps asked for.
+        assertApproxEqAbs((before - afterLoss) * 10_000 / before, bps, 1);
     }
 
     function test_allowance_spentByThirdParty() public {

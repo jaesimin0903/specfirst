@@ -18,7 +18,7 @@ import {
   type SubjectCheckInput,
 } from '../attest/subjectCheck.js';
 import { verifySubjectCode, type SubjectClient, type SubjectCodeCheck } from '../attest/verify.js';
-import { isNodeError, isRateLimited, isTransportFailure, TokenBucket } from '../chain/transport.js';
+import { isContractAnswer, isNodeError, isRateLimited, isTransportFailure, TokenBucket } from '../chain/transport.js';
 import type { StandardCheckClient } from '../standards/check.js';
 import { EIP1967_BEACON_SLOT, EIP1967_IMPLEMENTATION_SLOT } from '../standards/identity.js';
 import { forkRpcErrorsOf, type StandardCheckReport } from '../standards/report.js';
@@ -36,7 +36,8 @@ import {
 import { NO_ALERTS, NO_SUBSCRIPTIONS, type ActiveSubscription, type AlertSink, type SubscriptionSource } from './hooks.js';
 import { DEFAULT_LOG_WINDOW, LogsNodeBehindError, LogWindow, readLogWindows } from './logs.js';
 import { enqueue, nextEntry, priorityOf, QUEUE_PRIORITY, queueOrder, removeEntry, type QueueEntry } from './queue.js';
-import { WATCH_DIR, type FeedAttestation, type FeedCheck, type FeedEvent, type FeedSource, type WatchStage, type WatchStatus, type WatchVault } from './schema.js';
+import { dropBpsOf, dropPercentText, MIN_PRICE_UNITS, MAX_PRICE_SCALE, priceMiss, priceScaleFor, priceStep, type PriceRules, type PriceTrack, type SharePriceRead } from './price.js';
+import { WATCH_DIR, type FeedAttestation, type FeedCheck, type FeedEvent, type FeedSource, type PriceDropChange, type WatchStage, type WatchStatus, type WatchVault } from './schema.js';
 import { decodeSignal, signalTopics, type Signal, type SignalLog, type WatchSource } from './sources.js';
 import { beaconOf, implementationOf, lastCheckOf, type FeedEventInput, type WatchState, type WatchStore } from './store.js';
 
@@ -66,6 +67,13 @@ export interface WatchEffects {
    * Upgraded of a known vault counts as "nothing changed" (the cooldown applies).
    */
   fingerprint?(subject: Address, block: bigint): Promise<Hex>;
+  /**
+   * The share value at `block`: convertToAssets of 10 ** (decimals() + scale) shares. `known` is the subject's
+   * decimals and scale from its track: then decimals() is read in the same batch to check them, and the scale is
+   * kept; without it a scale is chosen (readSharePrice). ok false when the contract answered without a value worth
+   * keeping; an RPC failure throws. Without the effect the share value is not followed.
+   */
+  sharePrice?(subject: Address, block: bigint, known?: { decimals: number; scale: number }): Promise<SharePriceRead>;
   /** The suite at `block` with the fuzz seed the watcher picked (live effects fall back to the subject's own). */
   runCheck(subject: Address, block: bigint, run?: { seed: bigint }): Promise<StandardCheckReport>;
   /** Writes the report copy under certs/checks; returns its repository relative path and its public URI. */
@@ -166,6 +174,36 @@ export interface WatchConfig {
   subscriptionRefreshMs: number;
   /** A subscription read that takes longer is given up (the last result stays in use). */
   subscriptionTimeoutMs: number;
+  /**
+   * The share value of subjects with a Valid attestation (and with priceAll, of every known vault) is read at most
+   * this often; subscribed subjects and drops waiting for their confirming read every priceUrgentSec. 0 turns share
+   * value reads off.
+   */
+  priceMinutes: number;
+  /** Subscribed subjects and pending drops are read at most this often (seconds). */
+  priceUrgentSec: number;
+  /** A fall of the share value of more than this many basis points from its reference is a drop. */
+  priceDropBps: number;
+  /** The confirming read of a drop comes at least this many blocks after its first sighting (and confirmDelayMs later). */
+  priceConfirmBlocks: number;
+  /** A drop not confirmed within this long, or after priceDropMaxMisses reads in a row without a value, is forgotten. */
+  priceDropTtlMs: number;
+  priceDropMaxMisses: number;
+  /** Price-drop events (and their alerts) per subject per UTC day; more are logged only. */
+  maxPriceDropsPerDay: number;
+  /** Also follow the share value of known vaults nobody subscribed to and nobody attested. */
+  priceAll: boolean;
+  /**
+   * Share value reads per minute, all subjects together; the rest wait for a later pass. A quarter of them is kept for
+   * attested and priceAll subjects, which subscribed subjects and pending drops cannot use.
+   */
+  maxPriceReadsPerMinute: number;
+  /** A round of share value reads stops after this long; the rest wait for the next pass. */
+  priceRoundMs: number;
+  /** The track of a subject followed no more is kept this long, so a subscription read that failed loses nothing. */
+  priceUnfollowedMs: number;
+  /** A vault whose share value is too small to measure at any scale is not read again for this long. */
+  priceLowResolutionMs: number;
   /** Attest subjects whose proxy implementation is unknown instead of recording them unattested. */
   allowUnknownProxy: boolean;
   /** Stop reading logs after this block; null to follow the head. */
@@ -199,6 +237,18 @@ export const DEFAULT_WATCH_CONFIG: WatchConfig = {
   errorEveryMs: HOUR_MS,
   subscriptionRefreshMs: MINUTE_MS,
   subscriptionTimeoutMs: 30_000,
+  priceMinutes: 5,
+  priceUrgentSec: 30,
+  priceDropBps: 10,
+  priceConfirmBlocks: 10,
+  priceDropTtlMs: HOUR_MS,
+  priceDropMaxMisses: 5,
+  maxPriceDropsPerDay: 4,
+  priceAll: false,
+  maxPriceReadsPerMinute: 60,
+  priceRoundMs: 10_000,
+  priceUnfollowedMs: DAY_MS,
+  priceLowResolutionMs: 6 * HOUR_MS,
   allowUnknownProxy: false,
   toBlock: null,
 };
@@ -224,7 +274,24 @@ export type WatchEvent =
   | { type: 'watch-window'; fromBlock: string; toBlock: string; logs: number; signals: number }
   | { type: 'watch-window-shrunk'; fromBlock: string; toBlock: string; size: string; error: string }
   | { type: 'watch-feed'; event: FeedEvent }
-  | { type: 'watch-error'; step: 'head' | 'logs' | 'subscriptions' | 'deferred' | 'process' | 'pass' | 'rate-limited'; error: string }
+  | { type: 'watch-error'; step: 'head' | 'logs' | 'subscriptions' | 'deferred' | 'process' | 'pass' | 'rate-limited' | 'price'; error: string }
+  /**
+   * A share value read that is not routine: pending, a fall over the threshold waiting for its confirming read;
+   * cleared, a pending fall a later read did not bear out; skipped, the contract gave no value (a revert, a
+   * totalSupply of 0, a value too small to measure); forgotten, a pending fall that was not confirmed in time or
+   * whose vault stopped giving a value; capped, a confirmed fall over the subject's daily number of price-drop
+   * events. A confirmed fall is a `changed` feed event.
+   */
+  | {
+      type: 'watch-price';
+      subject: Address;
+      block: string;
+      step: 'pending' | 'cleared' | 'skipped' | 'forgotten' | 'capped';
+      assetsPerShare?: string;
+      referenceAssetsPerShare?: string;
+      dropBps?: number;
+      reason?: string;
+    }
   | { type: 'watch-attest-replaced'; subject: Address; hash: Hex; replaces: Hex; bump: number }
   | { type: 'watch-pass-done'; head: string; cursor: string; checked: number; queue: number; caughtUp: boolean; done: boolean };
 
@@ -340,6 +407,10 @@ export class Watcher {
   private probesLeft = 0;
   /** Fingerprint reads of known vaults left in the current pass. */
   private fingerprintsLeft = 0;
+  /** Share value reads of the last minute (start time, and whether subscribed or pending), for maxPriceReadsPerMinute. */
+  private priceReadTimes: Array<{ t: number; urgent: boolean }> = [];
+  /** When the share value of a subject was last asked for, whatever came of it. */
+  private priceTriedAt = new Map<string, number>();
 
   constructor(i: WatcherInput) {
     this.effects = i.effects;
@@ -379,7 +450,7 @@ export class Watcher {
     const now = this.effects.now();
     const since = new Date(now.getTime() - DAY_MS).toISOString();
     const recent = this.state.recent.filter((r) => r.at >= since);
-    const n = (kind: string) => recent.filter((r) => r.kind === kind).length;
+    const n = (kind: string) => recent.filter((r) => r.kind === kind && !r.drop).length;
     const sameDay = this.state.attestDay.day === now.toISOString().slice(0, 10);
     return {
       v: 1,
@@ -397,6 +468,7 @@ export class Watcher {
         checked24h: n('checked'),
         attested24h: n('attested'),
         changed24h: n('changed'),
+        priceDrops24h: recent.filter((r) => r.drop).length,
       },
       sources: this.sources.map((s) => ({ name: s.name, address: s.address, topic0: s.topic0, seen: this.state.sourcesSeen[s.name] ?? 0 })),
       attestBudget: {
@@ -549,6 +621,7 @@ export class Watcher {
     await this.retryUpgrades(safe);
     await this.retryProbes(safe);
     await this.settleSubscriptionRefresh();
+    await this.readPrices(safe);
     await this.scheduleSubscribed(safe);
     await this.scheduleSweep();
     await this.attestDeferred();
@@ -1020,6 +1093,245 @@ export class Watcher {
       if (!best || t < best.t) best = { lower, t };
     }
     if (best) await this.queueCheck(getAddress(best.lower), 'sweep', false);
+  }
+
+  // ---------------------------------------------------------------- share value
+
+  /** Lowercase subjects with a subscription active now. */
+  private activeSubjects(): Set<string> {
+    const now = BigInt(Math.floor(this.effects.now().getTime() / 1000));
+    return new Set(this.subs.filter((s) => s.startsAt <= now && now < s.endsAt).map((s) => s.subject.toLowerCase()));
+  }
+
+  /** The rules priceStep and priceMiss apply, from the configuration (a drop is confirmed confirmDelayMs later, as a change is). */
+  private get priceRules(): PriceRules {
+    return {
+      thresholdBps: this.config.priceDropBps,
+      confirmMs: this.config.confirmDelayMs,
+      confirmBlocks: this.config.priceConfirmBlocks,
+      dropTtlMs: this.config.priceDropTtlMs,
+      dropMaxMisses: this.config.priceDropMaxMisses,
+    };
+  }
+
+  /**
+   * A share value read may start now: fewer than maxPriceReadsPerMinute started in the last minute, and for an
+   * urgent one (a subscribed subject, a pending drop) fewer than the part not kept for attested and priceAll
+   * subjects (a quarter, at least one read once the budget is two or more).
+   */
+  private takePriceRead(now: number, urgent: boolean): boolean {
+    this.priceReadTimes = this.priceReadTimes.filter((r) => now - r.t < MINUTE_MS);
+    const max = this.config.maxPriceReadsPerMinute;
+    if (this.priceReadTimes.length >= max) return false;
+    if (urgent) {
+      const kept = max >= 2 ? Math.max(1, Math.floor(max / 4)) : 0;
+      if (this.priceReadTimes.filter((r) => r.urgent).length >= max - kept) return false;
+    }
+    this.priceReadTimes.push({ t: now, urgent });
+    return true;
+  }
+
+  /** A subject's stored track as priceStep takes it, or null. */
+  private priceTrackOf(lower: string): PriceTrack | null {
+    const p = this.state.prices[lower];
+    if (!p) return null;
+    return {
+      decimals: p.decimals,
+      scale: p.scale,
+      assetsPerShare: BigInt(p.assetsPerShare),
+      block: BigInt(p.block),
+      readAssetsPerShare: BigInt(p.readAssetsPerShare),
+      readBlock: BigInt(p.readBlock),
+      ...(p.drop ? { drop: { assetsPerShare: BigInt(p.drop.assetsPerShare), block: BigInt(p.drop.block), at: Date.parse(p.drop.at), misses: p.drop.misses } } : {}),
+    };
+  }
+
+  /**
+   * Share value reads at `block`, the block the watcher reads (docs/adr/0006, "Share value"). In order: drops waiting
+   * for their confirming read, subscribed subjects (both every priceUrgentSec), subjects with a Valid attestation and,
+   * with priceAll, every other known vault (each every priceMinutes), the longest unread first, and only where `block`
+   * is after the subject's last read. Within maxPriceReadsPerMinute, a quarter of it kept for the last two groups; a
+   * round stops after priceRoundMs and at the first RPC failure, which says the RPC is down, not the vault. A vault in
+   * its check timeout cooldown is read like any other (its re-check is what the cooldown holds back). A pending drop
+   * older than priceDropTtlMs is forgotten. A track is forgotten priceUnfollowedMs after its subject stopped being
+   * followed, and nothing counts as unfollowed before a subscription read has succeeded since start.
+   */
+  private async readPrices(block: bigint): Promise<void> {
+    if (!this.effects.sharePrice || this.config.priceMinutes <= 0) return;
+    const st = this.state;
+    const started = this.effects.now().getTime();
+    const startedIso = this.nowIso();
+    const cadence = this.config.priceMinutes * MINUTE_MS;
+    const urgentEvery = this.config.priceUrgentSec * 1000;
+    const subsKnown = this.subsReadAt > Number.NEGATIVE_INFINITY;
+    const subscribed = this.activeSubjects();
+    for (const [lower, at] of Object.entries(st.priceLowResolution)) if (started - Date.parse(at) >= this.config.priceLowResolutionMs) delete st.priceLowResolution[lower];
+    const due: Array<{ lower: string; rank: number; t: number }> = [];
+    for (const lower of new Set([...Object.keys(st.prices), ...Object.keys(this.store.vaults.vaults)])) {
+      const vault = this.store.vaults.vaults[lower];
+      const track = st.prices[lower];
+      if (track?.drop && started - Date.parse(track.drop.at) > this.config.priceDropTtlMs) {
+        const seen = track.drop.block;
+        delete track.drop;
+        this.emit({ type: 'watch-price', subject: getAddress(lower), block: block.toString(), step: 'forgotten', reason: `the fall seen at block ${seen} was not confirmed within ${this.config.priceDropTtlMs / MINUTE_MS} min` });
+      }
+      const followed = subscribed.has(lower) ? 1 : vault && vault.lastAttestationId !== null ? 2 : vault && this.config.priceAll ? 3 : -1;
+      if (track && followed >= 0) delete track.unfollowedAt;
+      else if (track && subsKnown) {
+        track.unfollowedAt ??= startedIso;
+        if (started - Date.parse(track.unfollowedAt) >= this.config.priceUnfollowedMs) {
+          delete st.prices[lower];
+          continue;
+        }
+      }
+      const rank = track?.drop ? 0 : followed;
+      if (rank < 0 || !vault || (track && BigInt(track.readBlock) >= block) || (!track && st.priceLowResolution[lower])) continue;
+      const t = Math.max(this.priceTriedAt.get(lower) ?? 0, track ? Date.parse(track.readAt) : 0);
+      if (started - t < (rank <= 1 ? urgentEvery : cadence)) continue;
+      due.push({ lower, rank, t });
+    }
+    due.sort((a, b) => a.rank - b.rank || a.t - b.t || a.lower.localeCompare(b.lower));
+    for (const d of due) {
+      const now = this.effects.now().getTime();
+      if (now - started >= this.config.priceRoundMs) return;
+      if (!this.takePriceRead(now, d.rank <= 1)) {
+        if (d.rank <= 1) continue;
+        return;
+      }
+      if ((await this.readPrice(getAddress(d.lower), block, this.config.priceRoundMs - (now - started))) === 'rpc') return;
+    }
+  }
+
+  /**
+   * One share value read and what follows from it (priceStep), with the subject's decimals and scale when it has a
+   * track. An RPC failure says nothing about the share value: nothing is recorded ('rpc'). A contract that gives no
+   * value (a revert, a totalSupply of 0) is passed over the same way ('none'); a value too small to measure marks the
+   * vault low-resolution. Either counts as a miss of a pending drop. A read gets what is left of the round's budget
+   * (`budgetMs`): one that gives no answer by then is an RPC failure too, and its late answer is never used.
+   */
+  private async readPrice(subject: Address, block: bigint, budgetMs: number): Promise<'value' | 'none' | 'rpc'> {
+    const st = this.state;
+    const lower = subject.toLowerCase();
+    const now = this.effects.now().getTime();
+    this.priceTriedAt.set(lower, now);
+    const prev = st.prices[lower];
+    let read: SharePriceRead;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const wait = Math.max(1, Math.floor(budgetMs));
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error(`no answer within ${wait} ms, the rest of the round`), { name: 'PriceReadTimeoutError' })), wait);
+      });
+      read = await Promise.race([this.effects.sharePrice!(subject, block, prev ? { decimals: prev.decimals, scale: prev.scale } : undefined), timeout]);
+    } catch (err) {
+      this.emit({ type: 'watch-error', step: 'price', error: `${subject}: share value not read at block ${block}, not a verdict: ${classifiedErrorText(err)}` });
+      this.priceMissed(subject, block, now);
+      return 'rpc';
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!read.ok) {
+      if (read.lowResolution && !prev) st.priceLowResolution[lower] = this.nowIso();
+      this.emit({ type: 'watch-price', subject, block: block.toString(), step: 'skipped', reason: read.reason });
+      this.priceMissed(subject, block, now);
+      return 'none';
+    }
+    const track = this.priceTrackOf(lower);
+    const step = priceStep(track, { assetsPerShare: read.assetsPerShare, shareDecimals: read.shareDecimals, scale: read.scale, block, at: now }, this.priceRules);
+    if (step.kind === 'stale') return 'value';
+    const n = step.next;
+    st.prices[lower] = {
+      decimals: n.decimals,
+      scale: n.scale,
+      assetsPerShare: n.assetsPerShare.toString(),
+      block: n.block.toString(),
+      readAssetsPerShare: n.readAssetsPerShare.toString(),
+      readBlock: n.readBlock.toString(),
+      readAt: this.nowIso(),
+      ...(n.drop ? { drop: { assetsPerShare: n.drop.assetsPerShare.toString(), block: n.drop.block.toString(), at: new Date(n.drop.at).toISOString(), misses: n.drop.misses } } : {}),
+      ...(prev?.unfollowedAt ? { unfollowedAt: prev.unfollowedAt } : {}),
+      ...(prev?.dropsDay ? { dropsDay: prev.dropsDay } : {}),
+      ...(prev?.recheckAt ? { recheckAt: prev.recheckAt } : {}),
+    };
+    const value = { block: block.toString(), assetsPerShare: read.assetsPerShare.toString(), referenceAssetsPerShare: (track ?? n).assetsPerShare.toString() };
+    if (step.kind !== 'confirmed' && step.cleared) {
+      const why = step.cleared.expired ? `was not confirmed within ${this.config.priceDropTtlMs / MINUTE_MS} min` : `is not there at block ${block}`;
+      this.emit({ type: 'watch-price', subject, step: 'cleared', ...value, reason: `the fall seen at block ${step.cleared.block} ${why}` });
+    }
+    if (step.kind === 'pending') this.emit({ type: 'watch-price', subject, step: 'pending', ...value, dropBps: dropBpsOf(n.assetsPerShare, read.assetsPerShare) });
+    if (step.kind === 'confirmed') await this.priceDropped(subject, step.change, step.pendingBlock, track!);
+    return 'value';
+  }
+
+  /** A read without a value while a drop waits: a miss (priceMiss), and the drop forgotten after enough of them. */
+  private priceMissed(subject: Address, block: bigint, now: number): void {
+    const lower = subject.toLowerCase();
+    const stored = this.state.prices[lower];
+    const track = this.priceTrackOf(lower);
+    if (!stored?.drop || !track) return;
+    const { next, forgotten } = priceMiss(track, now, this.priceRules);
+    if (!forgotten) {
+      stored.drop.misses = next.drop!.misses;
+      return;
+    }
+    const seen = stored.drop.block;
+    delete stored.drop;
+    this.emit({ type: 'watch-price', subject, block: block.toString(), step: 'forgotten', reason: `the fall seen at block ${seen} was not confirmed: the vault gave no value ${track.drop!.misses + 1} times in a row` });
+  }
+
+  /**
+   * A confirmed fall of the share value: a `changed` event (source price-drop), saved with the confirmation before
+   * it is delivered to the subject's active subscribers through the alert sink, so a crash while delivering never
+   * confirms or alerts the same drop twice; then a re-check of the subject, since its state changed, at most one per
+   * upgradeCooldownMs (a vault whose value saws up and down buys no forge runs that way). At most maxPriceDropsPerDay
+   * drops of a subject a UTC day reach the feed and the alerts, except one larger than every drop announced that day or
+   * of at least ten times the threshold. A drop over the cap is logged and the reference stays where it was (`before`,
+   * the track before this read), so the loss is not lost: it adds up and is announced once the cap allows (the next
+   * day, or when it outgrows the day's largest). A drop is never attested: the re-check meets the attest rule and the
+   * policy like any other check.
+   */
+  private async priceDropped(subject: Address, change: PriceDropChange, pendingBlock: bigint, before: PriceTrack): Promise<void> {
+    const lower = subject.toLowerCase();
+    const track = this.state.prices[lower]!;
+    const day = this.today();
+    const today = track.dropsDay?.day === day ? track.dropsDay : { day, count: 0, maxBps: 0 };
+    const large = change.dropBps > today.maxBps || change.dropBps >= 10 * this.config.priceDropBps;
+    if (today.count >= this.config.maxPriceDropsPerDay && !large) {
+      track.assetsPerShare = before.assetsPerShare.toString();
+      track.block = before.block.toString();
+      this.emit({
+        type: 'watch-price',
+        subject,
+        block: change.toBlock,
+        step: 'capped',
+        dropBps: change.dropBps,
+        reason: `${today.count} price-drop events of this vault today, the most there are (--max-price-drops-per-day), and this one is not larger than them: logged only, the reference stays at block ${before.block}`,
+      });
+      await this.save();
+      return;
+    }
+    track.dropsDay = { day, count: today.count + 1, maxBps: Math.max(today.maxBps, change.dropBps) };
+    const now = this.effects.now().getTime();
+    const recheck = !track.recheckAt || now - Date.parse(track.recheckAt) >= this.config.upgradeCooldownMs;
+    const held = recheck ? '' : `; no re-check: a drop queued one at ${track.recheckAt}, within ${this.config.upgradeCooldownMs / HOUR_MS} hours`;
+    const base = { chainId: this.chainId, subject, source: 'price-drop' as const, block: change.toBlock };
+    const [changed] = await this.feed([{ ...base, at: this.nowIso(), kind: 'changed', change, reason: `confirmed by a second read at block ${change.toBlock} after block ${pendingBlock}${held}` }]);
+    await this.save();
+    const subs = this.activeSubsFor(subject);
+    if (subs.length) {
+      try {
+        const out = await this.alerts.deliver(changed!, subs);
+        await this.feed(out.map(({ v: _v, seq: _seq, ...rest }) => rest));
+      } catch (err) {
+        await this.feed([{ ...base, at: this.nowIso(), kind: 'error', reason: `alert delivery failed: ${errorText(err)}` }]);
+      }
+    }
+    if (recheck) {
+      track.recheckAt = this.nowIso();
+      const at: SignalAt = { source: 'price-drop', block: BigInt(change.toBlock) };
+      await this.queueCheck(subject, 'price-drop', false, at, `share value fell ${dropPercentText(change.dropBps)} between block ${change.fromBlock} and block ${change.toBlock}`);
+    }
+    await this.save();
   }
 
   // ---------------------------------------------------------------- budgets
@@ -1811,8 +2123,110 @@ export async function fingerprintOf(client: Pick<PublicClient, 'getCode' | 'getS
   return keccak256(concat([keccak256(code ?? '0x'), impl ?? zero, beacon ?? zero]));
 }
 
+const sharePriceAbi = [
+  { type: 'function', name: 'decimals', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] },
+  { type: 'function', name: 'totalSupply', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'convertToAssets', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint256' }] },
+] as const;
+
+/** Multicall3, at the same address on Monad mainnet and testnet (checked 2026-10-07) and most chains; anvil has none. */
+export const MULTICALL3_ADDRESS: Address = '0xcA11bde05977b3631167028862bE2a173976CA11';
+
+export interface SharePriceReadOptions {
+  /**
+   * The subject's decimals and scale from its track: one batch of decimals(), totalSupply() and convertToAssets at
+   * that scale, decimals() checked against them (when it moved, the value is read again as for a new track).
+   */
+  known?: { decimals: number; scale: number };
+  /** Multicall3's address when the chain has it: a batch is one eth_call; without it the calls go out side by side. */
+  multicall?: Address | null;
+}
+
+/**
+ * The share value of `subject` at `block`: convertToAssets(10 ** (decimals() + scale)), with totalSupply() to tell an
+ * empty vault. Without `known`, decimals() first, then scale 0, or, when one share is worth fewer than
+ * MIN_PRICE_UNITS base units, the smallest scale up to MAX_PRICE_SCALE that reaches it (`lowResolution` when none
+ * does or that read fails). A call the contract answers with a revert, no data, data that does not decode or an
+ * out-of-gas, a totalSupply of 0, or a decimals() too large for one share to be priced give { ok: false } (nothing
+ * to record). Anything else (a transport failure, a rate limit, a node error) is thrown, so it is never taken for a
+ * value.
+ */
+export async function readSharePrice(
+  client: Pick<PublicClient, 'readContract'> & Partial<Pick<PublicClient, 'multicall'>>,
+  subject: Address,
+  block: bigint,
+  opts: SharePriceReadOptions = {},
+): Promise<SharePriceRead> {
+  type Call = { functionName: 'decimals' | 'totalSupply' | 'convertToAssets'; args?: readonly [bigint] };
+  type Answer = { value: unknown } | { error: string };
+  const one = async (c: Call): Promise<Answer> => {
+    try {
+      return { value: await client.readContract({ address: subject, abi: sharePriceAbi, functionName: c.functionName, ...(c.args ? { args: c.args } : {}), blockNumber: block } as never) };
+    } catch (err) {
+      if (isContractAnswer(err)) return { error: classifiedErrorText(err) };
+      throw err;
+    }
+  };
+  const batch = async (calls: Call[]): Promise<Answer[]> => {
+    if (!opts.multicall || !client.multicall) return Promise.all(calls.map(one));
+    let out: Array<{ status: 'success'; result: unknown } | { status: 'failure'; error: unknown }>;
+    try {
+      out = (await client.multicall({
+        contracts: calls.map((c) => ({ address: subject, abi: sharePriceAbi, functionName: c.functionName, ...(c.args ? { args: c.args } : {}) })) as never,
+        allowFailure: true,
+        blockNumber: block,
+        multicallAddress: opts.multicall,
+      })) as typeof out;
+    } catch (err) {
+      // The whole batch failed on the vault (a view that burns the call's gas): that is every call's answer.
+      if (isContractAnswer(err)) return calls.map(() => ({ error: classifiedErrorText(err) }));
+      throw err;
+    }
+    // A call that failed inside Multicall3 is the contract's answer; the node served the batch.
+    return out.map((r) => (r.status === 'success' ? { value: r.result } : { error: classifiedErrorText(r.error) }));
+  };
+  const fail = (what: string, a: { error: string }): SharePriceRead => ({ ok: false, reason: `${what} at block ${block}: ${a.error}` });
+  const empty: SharePriceRead = { ok: false, reason: `totalSupply() is 0 at block ${block}: no share to value` };
+  const sharesOf = (d: number, scale: number) => 10n ** BigInt(d + scale);
+  let decimals: number;
+  if (opts.known) {
+    const [d, supply, assets] = await batch([{ functionName: 'decimals' }, { functionName: 'totalSupply' }, { functionName: 'convertToAssets', args: [sharesOf(opts.known.decimals, opts.known.scale)] }]);
+    if ('error' in d!) return fail('decimals()', d);
+    decimals = Number(d.value);
+    if (decimals === opts.known.decimals) {
+      if ('error' in supply!) return fail('totalSupply()', supply);
+      if (supply.value === 0n) return empty;
+      if ('error' in assets!) return fail('convertToAssets()', assets);
+      return { ok: true, assetsPerShare: assets.value as bigint, shareDecimals: decimals, scale: opts.known.scale };
+    }
+  } else {
+    const d = await one({ functionName: 'decimals' });
+    if ('error' in d) return fail('decimals()', d);
+    decimals = Number(d.value);
+  }
+  // 10 ** 78 does not fit a uint256.
+  if (decimals > 77) return { ok: false, reason: `decimals() is ${decimals} at block ${block}: one share does not fit a uint256` };
+  const [supply, assets] = await batch([{ functionName: 'totalSupply' }, { functionName: 'convertToAssets', args: [sharesOf(decimals, 0)] }]);
+  if ('error' in supply!) return fail('totalSupply()', supply);
+  if (supply.value === 0n) return empty;
+  if ('error' in assets!) return fail('convertToAssets()', assets);
+  const value = assets.value as bigint;
+  const scale = priceScaleFor(value);
+  if (scale === 0) return { ok: true, assetsPerShare: value, shareDecimals: decimals, scale: 0 };
+  const lowResolution = (why: string): SharePriceRead => ({
+    ok: false,
+    lowResolution: true,
+    reason: `one share is worth ${value} base units at block ${block}, under ${MIN_PRICE_UNITS}, and ${why}: one unit of rounding would read as a drop`,
+  });
+  if (scale === null || decimals + scale > 77) return lowResolution(`no scale up to 10 ** ${MAX_PRICE_SCALE} shares reaches it`);
+  const scaled = await one({ functionName: 'convertToAssets', args: [sharesOf(decimals, scale)] });
+  if ('error' in scaled) return lowResolution(`convertToAssets of 10 ** ${scale} shares failed: ${scaled.error}`);
+  if ((scaled.value as bigint) < MIN_PRICE_UNITS) return lowResolution(`10 ** ${scale} shares are worth ${scaled.value as bigint}`);
+  return { ok: true, assetsPerShare: scaled.value as bigint, shareDecimals: decimals, scale };
+}
+
 export interface LiveWatchEffectsInput extends SubjectCheckInput {
-  subjectClient: StandardCheckClient & SubjectClient & Pick<PublicClient, 'request' | 'getStorageAt'>;
+  subjectClient: StandardCheckClient & SubjectClient & Pick<PublicClient, 'request' | 'getStorageAt'> & Partial<Pick<PublicClient, 'multicall'>>;
   /** Every subject RPC, primary first, for the getLogs reader; default [subjectRpcUrl]. */
   subjectRpcUrls?: readonly string[];
   /** reportURI = <reportBaseUrl>/<chainId>/<address>/<block>-<hash8>.json. No trailing slash. */
@@ -1833,9 +2247,9 @@ export interface LiveWatchEffectsInput extends SubjectCheckInput {
 
 /**
  * The effects of a real watcher: reads the subject chain through `subjectClient` (getLogs through the batched
- * reader, per topic), runs the suite as the desk worker does but with the seed the watcher picks and the
- * subject's forge failures kept under .specfirst/watch/<chainId>/forge-failures, copies reports to
- * certs/checks and attests through the registry client (whose wallet is the watcher's issuer key), sending
+ * reader, per topic; share values through readSharePrice), runs the suite as the desk worker does but with the
+ * seed the watcher picks and the subject's forge failures kept under .specfirst/watch/<chainId>/forge-failures,
+ * copies reports to certs/checks and attests through the registry client (whose wallet is the watcher's issuer key), sending
  * and waiting apart (the nonce fixed before sending, so the watcher can record it with the hash), looking
  * transactions up and replacing a stuck one with a higher fee.
  */
@@ -1843,12 +2257,23 @@ export function liveWatchEffects(i: LiveWatchEffectsInput): WatchEffects {
   const registry = i.registry;
   const getLogs = batchedLogsReader(i.subjectRpcUrls ?? [i.subjectRpcUrl]);
   const failures = path.join(i.projectDir, WATCH_DIR, String(i.subjectChainId), 'forge-failures');
+  // Whether the subject chain has Multicall3, read once; a read that failed is tried again at the next share value read.
+  let multicall: Promise<Address | null> | null = null;
+  const multicallAddress = (): Promise<Address | null> =>
+    (multicall ??= i.subjectClient.getCode({ address: MULTICALL3_ADDRESS }).then(
+      (code) => (code && code !== '0x' ? MULTICALL3_ADDRESS : null),
+      () => {
+        multicall = null;
+        return null;
+      },
+    ));
   return {
     subjectChainId: i.subjectChainId,
     latestBlock: () => i.subjectClient.getBlockNumber({ cacheTime: 0 }),
     getLogs,
     precheck: (subject, block) => precheckErc4626(i.subjectClient, subject, block),
     fingerprint: (subject, block) => fingerprintOf(i.subjectClient, subject, block),
+    sharePrice: async (subject, block, known) => readSharePrice(i.subjectClient, subject, block, { ...(known ? { known } : {}), multicall: await multicallAddress() }),
     runCheck: (subject, block, run) =>
       runSubjectCheck({ ...i, timeoutSec: i.timeoutSec ?? DEFAULT_WATCH_CHECK_TIMEOUT_SEC }, subject, block, {
         seed: run?.seed ?? watchFuzzSeedOf(subject),

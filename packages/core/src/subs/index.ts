@@ -43,6 +43,8 @@ export {
   webhooksFileSchema,
   emptyWebhooksFile,
   webhookPayload,
+  webhookKindOf,
+  webhookKeyOf,
   reportUrlOf,
   postWebhook,
   deliverWebhookAlerts,

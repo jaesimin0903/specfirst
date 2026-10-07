@@ -169,7 +169,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     const first = await watch();
     expect(first.err).toBe('');
     expect(first.code).toBe(0);
-    expect(event(first, 'watch-start')).toMatchObject({ subjectChainId: 31337, sources: ['Specfirst DemoVaultFactory', 'ERC-4626 Deposit', 'EIP-1967 Upgraded', 'EIP-1967 BeaconUpgraded'], known: 0, attest: true, registry, issuer: WATCH_ISSUER });
+    expect(event(first, 'watch-start')).toMatchObject({ subjectChainId: 31337, sources: ['Specfirst DemoVaultFactory', 'Specfirst DemoVaultFactory before setLoss', 'ERC-4626 Deposit', 'EIP-1967 Upgraded', 'EIP-1967 BeaconUpgraded'], known: 0, attest: true, registry, issuer: WATCH_ISSUER });
     expect(fed(first)).toEqual([]);
 
     const v = await cli('watch', 'demo', 'vault', '--asset', token, '--network', 'anvil');
@@ -356,10 +356,11 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch on anvil', { timeout: 300_000 }, ()
     );
     expect(process.exitCode ?? 0).toBe(0);
     const out = r.out.join('\n');
-    expect(out).toMatch(/^watch +chain 31337 {2}4 sources \(.*sources-anvil\.json\) {2}2 known vaults/m);
+    expect(out).toMatch(/^watch +chain 31337 {2}5 sources \(.*sources-anvil\.json\) {2}2 known vaults/m);
     // The banner names the RPC host only: a provider URL's path often carries an API key.
     expect(out).toContain(`subject RPC 127.0.0.1:${anvil.port}  lag 0`);
     expect(out).not.toContain(anvil.url);
+    expect(out).toContain('share value: subscribed every 30s, attested every 5 min, a drop over 10 bps confirmed at a later block, 60 reads a minute, 4 drops a vault a day');
     expect(out).toMatch(/detected {2}0x\S+ {2}factory Specfirst DemoVaultFactory {2}block \d+/);
     expect(out).toMatch(/checked {2}0x\S+ {2}factory {2}block \d+ {2}30 pass {2}attesting \[factory\]: first check of a vault a factory announced; no attestation of the subject yet/);
     expect(out).toMatch(/attested {2}0x\S+ {2}attestation \d+/);
