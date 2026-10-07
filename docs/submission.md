@@ -1,192 +1,157 @@
-# Specfirst: Verified Contracts via Automated Spec
+# Specfirst: a recall service for ERC-4626 vaults on Monad
 
-## One-Line Summary
+## One line
 
-Specfirst issues on-chain verification certificates for smart contracts via automatic fuzzing and deployment verification, updating live as code changes and surfacing what was and was not checked.
+Specfirst watches Monad mainnet, checks every ERC-4626 vault the moment it is deployed or first funded against 30 public properties, records the result on chain, and alerts the people and contracts whose money sits in a vault when that vault gets worse.
 
----
-
-## Problem
-
-Audit costs USD 50,000 to 300,000 and takes 2 to 8 weeks. Most contracts never get audited. In September 2026, 0x analyzed 84,163 Uniswap v4 hooks across six chains and classified 54 percent as malicious, most of them quote spoofing that shows a good price at simulation time and settles worse. In May 2026 the Grok and Bankr agent wallet was drained through prompt injection with no key theft and no contract exploit. Together they show the gap between what needs review and what gets review.
-
-Aggregators then face a choice. Manually check every pool and vault before listing, do not scale. List everything and get sued when pools collapse. Or find another signal. Right now they have none. Specfirst provides one.
+Track 4, Trust, Identity and AI Infrastructure.
 
 ---
 
-## What We Built
+## The problem, in one vault
 
-| Number | Deliverable | Status | Link |
-|---|---|---|---|
-| D1 | CLI: init, lock, run, deploy, verify, cert, status | Complete | github.com/jaesimin/specfirst |
-| D2 | CertificateRegistry smart contract with isCertified, isCertifiedWith, isLatest, version tracking | Complete | <PLACEHOLDER_REGISTRY_ADDRESS> |
-| D3 | Web: certificate page, REST API /api/cert/[address], public links | Complete | <PLACEHOLDER_WEB_HOST>/c/[address] |
-| D4 | GitHub Action for PR verification and badge widget | Complete | github.com/jaesimin/specfirst-example-vault |
-| D5 | Demo video, 3 minutes | Complete | <PLACEHOLDER_VIDEO_LINK> |
-| D6 | This submission page with links and reproduction steps | Complete | <PLACEHOLDER_WEB_HOST>/submit |
-| D7 | Sample StakingVault spec and three issued certificates | Complete | tx <PLACEHOLDER_CERT_1_TX>, tx <PLACEHOLDER_CERT_2_TX>, tx <PLACEHOLDER_CERT_3_TX> |
-| D8 | Aggregator integration demo, L0-L3 result by Oct 8 | <PLACEHOLDER_L_LEVEL> | See Section 6 |
+A curator's bot asks a vault how much it can take out right now.
 
----
-
-## How It Works: Five-Step Pipeline
-
-### Step 1: Write Spec in Plain Language
-
-Developer writes seven to ten invariants as plain English in YAML. Only step that requires a person.
-
-```yaml
-invariants:
-  - id: INV-1
-    kind: invariant
-    text: "Total staked equals sum of all user balances"
-  - id: INV-2  
-    kind: invariant
-    text: "Vault balance exceeds sum of all user balances"
-  - id: INV-4
-    kind: access
-    text: "User cannot withdraw more than own balance"
-unverified:
-  - "Oracle price manipulation"
-  - "External token contract defects"
-  - "Economic attacks"
-  - "Owner state changes after deployment"
-  - "Upgradeable proxy patterns"
-```
-
-### Step 2: Automatic Fuzzing with Counterexample Loop
-
-CLI runs Foundry invariant fuzzer. If an invariant fails, the counterexample is sent to Claude Code agent, which reads the failing transaction sequence and applies a fix. Result loops back to fuzzing. Upper limit 5 iterations per invariant. If unresolved, the certificate marks that invariant as unverified.
-
-### Step 3: Deploy and Live Rehearsal
-
-CLI deploys contract to Monad testnet. Runs 30 normal transactions, 5 access control tests expected to revert. All transactions are real on-chain.
-
-### Step 4: On-Chain Verification
-
-CLI forks Monad testnet at latest block, runs the locked Solidity properties against the real state of the deployed contract, and cross-checks events. Access control invariants verified by receipt status and event absence over getLogs ranges.
-
-### Step 5: Issue Certificate and Notify
-
-Registry.issue() is called on-chain with spec hashes, code hash, verification results, and report hash. The certificate is immutable. Code hash ties verification to a specific bytecode. Subsequent changes require re-verification and re-issuance.
-
-### Certificate Fields and State Machine
-
-| Field | Meaning |
-|---|---|
-| projectId | Developer project identifier, keccak256 of spec projectId string |
-| specHash | SHA256 of spec YAML, canonical form |
-| invariantSetHash | Keccak256 of invariant IDs, kinds, text, and unverified list only, stable across name or schedule changes |
-| propertyHash | Keccak256 of locked Solidity property files, developers can require this match for complete confidence |
-| codeHash | target.codehash captured at deployment time, certificate reads it each time and compares |
-| reportHash | Keccak256 of full verification report JSON stored on IPFS/Arweave, immutable |
-
-| Status | Meaning | isCertified() | isLatest() |
-|---|---|---|---|
-| Valid | Passed, current version | true | true |
-| Superseded | Passed, but newer code issued under same projectId | true | false |
-| Revoked | Violation found after deployment | false | false |
-| None | Never issued | false | false |
-
-View isCertified(address) returns true only if most recent certificate is Valid or Superseded AND code hash matches AND all invariants passed. View isCertifiedWith(address, invariantSetHash) adds requirement that the certificate matches the requested invariant set, so aggregators can filter by their baseline invariant version.
-
----
-
-## Honesty Section: What the Certificate Proves and What It Does Not
-
-### The Certificate Guarantees
-
-1. The contract code matched the bytecode at issuance time, if code hash no longer matches, isCertified returns false.
-2. A machine-checked specification in Solidity was compiled and run against the deployed contract's state fork.
-3. All invariants in the certificate passed the verification campaign.
-4. The specification and verification results are immutable on-chain.
-
-### What the Certificate Does NOT Guarantee
-
-1. Oracle price manipulation, does not check oracle inputs or price freshness.
-2. External token contract defects, does not verify third-party contracts the vault calls.
-3. Economic attacks, does not model incentive-based attacks or liquidity crunches.
-4. Owner state changes after deployment, does not continuously watch for owner privilege abuse post-issuance.
-5. Upgradeable proxy patterns, only supports non-upgradeable bytecode.
-
-Ultrafuzz auxiliary campaign is human-unreviewed and provided only for depth of fuzz coverage. No findings from Ultrafuzz block issuance.
-
-**Trust model:** The issuer is a single key held by Specfirst. The certificate claims Specfirst ran the verification and locked the code hash. Verification is reproducible, anyone can run the same Foundry properties and report against the locked code and compare hashes.
-
----
-
-## Verification: How the Judges Can Verify Work Done in Six Weeks
-
-1. **Repository history:** github.com/jaesimin/specfirst. Git log shows first commit September 27, 2026. All work committed before October 13, 2026 deadline.
-2. **Live certificates on Monad testnet:**
-   - Certificate 1 (sample v1): <PLACEHOLDER_CERT_1_TX>
-   - Certificate 2 (sample v2): <PLACEHOLDER_CERT_2_TX>
-   - Certificate 3 (Action-issued): <PLACEHOLDER_CERT_3_TX>
-3. **Reproduction command:**
-   ```bash
-   git clone https://github.com/jaesimin/specfirst.git
-   cd specfirst/examples/staking-vault
-   pnpm install
-   pnpm build
-   specfirst run spec/staking-vault.spec.yaml
-   specfirst status 0x<vault_address>
-   ```
-   Result will match the certificates linked above.
-
----
-
-## Aggregator Integration Results (L0-L3 by October 8)
-
-| Level | Definition | Status |
+| Who | Call | Answer |
 |---|---|---|
-| L0 | No response | <PLACEHOLDER_L_LEVEL_DETAIL> |
-| L1 | Reply with interest or feedback | <PLACEHOLDER_L_LEVEL_DETAIL> |
-| L2 | Integrated on staging or testnet screen | <PLACEHOLDER_L_LEVEL_DETAIL> |
-| L3 | Merged into production repository or live environment | <PLACEHOLDER_L_LEVEL_DETAIL> |
+| Bot | `maxWithdraw` | 801,365.61 AUSD |
+| Bot | `withdraw` of 796,956.94 AUSD | reverts with `WithdrawalRequestRequired` |
 
-Contacts attempted: Moose (FastLane protocol), Kuru (Momentum program). Message sent via hackathon mentor channel and direct Discord. See docs/bd-log.md for full contact log and replies.
+That is Upshift earnAUSD `0xD793c04B87386A6bb84ee61D98e0065FdE7fdA5E` on Monad mainnet, measured on a fork of block 109,061,472 with a test user. EIP-4626 says `maxWithdraw` must return 0 when a withdrawal would revert. The vault answers with the whole balance, so anything that sizes its exits from the standard's answers gets stuck.
 
-**Claim:** We will not claim 1 integration unless L2 or above is achieved. If L0 or L1, the demo card is explicitly labeled mock.
+The callers that rely on these answers are the ones that move money into vaults without a person in the loop: curators and allocator vaults, yield bots and AI agents, and lending markets that take vault shares as collateral. Today the only way for them to know how a vault really behaves is to write and run tests against each vault themselves. Monad has more than 400 ERC-4626 vaults and new ones appear every day.
 
 ---
 
-## Certificate Issuance: Target vs. Actual
+## What Specfirst does
 
-| Milestone | Target | Actual | Notes |
+1. **Finds vaults by itself.** Nobody registers anything. The watcher reads Monad mainnet for vault creation events of five factories, Euler EVK, Morpho Vault V2, MetaMorpho 1.1, Euler Earn and Neverland, for the first `Deposit` of any address, which catches vaults deployed without a factory, and for proxy upgrades of vaults it already knows.
+2. **Checks each one against 30 properties.** 26 come from a16z/erc4626-tests, a public third-party suite, so the vault team does not write the test that grades it. 4 are Specfirst's own and ask whether `maxDeposit`, `maxMint`, `maxWithdraw` and `maxRedeem` are honored when called with exactly that amount. The check runs on a fork of the live state at a fixed block and takes a few seconds to about a minute.
+3. **Records the result on chain.** `CheckAttestationRegistry` on Monad testnet stores the report hash, the suite hash, the vault's code hash and the block. A contract reads it with one call, `isCompliant`. The board shows every vault with the sentence of EIP-4626 it contradicts and the concrete call that shows it.
+4. **Alerts when a vault gets worse.** A subscription costs 0.05 MON a day. Subscribers get a webhook and an inbox entry when a re-check changes the result, when an upgrade changes the code, and when the value of a share falls.
+5. **Lets contracts act on it.** `AllocationGate` is a demo integrator. It deposits only into vaults whose latest attestation is compliant, and once that changes anyone can make it pull the money out.
+
+Results stay free and public. The service sells delivery and freshness: alert subscriptions, and a request desk for an immediate re-check.
+
+---
+
+## What it found
+
+### On mainnet
+
+The board covers 402 ERC-4626 vaults on Monad mainnet. 285 came from a hand-made list built from Morpho, Euler, Curvance, Neverland, DefiLlama and protocol docs. The other 117 were found on chain by the watcher; they were not on that list.
+
+Each failure is labeled with its level in EIP-4626. A MUST failure contradicts a MUST sentence. A SHOULD failure only goes against guidance, for example rounding that favors the caller by a unit.
+
+| Vault | Found by | What fails | Level |
 |---|---|---|---|
-| Sample v1 | Oct 4 | <PLACEHOLDER_DATE_1> | First end-to-end pass |
-| Sample v2 | Oct 6 | <PLACEHOLDER_DATE_2> | Version supersession |
-| GitHub Action v3 | Oct 9 | <PLACEHOLDER_DATE_3> | Automated CI/CD pipeline |
-| External requests | Up to 5 teams | <PLACEHOLDER_EXTERNAL_COUNT> | Recorded in bd-log.md |
+| Upshift earnAUSD `0xD793..dA5E` | first sweep | `maxWithdraw` and `maxRedeem` report the whole balance while every withdraw and redeem reverts. The board labels it as an asynchronous vault, which ERC-7540 still asks to report 0 here | MUST |
+| Aarna atvYieldMax `0x4C09..d6C6` | first sweep | withdrawals are paused but the max functions are not 0 | MUST |
+| Euler EVK eeUSD-4 `0xf26d..95Bf` | first sweep | a hook refuses deposits from unlisted users while `maxDeposit` says nearly unlimited | MUST |
+| Curvance hyAUSD `0xaD66..00Bf` | watcher, first deposit | the four preview functions disagree with what deposit, mint, withdraw and redeem then do | MUST |
+| LeverUp sLVMON `0x61b2..2b9c` | watcher, first deposit | `maxWithdraw` ignores a 5 basis point exit fee, so withdrawing the reported maximum reverts | MUST |
+| locked.aprMON `0x79b0..76c5` | watcher, first deposit | during a 15 day lock the max functions report the whole balance | MUST |
+| tyYIELD `0xB464..1408` | watcher, first deposit | round trips favor the caller by a rounding sized amount | SHOULD |
+
+The watcher found and checked the last four with nobody asking, and attested three of them on chain. locked.aprMON has no attestation yet, because that day's budget for attesting failures of newly found vaults was already used. These are disagreements with sentences of the standard, each shown by a concrete call on a fork. None of them is a claim that funds are at risk, and we did not contact the teams.
+
+### On testnet, end to end, October 7
+
+The whole loop ran on Monad testnet with real transactions and no person between the steps. All times are UTC.
+
+| Time | What happened |
+|---|---|
+| 08:26:54 | A new vault is deployed through `DemoVaultFactory`, block 68,922,607 |
+| 08:27:12 | The watcher found it, ran 30 properties, all passed, and wrote attestation #26. 18 seconds after deployment |
+| 08:27:33 | `AllocationGate` deposits 60 tokens. Allowed because #26 is compliant |
+| 08:29:12 | The vault operator sends 3% of the vault's assets away |
+| 08:32:14 | The watcher confirms the fall at a second block and sends the subscriber's webhook: share value fell 3.00% |
+| 08:32:26 | The operator switches on a bug in `previewDeposit` |
+| 08:33:23 | A subscriber re-check fails, 57 seconds later |
+| 08:35:40 | A second check at a later block confirms it. Attestation #27, not compliant, and a webhook |
+| 08:35:50 | A keeper whose key is not the owner's calls `exit`. The gate gets 58.2 tokens back for its 60 shares, the 3% loss included |
+
+From the bug to the money being out took 3 minutes 24 seconds, and no one with the owner's key acted.
 
 ---
 
-## Roadmap: Beyond Track 4
+## Who pays, and the numbers so far
 
-1. **External issuance service:** Today, only Specfirst issues certificates via CLI and Action. Future: a SaaS endpoint where aggregators send report JSON and receive certificates without holding issuer keys.
-2. **ProjectId ownership binding:** First issuer of a projectId can claim it via signature. Prevents collisions and allows developer updates without new projectId.
-3. **Category-based invariant sets:** Monad Foundation or aggregators define "Basic Vault v1" or "LST Collateral v1" as canonical invariant-set hashes. Developers target that hash. Aggregators whitelist by hash, not by individual certificate.
-4. **Violation revoke with evidence:** Specfirst runs continuous on-chain monitoring post-issuance. If deployed code violates the certified invariants, the certificate auto-revokes via oracle and posts evidence.
+| | MON |
+|---|---|
+| Earned, request desk fees | 0.20 |
+| Earned, subscription days started | 0.05 |
+| Desk worker gas | 0.1243 |
+| Watcher gas, both chains | 0.3521 |
+| **Net** | **-0.2265** |
+
+The service loses money today, and we show it that way on the desk page. The watcher only spends gas on attestations. They are capped at 15 a day at about 0.05 MON each, so the worst case is about 0.75 MON a day, which 15 subscription days cover. Every check result is free; what a subscriber pays for is being told first.
+
+---
+
+## How to check our work
+
+- **Every result reproduces.** Each report under `certs/checks/<chainId>/<address>/` names its block, seed and senders. `specfirst check <address> --standard erc4626 --block <block> --runs 16 --seed <seed>` runs the same check. The keccak256 of the report in canonical JSON, keys sorted and no whitespace, equals the `reportHash` on chain, and each vault page recomputes it in the browser.
+- **Contracts on Monad testnet, chain 10143.**
+
+| Contract | Address |
+|---|---|
+| CheckAttestationRegistry | `0x3754918bBB8481D046D80718a9efe434e353daF7` |
+| CheckSubscriptions | `0xA1A205C1eF2Ecd2354DE900276C74Fb34b7119a4` |
+| CheckRequestDesk | `0x4de46c70cB77C5Fcbe083C436bb42F097CBFafeb` |
+| AllocationGate | `0xEE966282544FF5e0429e754856197A13b8340C8A` |
+| DemoVaultFactory | `0xE1FC8fa26Cb7496A68DD4e0ba896Ed8CAE2238FB` |
+
+- **Tests.** forge 195, core 568, cli 115, web 305, all passing. `scripts/check-chars.sh` runs with them.
+- **Decisions.** `docs/adr/` records each design decision and what changed after review: third-party properties in 0003, the registry in 0004, the desk in 0005, the watcher and subscriptions in 0006, the gate in 0007.
+
+---
+
+## What a result means and what it does not
+
+- **Pass** means no counterexample to these 30 properties was found at that block, with 16 runs a property. It does not mean the vault is safe.
+- **Mismatch** means a disagreement with an EIP-4626 sentence, shown by a concrete call. It is not a claim that funds are at risk.
+- **Inconclusive** is never turned into a pass. Some Monad vaults call staking precompiles that the forge fork does not have. A call that touched one is left unjudged, and a property with an unjudged input cannot pass.
+- **A vault cannot talk its way down.** The level of a failure never depends on revert text or logs the vault controls, and a withdraw or redeem failure is always a MUST.
+- **Trust.** Attestations about mainnet vaults live on testnet. The issuer reports the mainnet code hash, and anyone can rerun the check at the recorded block and compare. A contract that reads the registry trusts its issuers, nothing more.
+- **Known limits.** A result is about one block. A vault that detects it is running on a fork can behave differently there. Asynchronous vaults are labeled, not excused.
+
+---
+
+## Built during the hackathon
+
+| Part | What it is |
+|---|---|
+| `specfirst check` | runs the 30 properties on a fork of any chain at a fixed block and writes a report |
+| `specfirst watch` | the unattended watcher: factory, first deposit and upgrade signals, scheduled re-checks, share value reads, attestation budget, alerts |
+| Contracts | CheckAttestationRegistry, CheckRequestDesk, CheckSubscriptions, AllocationGate, demo vault factory and token |
+| `specfirst worker` | fulfils paid desk requests without a person |
+| Web | the board, a page per vault, the watcher's live feed, the alerts inbox, the desk with revenue and gas, the gate |
+| API and badge | JSON per vault and an SVG badge for integrators |
+
+---
+
+## Next
+
+1. **Talk to curators.** The first users we want are allocators that already move money between Monad vaults.
+2. **Asynchronous vaults.** Add ERC-7540 properties so request based vaults are graded on the flow they actually offer.
+3. **More issuers.** Let integrators pin the issuers they trust, so the registry does not depend on one key.
+4. **More signals.** Oracle and parameter changes of known vaults, next to upgrades and share value.
 
 ---
 
 ## Team
 
-Jaemin Lee, solo developer, full-stack implementation. Background: Web3 financial infrastructure, Despell DAO treasury protocols, multi-chain deployment and testing. Completed core logic, agent integration, contract, web frontend, and CLI in 6 weeks solo. Parallel ongoing full-time job search and interview commitments.
+Jaemin Lee, solo. Background in Web3 financial infrastructure, DAO treasury protocols and multi-chain deployment.
 
 ---
 
-## Links for Judges
+## Links
 
-- **Live certificate (v1):** <PLACEHOLDER_WEB_HOST>/c/<PLACEHOLDER_VAULT_ADDRESS_V1>
-- **Live certificate (v2):** <PLACEHOLDER_WEB_HOST>/c/<PLACEHOLDER_VAULT_ADDRESS_V2>
-- **Certificate registry address:** <PLACEHOLDER_REGISTRY_ADDRESS> (Monad testnet, chain 10143)
-- **REST endpoint test:** https://<PLACEHOLDER_WEB_HOST>/api/cert/<PLACEHOLDER_VAULT_ADDRESS>
-- **Sample repository:** github.com/jaesimin/specfirst
-- **Sample vault with Action:** github.com/jaesimin/specfirst-example-vault
+- **Board:** <PLACEHOLDER_WEB_HOST>
+- **Watcher feed:** <PLACEHOLDER_WEB_HOST>/watch
+- **Allocation gate:** <PLACEHOLDER_WEB_HOST>/watch/gate
+- **Repository:** github.com/jaesimin/specfirst
 - **Demo video:** <PLACEHOLDER_VIDEO_LINK>
-- **Full contact log:** docs/bd-log.md
 
----
-
-Submitted: October 13, 2026
+Submitted October 13, 2026.
