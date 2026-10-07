@@ -466,7 +466,8 @@ contract FeeVault is VaultBase {
 }
 
 /// The same fee bug plus one staticcall to Monad's reserve balance precompile whose answer is ignored. The
-/// precompile does not decide the revert, so the fail must stay a fail.
+/// precompile does not decide the revert, but nothing on the fork can show that: sf-maxWithdraw-honored is
+/// inconclusive, never a pass. Withdraws that go through are judged, so previewWithdraw still fails.
 contract FeeTouchVault is FeeVault {
     function withdraw(uint256 a, address r, address o) public override returns (uint256 s) {
         (bool ok,) = address(0x1001).staticcall(hex"3a61584e");
@@ -551,8 +552,8 @@ contract LyingMintVault is VaultBase {
 }
 
 /// Second review (2026-10-07): the fee bug, an ignored staticcall to 0x1001, and a withdraw that does nothing when
-/// 0x1001 has code. On Monad that address never has code, but the harness's mocked rerun puts a byte there, so the
-/// failing input looks as if it needed the precompile. It must never make the property pass.
+/// 0x1001 has code. On Monad that address never has code; the harness's former mocked rerun put a byte there, so
+/// the failing input looked as if it needed the precompile. It must never make the property pass.
 contract FeeLaunderVault is FeeVault {
     function withdraw(uint256 a, address r, address o) public override returns (uint256 s) {
         (bool ok,) = address(0x1001).staticcall(hex"3a61584e");
@@ -575,5 +576,21 @@ contract HonestDynVault is VaultBase {
         s = super.deposit(a, r);
         (,, uint64[] memory ids) = IMonadStakingDyn(MONAD_STAKING).getDelegations(address(this), 0);
         require(IMonadStakingDyn(MONAD_STAKING).delegate(ids.length > 0 ? ids[0] : 1));
+    }
+}
+
+/// Fourth review (2026-10-07): honest on Monad, whose epochs are far past 500. Each deposit reads getEpoch() from
+/// the staking precompile with a low-level call and reverts InvalidEpoch() when the answer is malformed or the
+/// epoch is below 500: on the fork that is a revert with data, the same under any fixed stand-in epoch below 500.
+/// It must never fail.
+contract EpochGuardVault is VaultBase {
+    error InvalidEpoch();
+
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        (bool ok, bytes memory ret) = MONAD_STAKING.staticcall(abi.encodeWithSignature("getEpoch()"));
+        if (!ok || ret.length != 64) revert InvalidEpoch();
+        (uint64 epoch,) = abi.decode(ret, (uint64, bool));
+        if (epoch < 500) revert InvalidEpoch();
+        return super.deposit(a, r);
     }
 }

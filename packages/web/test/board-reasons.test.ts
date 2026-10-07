@@ -135,7 +135,7 @@ describe('explainResult', () => {
     expect(explainResult({ status: 'inconclusive', reason: 'fork RPC error, rerun or pass another --rpc: EVM error; database error: x' })).toMatch(/says nothing about the vault/);
     expect(explainResult({ status: 'inconclusive', reason: "the asset's balance slot cannot be written, x" })).toMatch(/could not be given the asset/);
     expect(explainResult({ status: 'inconclusive', reason: missingPrecompileNote('0x0000000000000000000000000000000000001000') })).toBe(
-      "Not judged: every rejected input reached Monad precompile 0x0000000000000000000000000000000000001000, which forge's EVM does not have, and its call reverted on the fork only when that precompile gave no answer. These inputs were not judged.",
+      "Not judged: every rejected input reached Monad precompile 0x0000000000000000000000000000000000001000, which forge's EVM does not have, and its call reverted on the fork, which cannot tell whether the revert needed the precompile's answer. These inputs were not judged.",
     );
     // Counts beside a verdict: refusals below the bound, and inputs not judged.
     expect(explainResult({ status: 'pass', runs: 16, reason: belowBoundNote(3) })).toBe(
@@ -149,7 +149,7 @@ describe('explainResult', () => {
     );
     // A property with unjudged inputs and no fail is inconclusive, never a pass (FeeLaunderVault).
     expect(explainResult({ status: 'inconclusive', runs: 16, reason: missingPrecompileNote('0x0000000000000000000000000000000000001001', 2) })).toBe(
-      "Not judged: 2 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and behaved differently once it answered. A vault can tell such a stand-in from the real precompile, so a property with unjudged inputs never counts as a pass; no other input failed.",
+      "Not judged: 2 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and reverted. The fork cannot tell whether such a revert needed the precompile's answer, so a property with unjudged inputs never counts as a pass; no other input failed.",
     );
     expect(explainResult({ status: 'inconclusive', reason: 'no result in forge output' })).toBe('Inconclusive: forge reported no result for this property.');
     expect(explainResult({ status: 'inconclusive', reason: 'forge status Skipped' })).toBe('Inconclusive: forge ended this property with status Skipped.');

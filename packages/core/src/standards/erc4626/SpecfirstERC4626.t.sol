@@ -130,13 +130,13 @@ contract SpecfirstERC4626Test is ERC4626Test {
             _give(_underlying_, user, shares);
             _approve(_underlying_, user, _vault_, shares);
             vm.prank(user);
-            try IERC4626(_vault_).deposit(shares, user) {} catch (bytes memory ret) {
+            try IERC4626(_vault_).deposit(shares, user) {} catch {
                 // EIP-4626: a deposit up to a positive maxDeposit must not revert. Upstream discards the input; so
                 // do we, but the discard is recorded so a vault cannot hide the violation behind rejected inputs.
-                // A revert under a maxDeposit of 0 is not recorded: 0 honestly says "not allowed". A revert that
-                // reached a Monad precompile the fork lacks and cannot be judged is recorded as that instead; the
-                // property never ran on this input, so the runner counts it as a rejected input.
-                address p = SfForkGaps.precompileCause(_vault_, user, abi.encodeCall(IERC4626.deposit, (shares, user)), ret);
+                // A revert under a maxDeposit of 0 is not recorded: 0 honestly says "not allowed". A revert of a
+                // deposit that reached a Monad precompile the fork lacks is recorded as that instead; the property
+                // never ran on this input, so the runner counts it as a rejected input.
+                address p = SfForkGaps.precompileCause(_vault_, user, abi.encodeCall(IERC4626.deposit, (shares, user)));
                 if (p != address(0)) SfEvents.setupPrecompile(p);
                 else if (advertised > 0 && shares > 0 && shares <= advertised) _recordDepositRevert();
                 vm.assume(false);

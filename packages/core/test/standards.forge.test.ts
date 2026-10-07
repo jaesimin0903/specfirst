@@ -123,11 +123,11 @@ describe.skipIf(SKIP)('ERC-4626 harness with forge, offline (pinned cache presen
     );
     expect(gapResults.sort()).toEqual([
       ['test_causeIsNoneOffMonad', 'Success'],
-      ['test_causeIsNoneWhenThePrecompileDoesNotMatter', 'Success'],
       ['test_causeIsNoneWithoutAPrecompile', 'Success'],
       ['test_causeIsThePrecompileForAnEmptyRevert', 'Success'],
-      ['test_causeIsTheStakingPrecompileForADynamicAnswer', 'Success'],
+      ['test_causeIsThePrecompileWhateverTheRevert', 'Success'],
       ['test_causeIsTheStakingPrecompileForAStakingDeposit', 'Success'],
+      ['test_causeIsTheStakingPrecompileForAnEpochGuard', 'Success'],
       ['test_eventsRefuseACallFromInsideAVault', 'Success'],
       ['test_gapsLeaveOutAPrecompileThisEvmHas', 'Success'],
       ['test_gapsListedOnMonadChainsOnly', 'Success'],
@@ -199,6 +199,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
       'LyingMintVault',
       'FeeLaunderVault',
       'HonestDynVault',
+      'EpochGuardVault',
       'ThresholdPrecompileVault',
     ]) {
       const art = JSON.parse(await readFile(path.join(mocks, 'out/MockVaults.sol', `${name}.json`), 'utf8')) as { deployedBytecode: { object: string } };
@@ -238,6 +239,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000097', code.LyingMintVault]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000098', code.FeeLaunderVault]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000099', code.HonestDynVault]);
+    await rpc('anvil_setCode', ['0x5F0000000000000000000000000000000000009a', code.EpochGuardVault]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000072', code.ThresholdPrecompileVault]);
     await rpc('anvil_mine', ['0x1']);
   });
@@ -371,20 +373,22 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     expect(pk.results.some((x) => (x.reason ?? '').includes(MISSING_PRECOMPILE_NOTE))).toBe(false);
   });
 
-  it('FeeTouchVault (a fee bug plus an ignored staticcall to 0x1001): the fail and its counterexample stay, as for FeeVault', async () => {
+  it('FeeTouchVault (a fee bug plus an ignored staticcall to 0x1001): its reverting withdraws are not judged, so sf-maxWithdraw is inconclusive, never a pass', async () => {
     const touch = await check('0x5F00000000000000000000000000000000000092', 16);
     const plain = await check('0x5F00000000000000000000000000000000000091', 16);
     const sf = (rep: typeof touch) => rep.results.find((x) => x.id === 'sf-maxWithdraw-honored')!;
-    for (const rep of [touch, plain]) {
-      expect(sf(rep).status).toBe('fail');
-      expect(sf(rep).reason).toMatch(/^withdraw\(\d+\) reverted with selector 0x4e487b71 while maxWithdraw is \d+$/);
-      expect(sf(rep).counterexample?.calls.length).toBe(1);
-    }
-    expect(touch.results.map((x) => [x.id, x.status])).toEqual(plain.results.map((x) => [x.id, x.status]));
-    expect(touch.results.some((x) => (x.reason ?? '').includes(MISSING_PRECOMPILE_NOTE))).toBe(false);
+    expect(sf(plain).status).toBe('fail');
+    expect(sf(plain).reason).toMatch(/^withdraw\(\d+\) reverted with selector 0x4e487b71 while maxWithdraw is \d+$/);
+    expect(sf(plain).counterexample?.calls.length).toBe(1);
+    // Every withdraw touches 0x1001, so a reverting one cannot be judged; the withdraws that went through passed.
+    expect(sf(touch).status).toBe('inconclusive');
+    expect(sf(touch).reason).toMatch(/^a vault call reached Monad precompile 0x0000000000000000000000000000000000001001, which forge lacks(, in \d+ inputs)?; these inputs were not judged$/);
+    // A call that touched 0x1001 and went through is judged on its result: previewWithdraw still fails.
+    expect(touch.results.find((x) => x.id === 'previewWithdraw')!.status).toBe('fail');
+    expect(standardCheckExitCode(touch.summary)).toBe(16);
   });
 
-  it('FeeLaunderVault (withdraw does nothing when 0x1001 has code, as only the mocked rerun gives it): sf-maxWithdraw is never a pass', async () => {
+  it('FeeLaunderVault (withdraw does nothing when 0x1001 has code): sf-maxWithdraw is never a pass', async () => {
     const report = await check('0x5F00000000000000000000000000000000000098', 16);
     const x = report.results.find((r) => r.id === 'sf-maxWithdraw-honored')!;
     expect(x.status).not.toBe('pass');
@@ -397,6 +401,15 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
 
   it('HonestDynVault (reads a dynamic answer from the staking precompile, works on Monad): no fail, the deposit inputs are not judged', async () => {
     const report = await check('0x5f00000000000000000000000000000000000099');
+    expect(report.summary.fail).toBe(0);
+    const x = report.results.find((r) => r.id === 'sf-maxDeposit-honored')!;
+    expect(x.status).toBe('inconclusive');
+    expect(x.reason).toMatch(/^a vault call reached Monad precompile 0x0000000000000000000000000000000000001000, which forge lacks/);
+    expect(standardCheckExitCode(report.summary)).toBe(17);
+  });
+
+  it('EpochGuardVault (InvalidEpoch() for a malformed or stale getEpoch answer, works on Monad): no fail, the deposit inputs are not judged', async () => {
+    const report = await check('0x5F0000000000000000000000000000000000009a');
     expect(report.summary.fail).toBe(0);
     const x = report.results.find((r) => r.id === 'sf-maxDeposit-honored')!;
     expect(x.status).toBe('inconclusive');

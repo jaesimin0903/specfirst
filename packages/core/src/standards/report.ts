@@ -385,7 +385,7 @@ export function setupPrecompileNote(precompile: string, n: number): string {
 /**
  * Test name -> how many inputs were not judged and the first precompile they needed, from the missing-precompile
  * event file: one line "<selector of the test> <precompile address>" per input, written by the harness after a
- * vault call reverted and SfForkGaps.precompileCause showed that the revert needed the precompile. Unknown
+ * vault call reverted and SfForkGaps.precompileCause showed that the call reached the precompile. Unknown
  * selectors and malformed lines are ignored.
  */
 export function missingPrecompilesOf(events: string, testKeys: Iterable<string>): Map<string, { count: number; precompile: string }> {
@@ -403,9 +403,9 @@ export function missingPrecompilesOf(events: string, testKeys: Iterable<string>)
 }
 
 /**
- * Inputs whose vault call reached a missing precompile and could not be judged. Unjudged inputs of the property
- * itself (`unjudged`) rule out a pass: a vault can tell a mocked precompile from the real one (code at the address,
- * gas, the answer), so such an input may be exactly the one that would have failed. A fail keeps its status and
+ * Inputs whose vault call reverted after reaching a missing precompile, which the fork cannot judge. Unjudged
+ * inputs of the property itself (`unjudged`) rule out a pass: such an input may be exactly the one that would have
+ * failed on Monad. A fail keeps its status and
  * counterexample (another input failed) and gets the count; a pass becomes inconclusive with the count. Inputs
  * discarded in a setup deposit (`setup`) never ran the property: they are rejected inputs, named in the reason of
  * a property that ran out of inputs and otherwise not counted. A property whose rejected inputs were all of these

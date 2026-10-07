@@ -111,8 +111,9 @@ export default function AboutPage() {
           <li>Public RPCs rate-limit. Properties that ended on an RPC error say nothing about the vault and should be rerun.</li>
           <li>
             forge has none of Monad&apos;s own precompiles (staking at 0x1000, the reserve balance check at 0x1001, P256 at 0x0100). An input whose
-            vault call needs one of them, such as a deposit into a liquid staking vault that stakes it, is not judged; a property whose inputs all
-            needed one is inconclusive. Inputs that only touch a precompile and revert anyway are judged as usual.
+            vault call reaches one of them and reverts, such as a deposit into a liquid staking vault that stakes it, is not judged, since the fork
+            cannot tell whether the revert needed the precompile&apos;s answer. A property with such an input never passes: it fails when another
+            input failed, otherwise it is inconclusive. Calls that reach a precompile and go through are judged as usual.
           </li>
         </ul>
 
