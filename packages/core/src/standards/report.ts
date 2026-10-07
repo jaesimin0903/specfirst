@@ -356,7 +356,7 @@ export interface ParseStandardOptions {
   maxZeroEvents?: string;
   /** Content of the sf- suite's below-bound event file: one selector per input below the bound that was refused while the bound was accepted. */
   belowBoundEvents?: string;
-  /** Content of the sf- suite's bound-unfunded event file: one selector per input discarded because the bound could not be funded. */
+  /** Content of the sf- suite's bound-unfunded event file: one selector per input not judged because the bound could not be funded. */
   unfundedBoundEvents?: string;
   /** Content of the missing-precompile event file both suites write: "<selector> <precompile>" per input not judged. */
   missingPrecompileEvents?: string;
@@ -371,7 +371,7 @@ export function belowBoundNote(n: number): string {
 
 /** Note on an sf- property with inputs whose bound could not be funded, so it was not tried there. */
 export function unfundedBoundNote(n: number): string {
-  return `the bound could not be funded in ${n} inputs; these inputs were discarded`;
+  return `the bound could not be funded in ${n} inputs; these inputs were not judged`;
 }
 
 /**
@@ -450,10 +450,18 @@ function withBelowBoundNote(r: StandardPropertyResult, n: number | undefined): S
   return { ...r, reason: r.reason ? `${r.reason}; ${note}` : note };
 }
 
-function withUnfundedBoundNote(r: StandardPropertyResult, n: number | undefined): StandardPropertyResult {
+/**
+ * Inputs whose bound could not be funded are unjudged, like those whose call reached a missing precompile: a
+ * vault and its asset by the same author could refuse the funding on exactly the inputs that would fail. A
+ * property with one is never a pass (a pass becomes inconclusive), and a fail keeps its counterexample; the
+ * count is noted either way.
+ */
+function withUnfundedBound(r: StandardPropertyResult, n: number | undefined): StandardPropertyResult {
   if (!n) return r;
   const note = unfundedBoundNote(n);
-  return { ...r, reason: r.reason ? `${r.reason}; ${note}` : note };
+  const reason = r.reason ? `${r.reason}; ${note}` : note;
+  if (r.status === 'pass') return { ...r, status: 'inconclusive', reason };
+  return { ...r, reason };
 }
 
 /** Reason of an sf- property whose every discarded input had a max of 0. */
@@ -522,7 +530,7 @@ export function parseStandardForgeJson(
     if (!r) return { ...base, status: 'inconclusive', reason: 'no result in forge output' };
     // Each rule reads forge's own reason first, so the order matters: max-zero, then the precompile inputs, then the notes.
     const judged = withMissingPrecompile(withMaxZero(classify(p, r), maxZero.get(p.test)), precompiles.get(p.test), setupPrecompiles.get(p.test));
-    return withUnfundedBoundNote(withBelowBoundNote(withDepositNote(judged, deposits.get(p.test)), belowBound.get(p.test)), unfundedBound.get(p.test));
+    return withUnfundedBound(withBelowBoundNote(withDepositNote(judged, deposits.get(p.test)), belowBound.get(p.test)), unfundedBound.get(p.test));
   });
 }
 

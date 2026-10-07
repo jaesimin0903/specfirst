@@ -574,7 +574,7 @@ describe('refusals below the bound on sf- properties (below-bound events)', () =
     expect(r!.reason).toBe(`redeem(1) reverted with selector 0x03f7f64c while maxRedeem is 1; ${belowBoundNote(1)}`);
   });
 
-  it('inputs whose bound could not be funded are counted after the other notes; the status is forge\'s', () => {
+  it('inputs whose bound could not be funded are noted after the other notes; an inconclusive stays inconclusive', () => {
     const sel = toFunctionSelector(depKey);
     const [r] = parseStandardForgeJson(
       doc({ status: 'Failure', reason: '`vm.assume` rejected too many inputs (4096 allowed)', counterexample: null }),
@@ -583,6 +583,19 @@ describe('refusals below the bound on sf- properties (below-bound events)', () =
     )!;
     expect(r!.status).toBe('inconclusive');
     expect(r!.reason).toBe(`\`vm.assume\` rejected too many inputs (4096 allowed); ${belowBoundNote(1)}; ${unfundedBoundNote(3)}`);
-    expect(unfundedBoundNote(3)).toBe('the bound could not be funded in 3 inputs; these inputs were discarded');
+    expect(unfundedBoundNote(3)).toBe('the bound could not be funded in 3 inputs; these inputs were not judged');
+  });
+
+  it('a property with an unfunded bound is never a pass: a pass becomes inconclusive, a fail stays a fail', () => {
+    const sel = toFunctionSelector(depKey);
+    const [pass] = parseStandardForgeJson(doc({ status: 'Success', reason: null, counterexample: null, kind: { Fuzz: { runs: 16 } } }), [sfDeposit], {
+      belowBoundEvents: sel,
+      unfundedBoundEvents: sel,
+    })!;
+    expect(pass).toMatchObject({ status: 'inconclusive', runs: 16, reason: `${belowBoundNote(1)}; ${unfundedBoundNote(1)}` });
+    const [fail] = parseStandardForgeJson(doc({ status: 'Failure', reason: 'deposit(9) reverted with selector 0x12345678 while maxDeposit is 9', counterexample: null }), [sfDeposit], {
+      unfundedBoundEvents: `${sel}\n${sel}\n`,
+    })!;
+    expect(fail).toMatchObject({ status: 'fail', reason: `deposit(9) reverted with selector 0x12345678 while maxDeposit is 9; ${unfundedBoundNote(2)}` });
   });
 });

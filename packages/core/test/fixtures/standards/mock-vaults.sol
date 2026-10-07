@@ -649,3 +649,47 @@ contract ApproveCapToken {
 contract ApproveCapVault is VaultBase {
     function asset() public pure override returns (address) { return APPROVE_CAP_TOKEN; }
 }
+
+address constant COLLUSION_TOKEN = 0x5f00000000000000000000000000000000000007;
+
+/// Users the colluding pair below singles out: about half of any address pool.
+function flaggedUser(address a) pure returns (bool) {
+    return uint160(a) % 2 == 1;
+}
+
+/// The asset half of a colluding pair: approve refuses amounts above 999,000 tokens for flagged owners, which is
+/// exactly where CollusionVault's deposit would revert. Funding the bound fails there; nothing else does.
+contract CollusionToken {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+
+    function decimals() external pure returns (uint8) { return 6; }
+    function approve(address s, uint256 a) external returns (bool) {
+        require(a <= 999_000e6 || !flaggedUser(msg.sender), "refused");
+        allowance[msg.sender][s] = a;
+        return true;
+    }
+    function transfer(address to, uint256 a) external returns (bool) {
+        balanceOf[msg.sender] -= a; balanceOf[to] += a; return true;
+    }
+    function transferFrom(address f, address to, uint256 a) external returns (bool) {
+        if (allowance[f][msg.sender] != type(uint256).max) allowance[f][msg.sender] -= a;
+        balanceOf[f] -= a; balanceOf[to] += a; return true;
+    }
+}
+
+/// The vault half: maxDeposit and maxMint are unlimited, but deposit and mint revert above 999,000 tokens for
+/// flagged users. The bound (1e6 tokens) can only be tried for unflagged users, where it goes through. Without
+/// the never-pass rule for unfunded bounds this vault would pass sf-maxDeposit-honored and sf-maxMint-honored.
+contract CollusionVault is VaultBase {
+    function asset() public pure override returns (address) { return COLLUSION_TOKEN; }
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        if (a > 999_000e6 && flaggedUser(msg.sender)) revert("too large");
+        return super.deposit(a, r);
+    }
+    function mint(uint256 s, address r) public override returns (uint256 a) {
+        if (s > 999_000e6 && flaggedUser(msg.sender)) revert("too large");
+        return super.mint(s, r);
+    }
+}

@@ -325,8 +325,8 @@ contract SpecfirstMaxHonored is Test {
     /// there fails the property with the bound as the amount; a revert that reached a missing precompile is not
     /// judged (_callVault). The bound is skipped only when its preview answers 0 (the property's premise); a
     /// preview that reverts there does not skip it, since EIP-4626 lets a preview revert where the action would.
-    /// When the funding cannot be given, the input is discarded and counted (bound-unfunded), never passed
-    /// silently.
+    /// When the funding cannot be given, the input is discarded and recorded (bound-unfunded); the runner treats
+    /// it as unjudged, so the property cannot pass.
     function _requireBound(address u, bytes memory atBound, uint256 funding, string memory action, uint256 amount, string memory maxName, uint256 max) internal {
         uint256 snap = vm.snapshotState();
         if (funding > 0 && !_tryFund(u, funding)) {
@@ -354,7 +354,7 @@ contract SpecfirstMaxHonored is Test {
         return quoted && v == 0;
     }
 
-    /// The bound could not be funded, so it was not tried: the input is discarded and counted.
+    /// The bound could not be funded, so it was not tried: the input is discarded and recorded as unjudged.
     function _discardUnfundedBound() internal {
         _recordEvent("bound-unfunded");
         vm.assume(false);

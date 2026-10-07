@@ -122,6 +122,9 @@ shares) count as rejects of the property, not as unjudged inputs.
   ApproveCapToken (0x5F..06), ApproveCapVault (0x5f..9d)  approve refuses more than 1,000 tokens, so the
                                        1e6-token bound cannot be funded: sf-maxDeposit and sf-maxMint end
                                        inconclusive with "the bound could not be funded in N inputs", never pass.
+  CollusionToken (0x5f..07), CollusionVault (0x5F..9e)  approve refuses more than 999,000 tokens for flagged
+                                       users, exactly where deposit and mint revert. forge passes sf-maxDeposit
+                                       and sf-maxMint; unfunded bounds are unjudged, so both are inconclusive.
 Review PoCs (ported from the reviewer's Adv.sol, mock-vaults.sol "Review PoCs"), full checks, 16 runs where the
 fuzzer must reach a fee bug:
   FeeVault (0x5F..91), FeeTouchVault (0x5F..92)  fee withdraw (Panic 0x11 near maxWithdraw); FeeTouch adds an

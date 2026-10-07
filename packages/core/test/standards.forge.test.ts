@@ -541,6 +541,8 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     await rpc('anvil_setCode', ['0x5F0000000000000000000000000000000000009c', await code('PreviewDodgeVault')]);
     await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000006', await code('ApproveCapToken')]);
     await rpc('anvil_setCode', ['0x5f0000000000000000000000000000000000009d', await code('ApproveCapVault')]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000007', await code('CollusionToken')]);
+    await rpc('anvil_setCode', ['0x5F0000000000000000000000000000000000009e', await code('CollusionVault')]);
     await rpc('anvil_mine', ['0x1']);
     ws = await prepareErc4626Workspace({
       cacheDir: path.join(root, 'cache'),
@@ -602,7 +604,19 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     }
   });
 
-  it('a bound the harness cannot fund (approve refuses the 1e6-token bound): the inputs are discarded and counted, never passed', async () => {
+  it('a vault and its asset that refuse funding exactly where the bound would fail (CollusionVault): never a pass', async () => {
+    const r = await sf('0x5F0000000000000000000000000000000000009e');
+    for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored']) {
+      const x = r.get(id)!;
+      expect(x.status, id).toBe('inconclusive');
+      // forge itself passed: the reason is the note alone, not forge's reject limit.
+      const n = Number(/^the bound could not be funded in (\d+) inputs/.exec(x.reason ?? '')?.[1]);
+      expect(n, id).toBeGreaterThan(0);
+      expect(x.reason, id).toBe(unfundedBoundNote(n));
+    }
+  });
+
+  it('a bound the harness cannot fund (approve refuses the 1e6-token bound): the inputs are not judged, never passed', async () => {
     const r = await sf('0x5f0000000000000000000000000000000000009d');
     for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored']) {
       const x = r.get(id)!;
