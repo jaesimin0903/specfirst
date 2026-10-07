@@ -2,7 +2,7 @@
 pragma solidity >=0.8.0 <0.9.0;
 import {SpecfirstERC4626Test} from "./SpecfirstERC4626.t.sol";
 import {MockToken, Vault, PackedToken, NoDecimalsToken, LockedToken, FalseToken, CallThenRevert} from "../src/M.sol";
-import {SpecfirstMaxHonored, SfForkGaps} from "./SpecfirstMaxHonored.t.sol";
+import {SpecfirstMaxHonored, SfEvents, SfForkGaps} from "./SpecfirstMaxHonored.t.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
@@ -66,22 +66,6 @@ contract ProbeState is SpecfirstERC4626Test {
         vm.expectRevert(bytes("specfirst: asset transfers are restricted for test users (transfer returned false)"));
         this.probe();
     }
-    function depositProbe() external { _probeDepositPrecompiles(); }
-    function test_depositProbeStopsAtMissingPrecompile() public {
-        _vault_ = address(new Vault(token, 5));
-        vm.expectRevert(bytes("specfirst: fork lacks a Monad precompile the vault calls (0x0000000000000000000000000000000000001000)"));
-        this.depositProbe();
-    }
-    function test_depositProbeLeavesOtherRevertsAndNoState() public {
-        _vault_ = address(new Vault(token, 4));
-        this.depositProbe();
-        _vault_ = address(new Vault(token, 0));
-        uint256 supply = token.totalSupply();
-        this.depositProbe();
-        assertEq(Vault(_vault_).totalSupply(), 0);
-        assertEq(token.balanceOf(_poolMember(0)), 0);
-        assertEq(token.totalSupply(), supply);
-    }
 }
 contract SfProbeState is SpecfirstMaxHonored {
     MockToken internal token;
@@ -103,81 +87,106 @@ contract SfProbeState is SpecfirstMaxHonored {
         vm.expectRevert(bytes("specfirst: asset transfers are restricted for test users (selector 0x82b42900)"));
         this.probe();
     }
-    function depositProbe() external { _probeDepositPrecompiles(); }
-    function test_sfDepositProbeStopsAtMissingPrecompile() public {
-        vault = address(new Vault(token, 5));
-        vm.expectRevert(bytes("specfirst: fork lacks a Monad precompile the vault calls (0x0000000000000000000000000000000000001000)"));
-        this.depositProbe();
-        vault = address(new Vault(token, 4));
-        this.depositProbe();
-    }
 }
 
-/// SfForkGaps on recorded state diffs: which accesses count as a missing precompile.
+/// SfForkGaps.precompileCause and missingPrecompiles on Monad's chain ids, and the SfEvents re-entry guard.
 contract ForkGaps is Test {
     CallThenRevert internal c;
-    function setUp() public { c = new CallThenRevert(); }
-    function _record(address target, bytes memory data) internal returns (Vm.AccountAccess[] memory acc) {
-        vm.startStateDiffRecording();
-        (bool ok,) = address(c).call(abi.encodeCall(CallThenRevert.callThenRevert, (target, data)));
-        acc = vm.stopAndReturnStateDiff();
+    MockToken internal token;
+    function setUp() public {
+        c = new CallThenRevert();
+        token = new MockToken();
+        vm.chainId(143);
+    }
+    function _depositReverting(Vault v, address user, uint256 a) internal returns (bytes memory data, bytes memory ret) {
+        deal(address(token), user, a);
+        vm.prank(user);
+        token.approve(address(v), a);
+        data = abi.encodeCall(Vault.deposit, (a, user));
+        vm.prank(user);
+        bool ok;
+        (ok, ret) = address(v).call(data);
         assertFalse(ok);
     }
-    function test_gapsFlagStakingCallInRevertedFrame() public {
-        assertEq(SfForkGaps.missingCalled(_record(address(0x1000), abi.encodeWithSelector(0x84994fec, uint64(78)))), address(0x1000));
-    }
-    function test_gapsFlagReserveBalanceAndP256() public {
-        assertEq(SfForkGaps.missingCalled(_record(address(0x1001), hex"3a61584e")), address(0x1001));
-        assertEq(SfForkGaps.missingCalled(_record(address(0x0100), hex"00")), address(0x0100));
-    }
-    function test_gapsIgnoreUnlistedEmptyAccountAndEthereumPrecompiles() public {
-        assertEq(SfForkGaps.missingCalled(_record(address(0xdead), hex"")), address(0));
-        assertEq(SfForkGaps.missingCalled(_record(address(0x0002), hex"00")), address(0));
-    }
-    function test_gapsIgnorePrecompileThisEvmHas() public {
-        // A forge build with Monad precompiles: 0x1000 answers getEpoch(). Code stands in for it here.
-        vm.etch(address(0x1000), hex"60206000f3");
-        assertEq(SfForkGaps.missingCalled(_record(address(0x1000), hex"757991a8")), address(0));
-    }
-    function test_gapsIgnoreBalanceRead() public {
-        vm.startStateDiffRecording();
-        (bool ok,) = address(c).call(abi.encodeCall(CallThenRevert.balanceThenRevert, (address(0x1000))));
-        Vm.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
-        assertFalse(ok);
-        assertEq(SfForkGaps.missingCalled(acc), address(0));
-    }
-    function test_tripwiresSeeCallsInRevertedFrames() public {
+    function test_gapsListedOnMonadChainsOnly() public {
         address[] memory gaps = SfForkGaps.missingPrecompiles();
         assertEq(gaps.length, 3);
         assertEq(gaps[0], address(0x0100));
         assertEq(gaps[1], address(0x1000));
         assertEq(gaps[2], address(0x1001));
-        uint256 snap = vm.snapshotState();
-        SfForkGaps.armTripwires(gaps);
-        (bool ok,) = address(c).call(abi.encodeCall(CallThenRevert.callThenRevert, (address(0x1000), abi.encodeWithSelector(0x84994fec, uint64(78)))));
-        assertFalse(ok);
-        assertEq(SfForkGaps.tripped(gaps), address(0x1000));
-        SfForkGaps.armTripwires(gaps);
-        (ok,) = address(c).call(abi.encodeCall(CallThenRevert.staticThenRevert, (address(0x1001), hex"3a61584e")));
-        assertFalse(ok);
-        assertEq(SfForkGaps.tripped(gaps), address(0x1001));
-        vm.revertToStateAndDelete(snap);
-        // The snapshot takes the tripwires away again.
-        assertEq(address(0x1000).code.length, 0);
-        assertEq(address(0x1001).code.length, 0);
+        vm.chainId(10143);
+        assertEq(SfForkGaps.missingPrecompiles().length, 3);
+        vm.chainId(31337);
+        assertEq(SfForkGaps.missingPrecompiles().length, 0);
     }
-    function test_tripwiresIgnoreCallsThatNeverReachThem() public {
+    function test_gapsLeaveOutAPrecompileThisEvmHas() public {
+        // A forge build with Monad precompiles: 0x1000 answers getEpoch(). Code stands in for it here.
+        vm.etch(address(0x1000), hex"60206000f3");
         address[] memory gaps = SfForkGaps.missingPrecompiles();
-        uint256 snap = vm.snapshotState();
-        SfForkGaps.armTripwires(gaps);
-        (bool ok,) = address(c).call(abi.encodeCall(CallThenRevert.callThenRevert, (address(0xdead), hex"")));
-        assertFalse(ok);
-        (ok,) = address(c).call(abi.encodeCall(CallThenRevert.balanceThenRevert, (address(0x1000))));
-        assertFalse(ok);
-        assertEq(SfForkGaps.tripped(gaps), address(0));
-        vm.revertToStateAndDelete(snap);
+        assertEq(gaps.length, 2);
+        assertEq(gaps[0], address(0x0100));
+        assertEq(gaps[1], address(0x1001));
     }
-    function test_gapsReason() public pure {
-        assertEq(SfForkGaps.reason(address(0x1000)), "specfirst: fork lacks a Monad precompile the vault calls (0x0000000000000000000000000000000000001000)");
+    function test_causeIsTheStakingPrecompileForAStakingDeposit() public {
+        Vault v = new Vault(token, 5);
+        address user = address(0xA11CE);
+        (bytes memory data, bytes memory ret) = _depositReverting(v, user, 1e6);
+        assertEq(SfForkGaps.precompileCause(address(v), user, data, ret), address(0x1000));
+        // Both reruns ran inside a snapshot: no deposit, no code or mock left at 0x1000.
+        assertEq(v.totalSupply(), 0);
+        assertEq(token.balanceOf(user), 1e6);
+        assertEq(address(0x1000).code.length, 0);
+        (bool ok,) = address(v).call(data);
+        assertFalse(ok);
+    }
+    function test_causeIsNoneOffMonad() public {
+        vm.chainId(31337);
+        Vault v = new Vault(token, 5);
+        (bytes memory data, bytes memory ret) = _depositReverting(v, address(0xA11CE), 1e6);
+        assertEq(SfForkGaps.precompileCause(address(v), address(0xA11CE), data, ret), address(0));
+    }
+    function test_causeIsNoneWhenThePrecompileDoesNotMatter() public {
+        // Touches 0x1001 (call or staticcall) and reverts whatever it answers: the vault's own revert.
+        bytes memory data = abi.encodeCall(CallThenRevert.callThenRevert, (address(0x1001), hex"3a61584e"));
+        (bool ok, bytes memory ret) = address(c).call(data);
+        assertFalse(ok);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
+        data = abi.encodeCall(CallThenRevert.staticThenRevert, (address(0x1000), hex"757991a8"));
+        (ok, ret) = address(c).call(data);
+        assertFalse(ok);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
+    }
+    function test_causeIsNoneWithoutAPrecompile() public {
+        bytes memory data = abi.encodeCall(CallThenRevert.callThenRevert, (address(0xdead), hex""));
+        (bool ok, bytes memory ret) = address(c).call(data);
+        assertFalse(ok);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
+        data = abi.encodeCall(CallThenRevert.balanceThenRevert, (address(0x1000)));
+        (ok, ret) = address(c).call(data);
+        assertFalse(ok);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
+    }
+    function test_missingCalledSeesCallsInRevertedFrames() public {
+        address[] memory gaps = SfForkGaps.missingPrecompiles();
+        vm.startStateDiffRecording();
+        (bool ok,) = address(c).call(abi.encodeCall(CallThenRevert.callThenRevert, (address(0x1000), abi.encodeWithSelector(0x84994fec, uint64(78)))));
+        Vm.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
+        assertFalse(ok);
+        assertEq(SfForkGaps.missingCalled(acc, gaps), address(0x1000));
+    }
+    function writeEvent() external { SfEvents.write("guard", ""); }
+    function test_eventsRefuseACallFromInsideAVault() public {
+        vm.expectRevert(bytes("specfirst: re-entered from inside a vault call"));
+        this.writeEvent();
+    }
+}
+
+/// The harness's setUp refuses to run when called back (msg.sender is not the run's sender).
+contract GuardedSetUp is SpecfirstERC4626Test {
+    function setUp() public override {}
+    function harnessSetUp() external { SpecfirstERC4626Test.setUp(); }
+    function test_setUpRefusesReentry() public {
+        vm.expectRevert(bytes("specfirst: re-entered from inside a vault call"));
+        this.harnessSetUp();
     }
 }

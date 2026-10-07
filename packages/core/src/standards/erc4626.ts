@@ -86,9 +86,42 @@ export const ERC4626_PROPERTIES: readonly StandardProperty[] = [
 /**
  * Specfirst's own properties (SpecfirstMaxHonored.t.sol, MIT). Ids start with "sf-" so reports keep them apart
  * from the upstream suite. Each checks one EIP-4626 MUST that the upstream suite cannot fail on, because it
- * discards inputs whose vault call reverts.
+ * discards inputs whose vault call reverts. EIP-4626 constrains a max as an upper bound of what the action
+ * accepts: drawn amounts up to the bound must go through, and when a smaller one is refused the bound itself
+ * must go through; such refusals are counted, not failed (docs/adr/0003).
  */
 export const SPECFIRST_ERC4626_PROPERTIES: readonly StandardProperty[] = [
+  {
+    test: 'test_sf_maxDeposit_honored',
+    id: 'sf-maxDeposit-honored',
+    description:
+      'deposit goes through up to min(maxDeposit, 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxDeposit MUST NOT be higher than what deposit accepts)',
+  },
+  {
+    test: 'test_sf_maxMint_honored',
+    id: 'sf-maxMint-honored',
+    description:
+      'mint goes through up to min(maxMint, shares of 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxMint MUST NOT be higher than what mint accepts)',
+  },
+  {
+    test: 'test_sf_maxWithdraw_honored',
+    id: 'sf-maxWithdraw-honored',
+    description:
+      'withdraw goes through up to maxWithdraw; when a smaller amount is refused maxWithdraw must go through, and refusals are counted (EIP-4626: maxWithdraw MUST NOT be higher than what withdraw accepts, and MUST be 0 when withdrawals are disabled)',
+  },
+  {
+    test: 'test_sf_maxRedeem_honored',
+    id: 'sf-maxRedeem-honored',
+    description:
+      'redeem goes through up to maxRedeem; when a smaller amount is refused maxRedeem must go through, and refusals are counted (EIP-4626: maxRedeem MUST NOT be higher than what redeem accepts, and MUST be 0 when redemptions are disabled)',
+  },
+];
+
+/**
+ * The sf- table as reports wrote it before 2026-10-07 (same ids, tests and order; other descriptions). Kept so
+ * those reports still map bit i to property i when they are attested.
+ */
+export const SPECFIRST_ERC4626_PROPERTIES_V1: readonly StandardProperty[] = [
   {
     test: 'test_sf_maxDeposit_honored',
     id: 'sf-maxDeposit-honored',
@@ -113,3 +146,5 @@ export const SPECFIRST_ERC4626_PROPERTIES: readonly StandardProperty[] = [
 
 /** Everything a check reports: the 26 upstream properties, then Specfirst's own. */
 export const ERC4626_CHECK_PROPERTIES: readonly StandardProperty[] = [...ERC4626_PROPERTIES, ...SPECFIRST_ERC4626_PROPERTIES];
+/** The table of reports written before 2026-10-07 (see SPECFIRST_ERC4626_PROPERTIES_V1). */
+export const ERC4626_CHECK_PROPERTIES_V1: readonly StandardProperty[] = [...ERC4626_PROPERTIES, ...SPECFIRST_ERC4626_PROPERTIES_V1];

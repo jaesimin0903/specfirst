@@ -28,15 +28,16 @@ type ResultLite = Pick<StandardPropertyResult, 'id' | 'status' | 'reason'>;
  * What the run showed about exits. exits-rejected: deposit worked (upstream deposit or sf-maxDeposit-honored
  * passed) while withdraw and redeem rejected every input: the upstream withdraw and redeem properties ran out of
  * inputs, and the sf- calls reverted within the advertised max or the max was 0 for every test user.
- * not-exercised: withdraw, redeem and both sf- exit properties stopped at a Monad precompile the fork lacks, so
- * the run says nothing either way. null otherwise, including whenever a withdraw or redeem went through.
+ * not-exercised: withdraw, redeem and both sf- exit properties ended inconclusive with inputs that needed a Monad
+ * precompile the fork lacks, so the run says nothing either way. null otherwise, including whenever a withdraw or
+ * redeem went through.
  */
 export function exitEvidenceOf(results: readonly ResultLite[]): AsyncRedeemEvidence['run'] | null {
   const byId = new Map(results.map((r) => [r.id, r]));
   const status = (id: string) => byId.get(id)?.status;
   const reason = (id: string) => byId.get(id)?.reason ?? '';
   const exits = ['withdraw', 'redeem', 'sf-maxWithdraw-honored', 'sf-maxRedeem-honored'];
-  if (exits.every((id) => status(id) === 'inconclusive' && reason(id).startsWith(MISSING_PRECOMPILE_NOTE))) return 'not-exercised';
+  if (exits.every((id) => status(id) === 'inconclusive' && reason(id).includes(MISSING_PRECOMPILE_NOTE))) return 'not-exercised';
   const depositWorked = status('deposit') === 'pass' || status('sf-maxDeposit-honored') === 'pass';
   const rejected = (id: string) => status(id) === 'inconclusive' && TOO_MANY_REJECTS.test(reason(id));
   const blocked = (id: string, action: string, maxName: string) =>

@@ -511,7 +511,8 @@ contract CheckAttestationRegistryTest is Test {
         assertTrue(reg.suiteHashOf(s) != SUITE_HASH_VECTOR);
     }
 
-    /// keccak256 of the canonical JSON of ERC4626_CHECK_PROPERTIES (packages/core), the 30 properties in bit order.
+    /// keccak256 of the canonical JSON of the Morpho report's property table (ERC4626_CHECK_PROPERTIES_V1 in
+    /// packages/core, the wording before 2026-10-07), the 30 properties in bit order.
     bytes32 internal constant PROPERTIES_HASH = 0x33117c4fed6c8e64829e6397d577a69153a43774fddd609e952264514e270204;
     bytes32 internal constant SUITE_HASH_VECTOR = 0x49a246fc992c88a122f878579e0ee415f79ff4cf8c5f021b21a12d703e83023e;
 

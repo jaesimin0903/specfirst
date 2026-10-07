@@ -88,27 +88,42 @@ local-restricted-asset.json, local-partial-restricted.json, local-hook-blocked.j
   asset but refuses deposits in the vault (like Euler 0xf26d..95Bf): the probe passes, sf-maxDeposit-honored
   and sf-maxMint-honored fail with NotAuthorized() 0xea8e4eb5, the rest are inconclusive.
 
-Monad precompiles, mint funding and minimum amounts (mock-vaults.sol, used live by standards.forge.test.ts on a
-local anvil fork, no recorded JSON):
+Monad precompiles, mint funding and refusals below the bound (mock-vaults.sol, used live by
+standards.forge.test.ts on a local anvil fork started with --chain-id 143, no recorded JSON). An input whose vault
+call needed a missing precompile is discarded with an event; a property is inconclusive on that only when such
+inputs used up the reject limit.
   PrecompileVault (0x5f..71)           deposit and mint stake through Monad's staking precompile 0x1000, like
-                                       Magma gMON; forge's EVM has no such precompile. Both setUp deposit probes
-                                       stop: 30 inconclusive, skipReason missing-precompile.
-  ThresholdPrecompileVault (0x5f..72)  stakes only deposits and mints above 10 tokens, so the setUp probe passes
-                                       and the sf- properties meet the precompile themselves: inconclusive.
-  FakePrecompileTextVault (0x5f..73)   maxMint and withdraw revert with the harness's missing-precompile text and
-                                       call no precompile: maxMint and sf-maxWithdraw-honored stay fail.
+                                       Magma gMON: every input needs it, 30 inconclusive, skipReason
+                                       missing-precompile.
+  ThresholdPrecompileVault (0x5f..72)  stakes only deposits and mints above 10 tokens: no fail, the staked inputs
+                                       counted, sf-maxWithdraw and sf-maxRedeem judged with a one-token deposit.
+  FakePrecompileTextVault (0x5f..73)   maxMint and withdraw revert with precompile-sounding text and call no
+                                       precompile: maxMint and sf-maxWithdraw-honored stay fail.
   FakePrecompileSetupVault (0x5F..74)  asset() reverts with that text: 30 not_applicable, setup-reverted.
   MintSurchargeVault (0x5f..75)        mint pulls 2% plus 2 more than previewMint quotes (hyAUSD shape):
                                        previewMint fails, sf-maxMint-honored passes. The harness before 2026-10-07
                                        (1% more funding) failed sf-maxMint-honored with Panic 0x4e487b71.
   MinDepositVault (0x5f..76)           deposit and mint refuse amounts below 500,000 tokens under an unlimited max:
-                                       sf-maxDeposit-honored and sf-maxMint-honored pass with the min-amount note.
+                                       sf-maxDeposit-honored and sf-maxMint-honored pass with the below-bound count.
                                        The harness before 2026-10-07 failed both with BelowMinimum() 0x860b82a9.
-review/M.sol Vault mode 5 deposits through 0x1000; review/Exp.t.sol ForkGaps covers SfForkGaps on recorded
-state diffs (flags 0x0100, 0x1000 and 0x1001 in reverted frames, ignores other empty accounts, Ethereum
-precompiles, balance reads and a precompile the EVM has) and the tripwires the setUp probes use instead (a
-call or staticcall in a reverted frame trips them, a call elsewhere or a balance read does not, the snapshot
-removes them).
+Review PoCs (ported from the reviewer's Adv.sol, mock-vaults.sol "Review PoCs"), full checks, 16 runs where the
+fuzzer must reach a fee bug:
+  FeeVault (0x5F..91), FeeTouchVault (0x5F..92)  fee withdraw (Panic 0x11 near maxWithdraw); FeeTouch adds an
+                                       ignored staticcall to 0x1001. Both fail sf-maxWithdraw-honored with a
+                                       counterexample; FeeTouch's fail is not turned into "not judged".
+  ProbeKillVault (0x5f..93), ProbeKillControl (0x5F..94)  bonus share and fee withdraw; ProbeKill also touches
+                                       0x1001 and reverts for exactly one whole token (the old probe amount). Both
+                                       fail previewWithdraw and sf-maxWithdraw-honored; nothing stops the suites.
+  WindowVault (0x5F..95)               refuses 500,000 to 1,000,000 tokens and accepts the bound: sf-maxDeposit
+                                       passes with "N amounts below the bound were refused; the bound itself was
+                                       accepted".
+  ReenterVault (0x5f..96)              calls setUp and an sf- property back from its deposit: the guard refuses,
+                                       30 pass, no event.
+  LyingMintVault (0x5F..97)            mint pulls more than it returns: test_mint fails, sf-maxMint passes.
+review/M.sol Vault mode 5 deposits through 0x1000; review/Exp.t.sol ForkGaps covers SfForkGaps (the list only on
+chains 143 and 10143, a precompile the EVM has is left out, a staking deposit needs 0x1000, a touch that does not
+matter and a call without any precompile are the vault's own reverts, reverted frames are seen) and the SfEvents
+re-entry guard; GuardedSetUp the setUp guard.
 
 Asynchronous exits and the async-redeem trait (mock-vaults.sol, full checks on a local anvil fork in
 standards.forge.test.ts, no recorded JSON):

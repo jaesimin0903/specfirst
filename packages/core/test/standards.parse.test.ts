@@ -15,10 +15,10 @@ import {
   skipReasonOf,
   RESTRICTED_ASSET_NOTE,
   MISSING_PRECOMPILE_NOTE,
-  MISSING_PRECOMPILE_PREFIX,
+  missingPrecompileNote,
   missingPrecompilesOf,
   maxZeroNote,
-  minAmountNote,
+  belowBoundNote,
   summarize,
   type StandardPropertyResult,
 } from '../src/index.js';
@@ -450,15 +450,15 @@ describe('sf- properties whose max is 0 for every test user (max-zero events)', 
   });
 });
 
-describe('missing Monad precompile (SfForkGaps): the prefix counts only with the harness event', () => {
+describe('inputs not judged because they needed a Monad precompile (missing-precompile events)', () => {
   const STAKING = '0x0000000000000000000000000000000000001000';
-  const text = (addr: string) => `${MISSING_PRECOMPILE_PREFIX} (${addr})`;
-  const setUpKey = 'setUp()';
   const depKey = 'test_sf_maxDeposit_honored(uint256,uint256)';
   const mintKey = 'test_sf_maxMint_honored(uint256,uint256)';
   const sel = (key: string) => toFunctionSelector(key);
   const sfDeposit = SPECFIRST_ERC4626_PROPERTIES[0]!;
   const sfMint = SPECFIRST_ERC4626_PROPERTIES[1]!;
+  const lines = (key: string, n: number, addr = STAKING) => Array.from({ length: n }, () => `${sel(key)} ${addr}`).join('\n');
+  const rejected = { status: 'Failure', reason: '`vm.assume` rejected too many inputs (4096 allowed)', counterexample: null, kind: { Fuzz: { runs: 0 } } };
   const failure = (reason: string) => ({
     status: 'Failure',
     reason,
@@ -466,96 +466,82 @@ describe('missing Monad precompile (SfForkGaps): the prefix counts only with the
     decoded_logs: [],
     kind: { Fuzz: { runs: 2 } },
   });
-  const setUpDoc = (reason: string) => JSON.stringify({ 't:S': { test_results: { [setUpKey]: { status: 'Failure', reason, counterexample: null } } } });
-  const testDoc = (tests: Record<string, unknown>) => JSON.stringify({ 't:SpecfirstMaxHonored': { test_results: tests } });
+  const doc = (tests: Record<string, unknown>) => JSON.stringify({ 't:SpecfirstMaxHonored': { test_results: tests } });
 
-  it('setUp stopped by the deposit probe, with the event: every property inconclusive, skipReason missing-precompile, exit 17', () => {
-    const results = parseStandardForgeJson(setUpDoc(text(STAKING)), ERC4626_CHECK_PROPERTIES, { missingPrecompileEvents: `${sel(setUpKey)} ${STAKING}\n` })!;
-    expect(summarize(results)).toEqual({ pass: 0, fail: 0, inconclusive: 30, notApplicable: 0 });
-    expect(new Set(results.map((r) => r.reason))).toEqual(new Set([`${MISSING_PRECOMPILE_NOTE} (${STAKING})`]));
+  it('the note names the precompile and says the inputs were not judged, never that the vault is not to blame', () => {
+    expect(missingPrecompileNote(STAKING)).toBe(`a vault call reached Monad precompile ${STAKING}, which forge lacks; these inputs were not judged`);
+    expect(missingPrecompileNote(STAKING, 7)).toBe(`a vault call reached Monad precompile ${STAKING}, which forge lacks, in 7 inputs; these inputs were not judged`);
+    expect(missingPrecompileNote(STAKING).startsWith(MISSING_PRECOMPILE_NOTE)).toBe(true);
+    expect(missingPrecompileNote(STAKING)).not.toMatch(/attributable/);
+  });
+
+  it('out of inputs with every rejected input accounted for by the events: inconclusive, the precompile named; all of them: skipReason missing-precompile', () => {
+    const results = parseStandardForgeJson(doc({ [depKey]: rejected, [mintKey]: rejected }), [sfDeposit, sfMint], {
+      missingPrecompileEvents: `${lines(depKey, 4096)}\n${lines(mintKey, 4096)}`,
+    })!;
+    expect(results.map((r) => [r.status, r.reason])).toEqual([
+      ['inconclusive', missingPrecompileNote(STAKING)],
+      ['inconclusive', missingPrecompileNote(STAKING)],
+    ]);
     expect(skipReasonOf(results)).toBe('missing-precompile');
     expect(standardCheckExitCode(summarize(results))).toBe(17);
   });
 
-  it('the same setUp text without the event (a vault reverting with it) stays setup-reverted', () => {
-    const results = parseStandardForgeJson(setUpDoc(text(STAKING)), ERC4626_CHECK_PROPERTIES, { missingPrecompileEvents: '' })!;
-    expect(summarize(results)).toEqual({ pass: 0, fail: 0, inconclusive: 0, notApplicable: 30 });
-    expect(results[0]!.reason).toBe(`setUp failed: ${text(STAKING)}`);
+  it('fewer events than the reject limit: still inconclusive on rejected inputs, with the count; skipReason when every property is so', () => {
+    const results = parseStandardForgeJson(doc({ [depKey]: rejected }), [sfDeposit], { missingPrecompileEvents: lines(depKey, 4095) })!;
+    expect(results[0]).toMatchObject({ status: 'inconclusive', reason: `\`vm.assume\` rejected too many inputs (4096 allowed); ${missingPrecompileNote(STAKING, 4095)}` });
+    expect(skipReasonOf(results)).toBe('missing-precompile');
+    const one = parseStandardForgeJson(doc({ [depKey]: rejected, [mintKey]: rejected }), [sfDeposit, sfMint], { missingPrecompileEvents: lines(depKey, 10) })!;
+    expect(skipReasonOf(one)).toBeNull();
+  });
+
+  it('a fail keeps its status, reason and counterexample; the events only add a count', () => {
+    const reason = 'withdraw(5) reverted with selector 0x4e487b71 while maxWithdraw is 9';
+    const [r] = parseStandardForgeJson(doc({ [depKey]: failure(reason) }), [sfDeposit], { missingPrecompileEvents: lines(depKey, 12, '0x0000000000000000000000000000000000001001') })!;
+    expect(r!.status).toBe('fail');
+    expect(r!.reason).toBe(`${reason}; ${missingPrecompileNote('0x0000000000000000000000000000000000001001', 12)}`);
+    expect(r!.counterexample).toEqual({ calls: ['test_sf_maxDeposit_honored(1, 2)'], calldata: '0xab', logs: [] });
+  });
+
+  it('a pass keeps its status with the count; a setUp revert is never read as a precompile', () => {
+    const [r] = parseStandardForgeJson(doc({ [depKey]: { status: 'Success', reason: null, counterexample: null, kind: { Fuzz: { runs: 16 } } } }), [sfDeposit], {
+      missingPrecompileEvents: lines(depKey, 3),
+    })!;
+    expect(r).toMatchObject({ status: 'pass', runs: 16, reason: missingPrecompileNote(STAKING, 3) });
+    const setUp = JSON.stringify({ 't:S': { test_results: { 'setUp()': { status: 'Failure', reason: 'specfirst: fork lacks a Monad precompile the vault calls (0x1000)', counterexample: null } } } });
+    const results = parseStandardForgeJson(setUp, [sfDeposit], { missingPrecompileEvents: `${toFunctionSelector('setUp()')} ${STAKING}` })!;
+    expect(results[0]).toMatchObject({ status: 'not_applicable' });
     expect(skipReasonOf(results)).toBe('setup-reverted');
   });
 
-  it('the address in the reason comes from the event, never from the revert text', () => {
-    const [r] = parseStandardForgeJson(setUpDoc(text('0x000000000000000000000000000000000000dEaD')), [sfDeposit], {
-      missingPrecompileEvents: `${sel(setUpKey)} ${STAKING}`,
-    })!;
-    expect(r).toMatchObject({ status: 'inconclusive', reason: `${MISSING_PRECOMPILE_NOTE} (${STAKING})` });
-  });
-
-  it('an sf- property stopped in its own run, with its event: inconclusive, counterexample dropped', () => {
-    const [r] = parseStandardForgeJson(testDoc({ [depKey]: failure(text(STAKING)) }), [sfDeposit], { missingPrecompileEvents: `${sel(depKey)} ${STAKING}` })!;
-    expect(r).toEqual({ id: sfDeposit.id, test: sfDeposit.test, description: sfDeposit.description, status: 'inconclusive', runs: 2, reason: `${MISSING_PRECOMPILE_NOTE} (${STAKING})` });
-  });
-
-  it('the prefix without an event for that test, or not at the start, stays fail', () => {
-    const results = parseStandardForgeJson(
-      testDoc({ [depKey]: failure(text(STAKING)), [mintKey]: failure(`x ${text(STAKING)}`) }),
-      [sfDeposit, sfMint],
-      { missingPrecompileEvents: `${sel(mintKey)} ${STAKING}` },
-    )!;
-    expect(results.map((r) => [r.id, r.status])).toEqual([
-      ['sf-maxDeposit-honored', 'fail'],
-      ['sf-maxMint-honored', 'fail'],
-    ]);
-  });
-
-  it('an event never changes a property that passed or failed for another reason', () => {
-    const events = `${sel(depKey)} ${STAKING}\n${sel(mintKey)} ${STAKING}`;
-    const results = parseStandardForgeJson(
-      testDoc({ [depKey]: { status: 'Success', reason: null, counterexample: null }, [mintKey]: failure('mint(5) reverted with selector 0x12345678 while maxMint is 9') }),
-      [sfDeposit, sfMint],
-      { missingPrecompileEvents: events },
-    )!;
-    expect(results.map((r) => r.status)).toEqual(['pass', 'fail']);
-  });
-
-  it('missingPrecompilesOf: "<selector> <address>" lines, first address per test, unknown selectors and malformed lines ignored', () => {
+  it('missingPrecompilesOf: one line per input, counted per test with the first precompile; unknown selectors and malformed lines ignored', () => {
     const m = missingPrecompilesOf(
-      [`${sel(depKey)} ${STAKING}`, `${sel(depKey)} 0x0000000000000000000000000000000000001001`, `${sel(mintKey)}`, 'garbage', `0x12345678 ${STAKING}`].join('\n'),
+      [lines(depKey, 2), `${sel(depKey)} 0x0000000000000000000000000000000000001001`, `${sel(mintKey)}`, 'garbage', `0x12345678 ${STAKING}`].join('\n'),
       [depKey, mintKey],
     );
-    expect([...m]).toEqual([['test_sf_maxDeposit_honored', STAKING]]);
-  });
-
-  it('some sf- properties stopped while others ran: no skipReason', () => {
-    const results = parseStandardForgeJson(
-      testDoc({ [depKey]: failure(text(STAKING)), [mintKey]: { status: 'Success', reason: null, counterexample: null } }),
-      [sfDeposit, sfMint],
-      { missingPrecompileEvents: `${sel(depKey)} ${STAKING}` },
-    )!;
-    expect(results.map((r) => r.status)).toEqual(['inconclusive', 'pass']);
-    expect(skipReasonOf(results)).toBeNull();
+    expect([...m]).toEqual([['test_sf_maxDeposit_honored', { count: 3, precompile: STAKING }]]);
   });
 });
 
-describe('minimum-amount refusals on sf- properties (min-amount events)', () => {
+describe('refusals below the bound on sf- properties (below-bound events)', () => {
   const depKey = 'test_sf_maxDeposit_honored(uint256,uint256)';
   const sfDeposit = SPECFIRST_ERC4626_PROPERTIES[0]!;
   const doc = (r: unknown) => JSON.stringify({ 't:SpecfirstMaxHonored': { test_results: { [depKey]: r } } });
 
-  it('discards are counted per test and noted on a pass, status unchanged', () => {
+  it('counted per test and noted on a pass, status unchanged; the note claims no minimum', () => {
     const sel = toFunctionSelector(depKey);
     const [r] = parseStandardForgeJson(doc({ status: 'Success', reason: null, counterexample: null, kind: { Fuzz: { runs: 16 } } }), [sfDeposit], {
-      minAmountEvents: `${sel}\n${sel}\n`,
+      belowBoundEvents: `${sel}\n${sel}\n`,
     })!;
-    expect(r).toMatchObject({ status: 'pass', runs: 16, reason: minAmountNote(2) });
-    expect(minAmountNote(2)).toBe('a smaller amount reverted 2 times while the upper bound went through (a minimum amount, which no max sentence covers; inputs discarded)');
+    expect(r).toMatchObject({ status: 'pass', runs: 16, reason: belowBoundNote(2) });
+    expect(belowBoundNote(2)).toBe('2 amounts below the bound were refused; the bound itself was accepted');
   });
 
   it('a fail keeps its reason first, the note follows', () => {
     const [r] = parseStandardForgeJson(doc({ status: 'Failure', reason: 'redeem(1) reverted with selector 0x03f7f64c while maxRedeem is 1', counterexample: null }), [sfDeposit], {
-      minAmountEvents: toFunctionSelector(depKey),
+      belowBoundEvents: toFunctionSelector(depKey),
     })!;
     expect(r!.status).toBe('fail');
-    expect(r!.reason).toBe(`redeem(1) reverted with selector 0x03f7f64c while maxRedeem is 1; ${minAmountNote(1)}`);
+    expect(r!.reason).toBe(`redeem(1) reverted with selector 0x03f7f64c while maxRedeem is 1; ${belowBoundNote(1)}`);
   });
 });

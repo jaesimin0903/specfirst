@@ -450,3 +450,102 @@ contract PrecompileAsyncVault is VaultBase {
     function withdraw(uint256, address, address) public pure override returns (uint256) { revert(); }
     function redeem(uint256, address, address) public pure override returns (uint256) { revert(); }
 }
+
+// Review PoCs (2026-10-07), ported from the reviewer's Adv.sol. Each is a regression for one finding.
+
+/// sLVMON shape: withdraw burns a fee on top of the assets, maxWithdraw ignores it, so withdraw near the max
+/// burns more shares than the owner holds and reverts (Panic 0x11).
+contract FeeVault is VaultBase {
+    function burnFor(uint256 a) public pure returns (uint256) { return a + a / 2000 + 1; }
+
+    function withdraw(uint256 a, address r, address o) public virtual override returns (uint256 s) {
+        s = burnFor(a);
+        _spend(o, s);
+        IERC20Min(asset()).transfer(r, a);
+    }
+}
+
+/// The same fee bug plus one staticcall to Monad's reserve balance precompile whose answer is ignored. The
+/// precompile does not decide the revert, so the fail must stay a fail.
+contract FeeTouchVault is FeeVault {
+    function withdraw(uint256 a, address r, address o) public override returns (uint256 s) {
+        (bool ok,) = address(0x1001).staticcall(hex"3a61584e");
+        ok;
+        return super.withdraw(a, r, o);
+    }
+}
+
+/// Real bugs (one bonus share per deposit, the fee withdraw) and a deposit that touches 0x1001 and reverts for
+/// exactly one whole token, the amount the old setUp probes deposited. It must not stop the suites.
+contract ProbeKillVault is FeeVault {
+    function bonus(uint256 assets) internal pure override returns (uint256) { return assets > 0 ? 1 : 0; }
+
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        if (a == 1e6) {
+            (bool ok,) = address(0x1001).staticcall("");
+            ok;
+            revert();
+        }
+        return super.deposit(a, r);
+    }
+}
+
+/// ProbeKillVault without the special case: the fails ProbeKillVault must keep.
+contract ProbeKillControl is FeeVault {
+    function bonus(uint256 assets) internal pure override returns (uint256) { return assets > 0 ? 1 : 0; }
+}
+
+/// Refuses deposits in a window just under the cap (500,000 to 1,000,000 tokens), not below a minimum, and
+/// accepts the bound itself. Those refusals are counted below the bound, never called a minimum.
+contract WindowVault is VaultBase {
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        if (a > 500_000e6 && a < 1_000_000e6) revert("window");
+        return super.deposit(a, r);
+    }
+}
+
+interface ISfReenter {
+    function setUp() external;
+    function test_sf_maxDeposit_honored(uint256 who, uint256 amount) external;
+}
+
+/// From its own deposit, calls back into the running test contract (setUp() and an sf- property) at the
+/// addresses its deployer's first nonces give. In the nested call its deposit needs 0x1001 to answer, so without
+/// a guard the harness itself would record missing-precompile events for the nested call; the vault catches the
+/// nested revert and its outer deposit goes through.
+contract ReenterVault is VaultBase {
+    uint256 internal depth;
+
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        if (depth == 1) {
+            (bool ok, bytes memory ret) = address(0x1001).staticcall(hex"3a61584e");
+            require(ok && ret.length == 32);
+        }
+        if (depth == 0) {
+            depth = 1;
+            for (uint64 n = 0; n < 4; n++) {
+                address t = _created(tx.origin, n);
+                if (t.code.length == 0) continue;
+                try ISfReenter(t).setUp() {} catch {}
+                try ISfReenter(t).test_sf_maxDeposit_honored(0, 1e6) {} catch {}
+            }
+            depth = 0;
+        }
+        return super.deposit(a, r);
+    }
+
+    function _created(address d, uint64 n) internal pure returns (address) {
+        if (n == 0) return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xd6), bytes1(0x94), d, bytes1(0x80))))));
+        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xd6), bytes1(0x94), d, uint8(n))))));
+    }
+}
+
+/// mint pulls more than previewMint quotes and returns the quote, not what it pulled. Twice the quote in funding
+/// must not hide it: test_mint (assets moved equal the return value) and test_previewMint fail.
+contract LyingMintVault is VaultBase {
+    function mint(uint256 s, address r) public override returns (uint256) {
+        IERC20Min(asset()).transferFrom(msg.sender, address(this), s + s / 50 + 2);
+        balanceOf[r] += s; totalSupply += s;
+        return s;
+    }
+}

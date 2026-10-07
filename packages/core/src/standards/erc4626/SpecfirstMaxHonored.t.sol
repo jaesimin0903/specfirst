@@ -29,26 +29,16 @@ interface ISfVault {
 
 /// Precompiles Monad has and forge's EVM lacks (docs.monad.xyz, "Precompiles"): P256 signature verification at
 /// 0x0100 (EIP-7951, not in forge's prague), staking at 0x1000 and the reserve balance check at 0x1001. On a
-/// fork a call to one of them reaches an empty account, succeeds and returns nothing, so the calling vault
-/// reverts for a reason the real chain does not have (Magma gMON deposits through the staking precompile).
-/// Used by both suites' setUp and by the sf- properties; MIT, so the AGPL harness may import it.
+/// fork of Monad a call to one of them reaches an empty account, succeeds and returns nothing, so the calling
+/// vault can revert for a reason the real chain does not have (Magma gMON deposits through the staking
+/// precompile). Used by both suites; MIT, so the AGPL harness may import it.
 library SfForkGaps {
     Vm private constant VM = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
-    string internal constant PREFIX = "specfirst: fork lacks a Monad precompile the vault calls";
 
-    /// The first listed precompile the recorded calls reached while this EVM does not have it; 0 when none.
-    /// Only call accesses count (call, delegatecall, callcode, staticcall), including those in reverted frames.
-    function missingCalled(Vm.AccountAccess[] memory acc) internal view returns (address) {
-        for (uint256 i = 0; i < acc.length; i++) {
-            if (uint256(acc[i].kind) > uint256(VmSafe.AccountAccessKind.StaticCall)) continue;
-            address p = acc[i].account;
-            if (_knownAnswer(p).length != 0 && _missing(p)) return p;
-        }
-        return address(0);
-    }
-
-    /// The listed precompiles this EVM lacks. Read before any tripwire is armed.
+    /// The listed precompiles this EVM lacks, on a fork of Monad mainnet (143) or testnet (10143) only: on any
+    /// other chain these addresses mean nothing, and a vault calling them is judged like any other call.
     function missingPrecompiles() internal view returns (address[] memory gaps) {
+        if (block.chainid != 143 && block.chainid != 10143) return new address[](0);
         address[3] memory listed = [address(0x0100), address(0x1000), address(0x1001)];
         uint256 n;
         gaps = new address[](listed.length);
@@ -60,36 +50,55 @@ library SfForkGaps {
         }
     }
 
-    /// For setUp, where state diff recording must not be used: forge 1.5.1 keeps recording after
-    /// stopAndReturnStateDiff (it resets the list instead of ending it), and every fuzz run of every property
-    /// then pays for it (half again the CPU of a property that rejects 4096 inputs). Instead each missing
-    /// precompile gets a tripwire, code that reads one storage slot and stops, so a call to it still succeeds
-    /// with no data as the empty account does, and vm.record notes the read even inside a frame that reverted.
-    /// Arm inside a state snapshot that is reverted afterwards, run the call, then read `tripped`.
-    function armTripwires(address[] memory gaps) internal {
-        for (uint256 i = 0; i < gaps.length; i++) {
-            VM.etch(gaps[i], hex"6000545000");
+    /// The first of `gaps` the recorded calls reached; 0 when none. Only call accesses count (call,
+    /// delegatecall, callcode, staticcall), including those in frames that reverted.
+    function missingCalled(Vm.AccountAccess[] memory acc, address[] memory gaps) internal pure returns (address) {
+        for (uint256 i = 0; i < acc.length; i++) {
+            if (uint256(acc[i].kind) > uint256(VmSafe.AccountAccessKind.StaticCall)) continue;
+            for (uint256 j = 0; j < gaps.length; j++) {
+                if (acc[i].account == gaps[j]) return gaps[j];
+            }
         }
-        VM.record();
+        return address(0);
     }
 
-    /// The first armed precompile whose tripwire was reached since armTripwires; 0 when none. Stops recording.
-    function tripped(address[] memory gaps) internal returns (address hit) {
-        for (uint256 i = 0; i < gaps.length && hit == address(0); i++) {
-            (bytes32[] memory reads,) = VM.accesses(gaps[i]);
-            if (reads.length != 0) hit = gaps[i];
+    /**
+     * A call of `caller` to `target` reverted with `ret`. Returns the missing precompile it depends on, or 0 when
+     * the revert is the vault's own. Two reruns, inside a state snapshot that is always restored:
+     * 1. with state diffs recorded, to see whether the call reaches a missing precompile at all;
+     * 2. when it does, with every missing precompile answering plausibly (vm.mockCall over a byte of code): a
+     *    vault that only touches a precompile and reverts anyway (an ignored staticcall, a fee bug) reverts
+     *    the same way again and keeps its verdict; one whose call goes through, or reverts differently, needed
+     *    the precompile, and the input is not judged.
+     * Runs only after a revert. forge 1.5.1 keeps state diff recording on after stopAndReturnStateDiff for the
+     * rest of the fuzz run, and every caller here either discards the input or ends the run soon after, so the
+     * properties do not pay for it.
+     */
+    function precompileCause(address target, address caller, bytes memory data, bytes memory ret) internal returns (address p) {
+        address[] memory gaps = missingPrecompiles();
+        if (gaps.length == 0) return address(0);
+        uint256 snap = VM.snapshotState();
+        VM.startStateDiffRecording();
+        VM.prank(caller);
+        (bool okAgain,) = target.call(data);
+        Vm.AccountAccess[] memory acc = VM.stopAndReturnStateDiff();
+        address reached = okAgain ? address(0) : missingCalled(acc, gaps);
+        if (reached != address(0)) {
+            for (uint256 i = 0; i < gaps.length; i++) {
+                VM.etch(gaps[i], hex"00");
+                VM.mockCall(gaps[i], bytes(""), _plausibleAnswer(gaps[i]));
+            }
+            VM.prank(caller);
+            (bool okMocked, bytes memory retMocked) = target.call(data);
+            VM.clearMockedCalls();
+            if (okMocked || keccak256(retMocked) != keccak256(ret)) p = reached;
         }
-        VM.stopRecord();
-    }
-
-    /// The revert text of a test or setUp stopped by `p`. The runner trusts it only with the matching event.
-    function reason(address p) internal pure returns (string memory) {
-        return string.concat(PREFIX, " (", VM.toString(p), ")");
+        VM.revertToStateAndDelete(snap);
     }
 
     /// No code, and an input the real precompile answers with data (or refuses) succeeds with no data: the
     /// account is empty here. An EVM that has the precompile (a Monad build of forge, say) is not flagged.
-    function _missing(address p) internal view returns (bool) {
+    function _missing(address p) private view returns (bool) {
         if (p.code.length != 0) return false;
         (bool ok, bytes memory ret) = p.staticcall(_knownAnswer(p));
         return ok && ret.length == 0;
@@ -105,6 +114,42 @@ library SfForkGaps {
         if (p == address(0x1001)) return hex"3a61584e";
         return "";
     }
+
+    /// What the mocked precompile answers: P256 a valid signature (1); the reserve balance check false (not
+    /// dipped into reserve); the staking precompile eight words of 1, which decode as true, 1 or address 1 for
+    /// the static return shapes of its functions (delegate's bool, getEpoch's uint64 and bool, and so on).
+    function _plausibleAnswer(address p) private pure returns (bytes memory) {
+        if (p == address(0x0100)) return abi.encode(uint256(1));
+        if (p == address(0x1001)) return abi.encode(false);
+        return abi.encode(uint256(1), uint256(1), uint256(1), uint256(1), uint256(1), uint256(1), uint256(1), uint256(1));
+    }
+}
+
+/// Event files under sf-events/ (the only path fs_permissions lets forge write): one line per discarded input,
+/// the running test's selector first. Shared by both suites; the runner counts them per property.
+library SfEvents {
+    Vm private constant VM = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    /// forge calls setUp and every test from the run's sender, so there msg.sender is tx.origin. A vault that
+    /// calls back into the test contract makes itself msg.sender, never an EOA. Entry points and event writers
+    /// refuse such a call, so a vault cannot plant events or run part of a property inside its own call.
+    function notReentered() internal view {
+        if (msg.sender != tx.origin) revert("specfirst: re-entered from inside a vault call");
+    }
+
+    /// Appends "<selector of the running test><extra>" to sf-events/<SF_RUN_ID>.<kind>.log. No-op when SF_RUN_ID
+    /// is unset.
+    function write(string memory kind, string memory extra) internal {
+        notReentered();
+        string memory runId = VM.envOr("SF_RUN_ID", string(""));
+        if (bytes(runId).length == 0) return;
+        VM.writeLine(string.concat("sf-events/", runId, ".", kind, ".log"), string.concat(VM.toString(abi.encodePacked(msg.sig)), extra));
+    }
+
+    /// An input not judged because its vault call needed a Monad precompile this fork lacks (SfForkGaps).
+    function missingPrecompile(address p) internal {
+        write("missing-precompile", string.concat(" ", VM.toString(p)));
+    }
 }
 
 /// EIP-4626 says maxDeposit, maxMint, maxWithdraw and maxRedeem return the most the matching call accepts
@@ -117,11 +162,12 @@ library SfForkGaps {
 /// answer for a disabled action; each such discard is recorded so the runner can report a property whose
 /// max was always 0 as not applicable), and a failed setup step (funding, approve, the deposit that gives
 /// the user shares) discards the input too. Users come from the same salted 16-address pool as the harness.
-/// Two more rules keep other causes off the max properties: an amount below the bound that reverts is tried
-/// again at the bound, and when the bound goes through the refusal was a minimum amount (no max sentence
-/// covers it), so the input is discarded and recorded; and a revert that reached a precompile Monad has and
-/// this fork lacks (SfForkGaps) ends the test with a fixed prefix and an event, which the runner reports as
-/// inconclusive.
+/// Two more rules keep other causes off the max properties. An amount below the bound min(max, cap) that
+/// reverts is tried again at the bound: EIP-4626 constrains max as an upper bound of what is accepted, so when
+/// the bound goes through the input is discarded and counted, and when it reverts too the property fails. And
+/// a revert that needed a precompile Monad has and this fork lacks (SfForkGaps.precompileCause) discards that
+/// input with an event; other inputs keep being judged, and the runner reports the property inconclusive only
+/// when such inputs alone used up forge's reject limit.
 contract SpecfirstMaxHonored is Test {
     using stdStorage for StdStorage;
 
@@ -132,12 +178,12 @@ contract SpecfirstMaxHonored is Test {
     uint256 internal poolSalt;
 
     function setUp() public virtual {
+        SfEvents.notReentered();
         vault = vm.envAddress("SF_VAULT");
         asset = ISfVault(vault).asset();
         cap = 1_000_000 * 10 ** uint256(_decimalsOr18(asset));
         poolSalt = vm.envOr("SF_POOL_SALT", uint256(keccak256("specfirst.erc4626.pool")));
         _probeAssetTransfers();
-        _probeDepositPrecompiles();
     }
 
     /// Same probe as the upstream harness: pool members 0 and 1 try to move one whole token of the asset,
@@ -159,36 +205,6 @@ contract SpecfirstMaxHonored is Test {
         if (given && !(ok && (ret.length == 0 || (ret.length >= 32 && abi.decode(ret, (bool)))))) {
             revert(string.concat("specfirst: asset transfers are restricted for test users (", _refusal(ok, ret), ")"));
         }
-    }
-
-    /// Same probe as the upstream harness: pool member 0 deposits one whole token, and the state is restored.
-    /// When the deposit reverts, it runs again with tripwires on the missing precompiles (SfForkGaps); one that
-    /// was reached ends setUp with SfForkGaps' prefix and an event. Any other outcome leaves the properties to
-    /// judge the vault.
-    function _probeDepositPrecompiles() internal {
-        address from = _poolMember(0);
-        uint256 amount = cap / 1_000_000;
-        uint256 snap = vm.snapshotState();
-        address missing;
-        if (_tryGive(from, amount)) {
-            vm.prank(from);
-            (bool approved,) = asset.call(abi.encodeWithSelector(0x095ea7b3, vault, amount));
-            bytes memory deposit = abi.encodeCall(ISfVault.deposit, (amount, from));
-            bool ok = true;
-            if (approved) {
-                vm.prank(from);
-                (ok,) = vault.call(deposit);
-            }
-            address[] memory gaps = ok ? new address[](0) : SfForkGaps.missingPrecompiles();
-            if (gaps.length != 0) {
-                SfForkGaps.armTripwires(gaps);
-                vm.prank(from);
-                (ok,) = vault.call(deposit);
-                missing = SfForkGaps.tripped(gaps);
-            }
-        }
-        vm.revertToStateAndDelete(snap);
-        if (missing != address(0)) _stopOnMissingPrecompile(missing);
     }
 
     function _tryGive(address to, uint256 amount) internal returns (bool) {
@@ -276,32 +292,35 @@ contract SpecfirstMaxHonored is Test {
         _failMax(ret, "redeem", s, "maxRedeem", max);
     }
 
-    /// Calls the vault as `u` with state diffs recorded. A revert that reached a precompile Monad has and this
-    /// fork lacks says nothing about the vault, so the test stops (see _stopOnMissingPrecompile).
+    /// Calls the vault as `u`. A revert that needed a precompile Monad has and this fork lacks
+    /// (SfForkGaps.precompileCause) says nothing about the vault: that input is recorded and discarded, and the
+    /// property goes on with others. Any other revert is returned for the caller to judge.
     function _callVault(address u, bytes memory data) internal returns (bool ok, bytes memory ret) {
-        vm.startStateDiffRecording();
         vm.prank(u);
         (ok, ret) = vault.call(data);
-        Vm.AccountAccess[] memory acc = vm.stopAndReturnStateDiff();
-        if (!ok) {
-            address missing = SfForkGaps.missingCalled(acc);
-            if (missing != address(0)) _stopOnMissingPrecompile(missing);
-        }
+        if (!ok) _discardIfPrecompile(u, data, ret);
+    }
+
+    function _discardIfPrecompile(address u, bytes memory data, bytes memory ret) internal {
+        address p = SfForkGaps.precompileCause(vault, u, data, ret);
+        if (p == address(0)) return;
+        SfEvents.missingPrecompile(p);
+        vm.assume(false);
     }
 
     /// An amount below the bound reverted. The same action at the bound is tried with the state restored
     /// afterwards (deposit and mint are funded for it first, withdraw and redeem use the shares already
-    /// held). When the bound goes through, the vault refused a small amount, which no max sentence covers:
-    /// the input is discarded and recorded. When the bound reverts too, or the retry cannot be set up, this
-    /// returns and the caller fails: nothing here discards on its own, so a vault cannot turn a fail into a
-    /// discard by making the retry's setup revert.
+    /// held). When the bound goes through, the max held as an upper bound: the input is discarded and counted
+    /// (below-bound). When the bound reverts too, or the retry cannot be set up, this returns and the caller
+    /// fails: nothing here discards on its own, so a vault cannot turn a fail into a discard by making the
+    /// retry's setup revert. A bound that needs a missing precompile is not judged (_callVault).
     function _discardIfAcceptedAt(address u, bytes memory atBound, uint256 funding) internal {
         uint256 snap = vm.snapshotState();
         bool ok;
         if (funding == 0 || _tryFund(u, funding)) (ok,) = _callVault(u, atBound);
         vm.revertToStateAndDelete(snap);
         if (!ok) return;
-        _recordEvent("min-amount");
+        _recordEvent("below-bound");
         vm.assume(false);
     }
 
@@ -330,19 +349,6 @@ contract SpecfirstMaxHonored is Test {
         return 2 * need + cap / 1_000_000;
     }
 
-    /// Records the precompile with the running test's selector (sf-events/<run>.missing-precompile.log) and
-    /// stops with SfForkGaps' prefix. The runner reports inconclusive only when both are there: a vault can
-    /// revert with the same text, but it cannot write the event, which follows the recorded state diff alone.
-    function _stopOnMissingPrecompile(address missing) internal {
-        string memory runId = vm.envOr("SF_RUN_ID", string(""));
-        if (bytes(runId).length != 0) {
-            vm.writeLine(
-                string.concat("sf-events/", runId, ".missing-precompile.log"), string.concat(vm.toString(abi.encodePacked(msg.sig)), " ", vm.toString(missing))
-            );
-        }
-        revert(SfForkGaps.reason(missing));
-    }
-
     function _selectorOf(bytes memory ret) internal pure returns (string memory) {
         if (ret.length == 0) return "no revert data";
         if (ret.length < 4) return "short revert data";
@@ -362,25 +368,41 @@ contract SpecfirstMaxHonored is Test {
         vm.assume(false);
     }
 
-    /// Appends the running test's selector to sf-events/<SF_RUN_ID>.<kind>.log. No-op when SF_RUN_ID is unset.
     function _recordEvent(string memory kind) internal {
-        string memory runId = vm.envOr("SF_RUN_ID", string(""));
-        if (bytes(runId).length == 0) return;
-        vm.writeLine(string.concat("sf-events/", runId, ".", kind, ".log"), vm.toString(abi.encodePacked(msg.sig)));
+        SfEvents.write(kind, "");
     }
 
-    /// Deposits a bounded amount for `u` so it holds shares; any failure here discards the input, except a
-    /// revert at a precompile this fork lacks, which stops the test as in _callVault. Setup only: a maxDeposit
-    /// of 0 does not stop it (the cap is tried, as in the upstream harness), so a vault that reports 0
-    /// everywhere still gets its maxWithdraw and maxRedeem looked at.
+    /// Deposits a bounded amount for `u` so it holds shares. Setup only: a maxDeposit of 0 does not stop it (the
+    /// cap is tried, as in the upstream harness), so a vault that reports 0 everywhere still gets its
+    /// maxWithdraw and maxRedeem looked at. When that amount is refused, one whole token (or the max when it is
+    /// smaller) is tried, so a vault that only refuses large deposits (one that stakes them through a
+    /// precompile the fork lacks, say) still has its withdraw and redeem judged. When neither goes through the
+    /// input is discarded, and recorded when the refusal needed a missing precompile.
     function _holdShares(address u, uint256 amount) internal {
         uint256 maxDep = _read(abi.encodeCall(ISfVault.maxDeposit, (u)));
         uint256 hi = maxDep > 0 && maxDep < cap ? maxDep : cap;
         uint256 a = bound(amount, 1, hi);
-        vm.assume(_read(abi.encodeCall(ISfVault.previewDeposit, (a))) > 0);
+        (bool ran, bool ok, bytes memory ret) = _tryDeposit(u, a);
+        if (ok) return;
+        uint256 unit = cap / 1_000_000 < hi ? cap / 1_000_000 : hi;
+        if (a > unit) {
+            a = unit;
+            (ran, ok, ret) = _tryDeposit(u, a);
+            if (ok) return;
+        }
+        if (ran) _discardIfPrecompile(u, abi.encodeCall(ISfVault.deposit, (a, u)), ret);
+        vm.assume(false);
+    }
+
+    /// Funds `u` with `a` and deposits it as `u`. ran is false when previewDeposit(a) is 0 or reverts, and then
+    /// nothing is called.
+    function _tryDeposit(address u, uint256 a) internal returns (bool ran, bool ok, bytes memory ret) {
+        (bool quoted, uint256 shares) = _tryRead(abi.encodeCall(ISfVault.previewDeposit, (a)));
+        if (!quoted || shares == 0) return (false, false, ret);
         _fund(u, a);
-        (bool ok,) = _callVault(u, abi.encodeCall(ISfVault.deposit, (a, u)));
-        vm.assume(ok);
+        vm.prank(u);
+        (ok, ret) = vault.call(abi.encodeCall(ISfVault.deposit, (a, u)));
+        ran = true;
     }
 
     /// A view call on the vault; a revert or a short answer discards the input.
@@ -390,7 +412,9 @@ contract SpecfirstMaxHonored is Test {
         return abi.decode(ret, (uint256));
     }
 
+    /// First call of every property: also refuses to run when called back from inside a vault call.
     function _user(uint256 who) internal view returns (address u) {
+        SfEvents.notReentered();
         u = _poolMember(who % USER_POOL);
         vm.assume(u.code.length == 0 && uint160(u) > 0xffff && u != vault && u != asset);
     }

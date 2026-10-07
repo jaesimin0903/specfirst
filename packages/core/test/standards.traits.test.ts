@@ -5,11 +5,11 @@ import { toFunctionSelector, type Address, type Hex } from 'viem';
 import { describe, expect, it } from 'vitest';
 import {
   ASYNC_REDEEM_REQUEST_FUNCTIONS,
-  MISSING_PRECOMPILE_NOTE,
   detectTraits,
   erc7540InterfacesOf,
   exitEvidenceOf,
   maxZeroNote,
+  missingPrecompileNote,
   pushedSelectors,
   requestFunctionsIn,
   standardCheckReportSchema,
@@ -25,6 +25,7 @@ const report = async (address: string, file: string) =>
 const UPSHIFT = () => report('0xd793c04b87386a6bb84ee61d98e0065fde7fda5e', '109195820-2360d95c83b2c541.json');
 const MORPHO = () => report('0x802c91d807a8daca257c4708ab264b6520964e44', '109195820-45882207749f22e5.json');
 
+const STAKING = '0x0000000000000000000000000000000000001000';
 const REQUEST_REDEEM = toFunctionSelector('requestRedeem(uint256,address,address)').slice(2);
 const GVAULT = toFunctionSelector('requestRedeemGVault(uint256,address,address,uint64)').slice(2);
 /** PUSH4 <selector> EQ, the way solc's dispatcher compares. */
@@ -76,10 +77,13 @@ describe('exitEvidenceOf', () => {
     expect(exitEvidenceOf(noDeposit)).toBeNull();
   });
 
-  it('every exit property stopped at a missing precompile: not-exercised', async () => {
-    const reason = `${MISSING_PRECOMPILE_NOTE} (0x0000000000000000000000000000000000001000)`;
-    const results = (await UPSHIFT()).results.map((r) => ({ ...r, status: 'inconclusive' as const, reason }));
-    expect(exitEvidenceOf(results)).toBe('not-exercised');
+  it('every exit property inconclusive with inputs that needed a missing precompile: not-exercised', async () => {
+    const all = (await UPSHIFT()).results.map((r) => ({ ...r, status: 'inconclusive' as const, reason: missingPrecompileNote(STAKING) }));
+    expect(exitEvidenceOf(all)).toBe('not-exercised');
+    // gMON at block 111051869: most rejected inputs needed 0x1000, a few deposits reverted on their own.
+    const mixed = all.map((r) => ({ ...r, reason: `\`vm.assume\` rejected too many inputs (4096 allowed); ${missingPrecompileNote(STAKING, 3923)}` }));
+    expect(exitEvidenceOf(mixed)).toBe('not-exercised');
+    expect(exitEvidenceOf(all.map((r) => (r.id === 'redeem' ? { ...r, reason: '`vm.assume` rejected too many inputs (4096 allowed)' } : r)))).toBeNull();
   });
 });
 
@@ -134,8 +138,7 @@ describe('erc7540InterfacesOf and detectTraits (mock client)', () => {
   });
 
   it('not-exercised needs ERC-165 to declare asynchronous redemption', async () => {
-    const reason = `${MISSING_PRECOMPILE_NOTE} (0x0000000000000000000000000000000000001000)`;
-    const results = (await UPSHIFT()).results.map((r) => ({ ...r, status: 'inconclusive' as const, reason }));
+    const results = (await UPSHIFT()).results.map((r) => ({ ...r, status: 'inconclusive' as const, reason: missingPrecompileNote(STAKING) }));
     const code = `0x${dispatch(REQUEST_REDEEM)}${dispatch(GVAULT)}00` as Hex;
     expect(await detectTraits(client({ code }), VAULT, { implementation: null }, results, 1n)).toEqual([]);
     expect(await detectTraits(client({ code, supports: erc7540 }), VAULT, { implementation: null }, results, 1n)).toEqual([
