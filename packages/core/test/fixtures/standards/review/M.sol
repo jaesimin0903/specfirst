@@ -121,7 +121,7 @@ contract CallThenRevert {
 
     error Nope();
 
-    /// Calls one address, then reverts with data (Nope()) whatever it answered: the vault's own revert.
+    /// Calls one address, then reverts with data (Nope()) whatever it answered (FeeTouchVault's shape).
     function callThenRevertWithData(address target, bytes calldata data) external {
         (bool ok,) = target.call(data);
         ok;
@@ -135,19 +135,14 @@ contract CallThenRevert {
         require(IStakingDyn(address(0x1000)).delegate(ids.length > 0 ? ids[0] : 1));
     }
 
-    /// The same, but an answer that is not ABI-shaped (the fork's empty one, or eight words of 1) becomes the
-    /// vault's own error Nope(): only an answer of the right shape lets it through, so the mock must give one.
-    function stakeOrNope() external {
-        (bool ok, bytes memory r) = address(0x1000).call(abi.encodeCall(IStakingDyn.getDelegations, (address(this), 0)));
-        uint256 offset;
-        if (r.length >= 96) {
-            assembly {
-                offset := mload(add(r, 96))
-            }
-        }
-        if (!ok || offset != 0x60) revert Nope();
-        (,, uint64[] memory ids) = abi.decode(r, (bool, uint64, uint64[]));
-        require(IStakingDyn(address(0x1000)).delegate(ids.length > 0 ? ids[0] : 1));
+    /// EpochGuardVault's shape: reads getEpoch() with a low-level call and reverts with its own Nope() when the
+    /// answer is malformed or the epoch is below 500. Honest on Monad, whose epochs are far past 500; on a fork it
+    /// reverts Nope() with data, and no fixed stand-in epoch can tell that from a refusal the chain would make.
+    function epochOrNope() external view {
+        (bool ok, bytes memory r) = address(0x1000).staticcall(abi.encodeWithSignature("getEpoch()"));
+        if (!ok || r.length != 64) revert Nope();
+        (uint64 epoch,) = abi.decode(r, (uint64, bool));
+        if (epoch < 500) revert Nope();
     }
 
     function staticThenRevert(address target, bytes calldata data) external view {

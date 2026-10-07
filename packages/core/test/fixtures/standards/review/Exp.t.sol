@@ -98,14 +98,18 @@ contract ForkGaps is Test {
         token = new MockToken();
         vm.chainId(143);
     }
-    function _depositReverting(Vault v, address user, uint256 a) internal returns (bytes memory data, bytes memory ret) {
+    function _depositReverting(Vault v, address user, uint256 a) internal returns (bytes memory data) {
         deal(address(token), user, a);
         vm.prank(user);
         token.approve(address(v), a);
         data = abi.encodeCall(Vault.deposit, (a, user));
         vm.prank(user);
+        (bool ok,) = address(v).call(data);
+        assertFalse(ok);
+    }
+    function _reverting(bytes memory data) internal returns (bytes memory ret) {
         bool ok;
-        (ok, ret) = address(v).call(data);
+        (ok, ret) = address(c).call(data);
         assertFalse(ok);
     }
     function test_gapsListedOnMonadChainsOnly() public {
@@ -130,9 +134,9 @@ contract ForkGaps is Test {
     function test_causeIsTheStakingPrecompileForAStakingDeposit() public {
         Vault v = new Vault(token, 5);
         address user = address(0xA11CE);
-        (bytes memory data, bytes memory ret) = _depositReverting(v, user, 1e6);
-        assertEq(SfForkGaps.precompileCause(address(v), user, data, ret), address(0x1000));
-        // Both reruns ran inside a snapshot: no deposit, no code or mock left at 0x1000.
+        bytes memory data = _depositReverting(v, user, 1e6);
+        assertEq(SfForkGaps.precompileCause(address(v), user, data), address(0x1000));
+        // The rerun ran inside a snapshot: no deposit and no code left behind.
         assertEq(v.totalSupply(), 0);
         assertEq(token.balanceOf(user), 1e6);
         assertEq(address(0x1000).code.length, 0);
@@ -142,57 +146,45 @@ contract ForkGaps is Test {
     function test_causeIsNoneOffMonad() public {
         vm.chainId(31337);
         Vault v = new Vault(token, 5);
-        (bytes memory data, bytes memory ret) = _depositReverting(v, address(0xA11CE), 1e6);
-        assertEq(SfForkGaps.precompileCause(address(v), address(0xA11CE), data, ret), address(0));
+        bytes memory data = _depositReverting(v, address(0xA11CE), 1e6);
+        assertEq(SfForkGaps.precompileCause(address(v), address(0xA11CE), data), address(0));
     }
-    function test_causeIsNoneWhenThePrecompileDoesNotMatter() public {
-        // Touches 0x1001 or 0x1000 and reverts with the same data whatever they answer: the vault's own revert.
+    function test_causeIsThePrecompileWhateverTheRevert() public {
+        // A revert with data after a precompile call (FeeTouchVault's shape: an ignored call, then a real bug) is
+        // not judged either: nothing on the fork shows that the revert did not need the real answer.
         bytes memory data = abi.encodeCall(CallThenRevert.callThenRevertWithData, (address(0x1001), hex"3a61584e"));
-        (bool ok, bytes memory ret) = address(c).call(data);
-        assertFalse(ok);
-        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
+        assertEq(bytes4(_reverting(data)), CallThenRevert.Nope.selector);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data), address(0x1001));
         data = abi.encodeCall(CallThenRevert.callThenRevertWithData, (address(0x1000), abi.encodeWithSignature("getDelegations(address,uint64)", address(1), uint64(0))));
-        (ok, ret) = address(c).call(data);
-        assertFalse(ok);
-        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
+        _reverting(data);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data), address(0x1000));
     }
     function test_causeIsThePrecompileForAnEmptyRevert() public {
-        // An empty revert after a precompile call is never judged: an honest vault that decodes the answer looks
-        // like this on the fork, whatever the mock answers.
+        // An honest vault that decodes the precompile's answer reverts with no data on the fork.
         bytes memory data = abi.encodeCall(CallThenRevert.callThenRevert, (address(0x1001), hex"3a61584e"));
-        (bool ok, bytes memory ret) = address(c).call(data);
-        assertFalse(ok);
-        assertEq(ret.length, 0);
-        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0x1001));
+        assertEq(_reverting(data).length, 0);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data), address(0x1001));
         data = abi.encodeCall(CallThenRevert.staticThenRevert, (address(0x1000), hex"757991a8"));
-        (ok, ret) = address(c).call(data);
-        assertFalse(ok);
-        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0x1000));
+        _reverting(data);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data), address(0x1000));
+        // HonestDynVault's shape: getDelegations (bool, uint64, uint64[]) then delegate.
+        data = abi.encodeCall(CallThenRevert.stakeHonestly, ());
+        _reverting(data);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data), address(0x1000));
     }
-    function test_causeIsTheStakingPrecompileForADynamicAnswer() public {
-        // HonestDynVault's shape: getDelegations (bool, uint64, uint64[]) then delegate. The ABI-shaped mock lets it
-        // through, so it is not judged on the fork's empty revert.
-        bytes memory data = abi.encodeCall(CallThenRevert.stakeHonestly, ());
-        (bool ok, bytes memory ret) = address(c).call(data);
-        assertFalse(ok);
-        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0x1000));
-        // Non-empty on the fork (the vault's own Nope() when the answer does not decode): only an answer of the
-        // right shape lets it through and shows that the revert depends on the precompile.
-        data = abi.encodeCall(CallThenRevert.stakeOrNope, ());
-        (ok, ret) = address(c).call(data);
-        assertFalse(ok);
-        assertEq(bytes4(ret), CallThenRevert.Nope.selector);
-        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0x1000));
+    function test_causeIsTheStakingPrecompileForAnEpochGuard() public {
+        // EpochGuardVault's shape: its own Nope() for a malformed or stale epoch. Honest on Monad, not judged here.
+        bytes memory data = abi.encodeCall(CallThenRevert.epochOrNope, ());
+        assertEq(bytes4(_reverting(data)), CallThenRevert.Nope.selector);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data), address(0x1000));
     }
     function test_causeIsNoneWithoutAPrecompile() public {
         bytes memory data = abi.encodeCall(CallThenRevert.callThenRevert, (address(0xdead), hex""));
-        (bool ok, bytes memory ret) = address(c).call(data);
-        assertFalse(ok);
-        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
+        _reverting(data);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data), address(0));
         data = abi.encodeCall(CallThenRevert.balanceThenRevert, (address(0x1000)));
-        (ok, ret) = address(c).call(data);
-        assertFalse(ok);
-        assertEq(SfForkGaps.precompileCause(address(c), address(this), data, ret), address(0));
+        _reverting(data);
+        assertEq(SfForkGaps.precompileCause(address(c), address(this), data), address(0));
     }
     function test_missingCalledSeesCallsInRevertedFrames() public {
         address[] memory gaps = SfForkGaps.missingPrecompiles();
