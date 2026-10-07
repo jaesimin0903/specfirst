@@ -8,6 +8,7 @@ import {
   erc7575Reason,
   maxZeroNote,
   belowBoundNote,
+  unfundedBoundNote,
   missingPrecompileNote,
   setupPrecompileNote,
 } from '@specfirst/core';
@@ -140,6 +141,17 @@ describe('explainResult', () => {
     // Counts beside a verdict: refusals below the bound, and inputs not judged.
     expect(explainResult({ status: 'pass', runs: 16, reason: belowBoundNote(3) })).toBe(
       'No counterexample in 16 fuzz runs at this block. 3 amounts below the bound were refused; the bound itself was accepted.',
+    );
+    expect(explainResult({ status: 'pass', runs: 16, reason: `${belowBoundNote(3)}; ${unfundedBoundNote(2)}` })).toBe(
+      'No counterexample in 16 fuzz runs at this block. 3 amounts below the bound were refused; the bound itself was accepted. In 2 inputs the test user could not be given enough of the asset to try the bound itself; those inputs were not judged.',
+    );
+    // A pass the runner turned inconclusive because some bounds could not be funded.
+    expect(classifyReason('inconclusive', `${belowBoundNote(3)}; ${unfundedBoundNote(2)}`)).toBe('unfunded-bound');
+    expect(explainResult({ status: 'inconclusive', reason: `${belowBoundNote(3)}; ${unfundedBoundNote(2)}` })).toBe(
+      'Not judged: in 2 inputs the test user could not be given enough of the asset to try the bound itself. A vault and its asset could refuse that funding on exactly the inputs that would fail, so a property with such inputs never counts as a pass; no other input failed. 3 amounts below the bound were refused; the bound itself was accepted.',
+    );
+    expect(explainResult({ status: 'inconclusive', reason: `\`vm.assume\` rejected too many inputs (4096 allowed); ${unfundedBoundNote(40)}` })).toMatch(
+      / In 40 inputs the test user could not be given enough of the asset to try the bound itself; those inputs were not judged\.$/,
     );
     expect(explainResult({ status: 'fail', reason: `withdraw(5) reverted with selector 0x4e487b71 while maxWithdraw is 9; ${missingPrecompileNote('0x0000000000000000000000000000000000001001', 5)}` })).toBe(
       "maxWithdraw was 9, but withdraw(5) reverted with 0x4e487b71. EIP-4626: maxWithdraw MUST return the maximum amount of assets withdraw accepts without reverting, and 0 while withdrawals are disabled. 5 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and were not judged.",

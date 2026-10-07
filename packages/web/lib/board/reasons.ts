@@ -34,6 +34,8 @@ const MISSING_PRECOMPILE = /a vault call reached Monad precompile (0x[0-9a-fA-F]
 const SETUP_PRECOMPILE = /a vault call reached Monad precompile (0x[0-9a-fA-F]{40}) in the setup deposit, which forge lacks, in (\d+) inputs; these inputs were rejected/;
 /** core belowBoundNote. */
 const BELOW_BOUND = /(\d+) amounts below the bound were refused; the bound itself was accepted/;
+/** core unfundedBoundNote. */
+const UNFUNDED_BOUND = /the bound could not be funded in (\d+) inputs; these inputs were not judged/;
 
 /**
  * Custom errors seen in the Monad batch, named by matching the 4-byte selector against candidate signatures.
@@ -72,6 +74,7 @@ export const REASON_LABEL: Record<ReasonCategory, string> = {
   'unfundable-asset': 'Asset balance cannot be set for test users',
   'asset-transfer-restricted': 'Asset restricts transfers',
   'missing-precompile': 'Inputs needed a Monad precompile the fork lacks',
+  'unfunded-bound': 'The bound could not be funded',
   'rpc-error': 'RPC failed during the fork',
   'separate-share-token': 'ERC-7575, shares are a separate token',
   'native-asset': 'ERC-7535, native asset',
@@ -91,6 +94,7 @@ export function classifyReason(status: PropertyStatus, reason: string | undefine
   if (RPC_ERROR.test(r)) return 'rpc-error';
   if (UNFUNDABLE.test(r)) return 'unfundable-asset';
   if (TOO_MANY_REJECTS.test(r)) return 'inputs-rejected';
+  if (UNFUNDED_BOUND.test(r)) return 'unfunded-bound';
   if (SETUP_FAILED.test(r)) return 'setup-reverted';
   return 'other';
 }
@@ -166,13 +170,16 @@ function refusalOf(reason: string): string {
 
 /**
  * What the runner counted beside the verdict: refusals below the bound (an sf- property checks that the bound is
- * accepted) and inputs not judged because they needed a missing precompile. Empty when there is neither.
+ * accepted), inputs whose bound could not be funded, and inputs not judged because they needed a missing
+ * precompile. Empty when there is none of these.
  */
 export function countedNotes(reason: string | undefined): string {
   const r = reason ?? '';
   const out: string[] = [];
   const below = BELOW_BOUND.exec(r);
   if (below) out.push(`${below[1]} amounts below the bound were refused; the bound itself was accepted.`);
+  const unfunded = UNFUNDED_BOUND.exec(r);
+  if (unfunded) out.push(`In ${unfunded[1]} inputs the test user could not be given enough of the asset to try the bound itself; those inputs were not judged.`);
   const pre = MISSING_PRECOMPILE.exec(r);
   if (pre?.[2]) out.push(`${pre[2]} inputs reached Monad precompile ${pre[1]}, which forge's EVM does not have, and were not judged.`);
   const setup = SETUP_PRECOMPILE.exec(r);
@@ -224,6 +231,12 @@ export function explainResult(result: Pick<ReportResultView, 'status' | 'reason'
         return `Not judged: ${m[2]} inputs reached Monad precompile${at}, which forge's EVM does not have, and reverted. The fork cannot tell whether such a revert needed the precompile's answer, so a property with unjudged inputs never counts as a pass; no other input failed.`;
       }
       return `Not judged: every rejected input reached Monad precompile${at}, which forge's EVM does not have, and its call reverted on the fork, which cannot tell whether the revert needed the precompile's answer. These inputs were not judged.`;
+    }
+    case 'unfunded-bound': {
+      const n = UNFUNDED_BOUND.exec(reason)?.[1];
+      const below = BELOW_BOUND.exec(reason);
+      const s = `Not judged: in ${n} inputs the test user could not be given enough of the asset to try the bound itself. A vault and its asset could refuse that funding on exactly the inputs that would fail, so a property with such inputs never counts as a pass; no other input failed.`;
+      return below ? `${s} ${below[1]} amounts below the bound were refused; the bound itself was accepted.` : s;
     }
     case 'rpc-error':
       return 'Never exercised: the RPC failed while the fork was reading chain state. This says nothing about the vault; a rerun on another RPC should settle it.';
@@ -358,6 +371,7 @@ export const REASON_DETAIL: Record<ReasonCategory, string> = {
   'unfundable-asset': "The asset keeps balances where forge-std cannot write them, such as rebasing tokens, so test users could not be funded.",
   'asset-transfer-restricted': 'The asset only moves between allowed parties, and both suites need test users who can send it freely.',
   'missing-precompile': "Every rejected input reached a Monad precompile, such as staking at 0x1000, that forge's EVM does not have; those inputs were not judged.",
+  'unfunded-bound': 'In some inputs the test user could not be given enough of the asset to try the bound itself, so the property cannot count as a pass.',
   'rpc-error': 'The public RPC failed while the fork read chain state. A rerun on another RPC should settle it.',
   'separate-share-token': 'Shares live in a separate token, as EIP-7575 allows, while both suites treat the vault as its own share token.',
   'native-asset': "The vault holds the chain's native coin, and the harness funds users with ERC-20 transfers.",

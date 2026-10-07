@@ -73,8 +73,8 @@ abstract contract VaultBase {
     function maxRedeem(address o) public view virtual returns (uint256) { return balanceOf[o]; }
     function previewDeposit(uint256 a) public pure returns (uint256) { return a; }
     function previewMint(uint256 s) public pure returns (uint256) { return s; }
-    function previewWithdraw(uint256 a) public pure returns (uint256) { return a; }
-    function previewRedeem(uint256 s) public pure returns (uint256) { return s; }
+    function previewWithdraw(uint256 a) public pure virtual returns (uint256) { return a; }
+    function previewRedeem(uint256 s) public view virtual returns (uint256) { return s; }
 
     function deposit(uint256 a, address r) public virtual returns (uint256 s) {
         IERC20Min(asset()).transferFrom(msg.sender, address(this), a);
@@ -592,5 +592,104 @@ contract EpochGuardVault is VaultBase {
         (uint64 epoch,) = abi.decode(ret, (uint64, bool));
         if (epoch < 500) revert InvalidEpoch();
         return super.deposit(a, r);
+    }
+}
+
+/// sLVMON shape (2026-10-07): previewWithdraw and withdraw charge a 5 bps fee in shares (rounded down, so balances
+/// under 2,000 units pay none), maxWithdraw ignores it. withdraw(maxWithdraw) reverts for any larger balance, while
+/// every amount below the last 0.05% goes through. Only sf-maxWithdraw-honored can see it, and drawn amounts reach
+/// that window by luck: the bound itself has to be tried.
+contract WithdrawFeeVault is VaultBase {
+    function previewWithdraw(uint256 a) public pure override returns (uint256) { return a + a / 2000; }
+
+    function withdraw(uint256 a, address r, address o) public override returns (uint256 s) {
+        s = previewWithdraw(a);
+        _spend(o, s);
+        IERC20Min(asset()).transfer(r, a);
+    }
+}
+
+/// Review of the bound rule (2026-10-07): a 1:1 vault that keeps 0.05% of its assets illiquid. maxWithdraw honours
+/// that; maxRedeem reports the whole balance, so redeem(maxRedeem) reverts. previewRedeem reverts where redeem
+/// would (EIP-4626 lets a preview revert there), which must not make the harness skip the bound: it must fail
+/// sf-maxRedeem-honored.
+contract PreviewDodgeVault is VaultBase {
+    function _liquid() internal view returns (uint256) { uint256 t = totalAssets(); return t - t / 2000 - 1; }
+    function maxWithdraw(address o) public view override returns (uint256) { uint256 b = balanceOf[o]; uint256 l = _liquid(); return b < l ? b : l; }
+    function previewRedeem(uint256 s) public view override returns (uint256) { require(s <= _liquid(), "illiquid"); return s; }
+    function withdraw(uint256 a, address r, address o) public override returns (uint256 s) { require(a <= _liquid(), "illiquid"); return super.withdraw(a, r, o); }
+    function redeem(uint256 s, address r, address o) public override returns (uint256 a) { require(s <= _liquid(), "illiquid"); return super.redeem(s, r, o); }
+}
+
+address constant APPROVE_CAP_TOKEN = 0x5F00000000000000000000000000000000000006;
+
+/// A token whose approve refuses more than 1,000 tokens: the harness can fund small amounts, never the 1e6-token
+/// bound. Used to show that a bound that cannot be funded is counted, not skipped in silence.
+contract ApproveCapToken {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+
+    function decimals() external pure returns (uint8) { return 6; }
+    function approve(address s, uint256 a) external returns (bool) {
+        require(a <= 1_000e6, "approve cap");
+        allowance[msg.sender][s] = a;
+        return true;
+    }
+    function transfer(address to, uint256 a) external returns (bool) {
+        balanceOf[msg.sender] -= a; balanceOf[to] += a; return true;
+    }
+    function transferFrom(address f, address to, uint256 a) external returns (bool) {
+        allowance[f][msg.sender] -= a;
+        balanceOf[f] -= a; balanceOf[to] += a; return true;
+    }
+}
+
+/// Correct 1:1 vault over ApproveCapToken.
+contract ApproveCapVault is VaultBase {
+    function asset() public pure override returns (address) { return APPROVE_CAP_TOKEN; }
+}
+
+address constant COLLUSION_TOKEN = 0x5f00000000000000000000000000000000000007;
+
+/// Users the colluding pair below singles out: about half of any address pool.
+function flaggedUser(address a) pure returns (bool) {
+    return uint160(a) % 2 == 1;
+}
+
+/// The asset half of a colluding pair: approve refuses amounts above 999,000 tokens for flagged owners, which is
+/// exactly where CollusionVault's deposit would revert. Funding the bound fails there; nothing else does.
+contract CollusionToken {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+
+    function decimals() external pure returns (uint8) { return 6; }
+    function approve(address s, uint256 a) external returns (bool) {
+        require(a <= 999_000e6 || !flaggedUser(msg.sender), "refused");
+        allowance[msg.sender][s] = a;
+        return true;
+    }
+    function transfer(address to, uint256 a) external returns (bool) {
+        balanceOf[msg.sender] -= a; balanceOf[to] += a; return true;
+    }
+    function transferFrom(address f, address to, uint256 a) external returns (bool) {
+        if (allowance[f][msg.sender] != type(uint256).max) allowance[f][msg.sender] -= a;
+        balanceOf[f] -= a; balanceOf[to] += a; return true;
+    }
+}
+
+/// The vault half: maxDeposit and maxMint are unlimited, but deposit and mint revert above 999,000 tokens for
+/// flagged users. The bound (1e6 tokens) can only be tried for unflagged users, where it goes through. Without
+/// the never-pass rule for unfunded bounds this vault would pass sf-maxDeposit-honored and sf-maxMint-honored.
+contract CollusionVault is VaultBase {
+    function asset() public pure override returns (address) { return COLLUSION_TOKEN; }
+    function deposit(uint256 a, address r) public override returns (uint256 s) {
+        if (a > 999_000e6 && flaggedUser(msg.sender)) revert("too large");
+        return super.deposit(a, r);
+    }
+    function mint(uint256 s, address r) public override returns (uint256 a) {
+        if (s > 999_000e6 && flaggedUser(msg.sender)) revert("too large");
+        return super.mint(s, r);
     }
 }

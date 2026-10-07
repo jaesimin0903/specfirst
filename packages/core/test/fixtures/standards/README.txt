@@ -110,6 +110,21 @@ shares) count as rejects of the property, not as unjudged inputs.
   MinDepositVault (0x5f..76)           deposit and mint refuse amounts below 500,000 tokens under an unlimited max:
                                        sf-maxDeposit-honored and sf-maxMint-honored pass with the below-bound count.
                                        The harness before 2026-10-07 failed both with BelowMinimum() 0x860b82a9.
+  WithdrawFeeVault (0x5f..9b)          sLVMON shape: previewWithdraw and withdraw charge a 5 bps fee in shares,
+                                       maxWithdraw ignores it, so withdraw(maxWithdraw) reverts. Every sf- run
+                                       tries the bound after the drawn amount, so sf-maxWithdraw-honored fails at
+                                       the bound with every seed (sf-only runs, 4 runs, five seeds); the harness
+                                       before passed it at 4 runs with each of ten seeds.
+  PreviewDodgeVault (0x5F..9c)         maxRedeem reports the whole balance while 0.05% is illiquid; previewRedeem and
+                                       redeem revert at the bound. A reverting preview does not skip the bound:
+                                       sf-maxRedeem-honored fails at maxRedeem with every seed, sf-maxWithdraw
+                                       (which honours the illiquid part) passes.
+  ApproveCapToken (0x5F..06), ApproveCapVault (0x5f..9d)  approve refuses more than 1,000 tokens, so the
+                                       1e6-token bound cannot be funded: sf-maxDeposit and sf-maxMint end
+                                       inconclusive with "the bound could not be funded in N inputs", never pass.
+  CollusionToken (0x5f..07), CollusionVault (0x5F..9e)  approve refuses more than 999,000 tokens for flagged
+                                       users, exactly where deposit and mint revert. forge passes sf-maxDeposit
+                                       and sf-maxMint; unfunded bounds are unjudged, so both are inconclusive.
 Review PoCs (ported from the reviewer's Adv.sol, mock-vaults.sol "Review PoCs"), full checks, 16 runs where the
 fuzzer must reach a fee bug:
   FeeVault (0x5F..91), FeeTouchVault (0x5F..92)  fee withdraw (Panic 0x11 near maxWithdraw); FeeTouch adds an
@@ -118,7 +133,9 @@ fuzzer must reach a fee bug:
                                        inconclusive there (never a pass) and keeps its previewWithdraw fail.
   ProbeKillVault (0x5f..93), ProbeKillControl (0x5F..94)  bonus share and fee withdraw; ProbeKill also touches
                                        0x1001 and reverts for exactly one whole token (the old probe amount). Both
-                                       fail previewWithdraw and sf-maxWithdraw-honored; nothing stops the suites.
+                                       fail previewWithdraw, sf-maxWithdraw-honored and, since the bound is always
+                                       tried, sf-maxRedeem-honored (the bonus share makes redeem(maxRedeem) pay one
+                                       unit more than the vault holds); nothing stops the suites.
   WindowVault (0x5F..95)               refuses 500,000 to 1,000,000 tokens and accepts the bound: sf-maxDeposit
                                        passes with "N amounts below the bound were refused; the bound itself was
                                        accepted".

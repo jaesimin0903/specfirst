@@ -24,6 +24,7 @@ import {
   missingPrecompileNote,
   maxZeroNote,
   belowBoundNote,
+  unfundedBoundNote,
   summarize,
   type StandardWorkspace,
 } from '../src/index.js';
@@ -392,7 +393,8 @@ describe.skipIf(SKIP || SKIP_ANVIL)('runStandardCheck on a local anvil fork (pin
     const report = await check('0x5F00000000000000000000000000000000000098', 16);
     const x = report.results.find((r) => r.id === 'sf-maxWithdraw-honored')!;
     expect(x.status).not.toBe('pass');
-    expect(x.reason).toMatch(/a vault call reached Monad precompile 0x0000000000000000000000000000000000001001, which forge lacks, in \d+ inputs; these inputs were not judged/);
+    // Every withdraw at the bound reaches 0x1001 and reverts, so the inputs are not judged (with or without a count).
+    expect(x.reason).toMatch(/a vault call reached Monad precompile 0x0000000000000000000000000000000000001001, which forge lacks(, in \d+ inputs)?; these inputs were not judged/);
     expect(standardCheckExitCode(report.summary)).not.toBe(0);
     // FeeVault, the same bug without the trick, fails it outright.
     const plain = await check('0x5F00000000000000000000000000000000000091', 16);
@@ -535,6 +537,12 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000072', await code('ThresholdPrecompileVault')]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000075', await code('MintSurchargeVault')]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000076', await code('MinDepositVault')]);
+    await rpc('anvil_setCode', ['0x5f0000000000000000000000000000000000009b', await code('WithdrawFeeVault')]);
+    await rpc('anvil_setCode', ['0x5F0000000000000000000000000000000000009c', await code('PreviewDodgeVault')]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000006', await code('ApproveCapToken')]);
+    await rpc('anvil_setCode', ['0x5f0000000000000000000000000000000000009d', await code('ApproveCapVault')]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000007', await code('CollusionToken')]);
+    await rpc('anvil_setCode', ['0x5F0000000000000000000000000000000000009e', await code('CollusionVault')]);
     await rpc('anvil_mine', ['0x1']);
     ws = await prepareErc4626Workspace({
       cacheDir: path.join(root, 'cache'),
@@ -547,23 +555,80 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     if (root) await rm(root, { recursive: true, force: true });
   });
 
-  const sf = async (vault: string) => {
-    const runId = `sf-${vault.slice(-4)}`;
+  const sf = async (vault: string, opts: { seed?: string; runs?: number } = {}) => {
+    const runId = `sf-${vault.slice(-4)}-${opts.seed ?? '0x1'}`;
+    // A fresh failure directory per call, as runStandardCheck uses: forge replays persisted failures first, so a
+    // counterexample from one seed would otherwise decide the next seed's run.
+    const persist = await mkdtemp(path.join(root, 'failures-'));
     const p = await execa(
       'forge',
-      ['test', '--match-contract', '^SpecfirstMaxHonored$', '--fork-url', anvil.url, '--fork-block-number', '1', '--fuzz-runs', '8', '--fuzz-seed', '0x1', '-j', '2', '--json', '-vv'],
-      { cwd: ws.dir, env: forgeEnv({ SF_VAULT: vault, SF_RUN_ID: runId }), extendEnv: false, reject: false, maxBuffer: 256 * 1024 * 1024 },
+      ['test', '--match-contract', '^SpecfirstMaxHonored$', '--fork-url', anvil.url, '--fork-block-number', '1', '--fuzz-runs', String(opts.runs ?? 8), '--fuzz-seed', opts.seed ?? '0x1', '-j', '2', '--json', '-vv'],
+      { cwd: ws.dir, env: forgeEnv({ SF_VAULT: vault, SF_RUN_ID: runId, FOUNDRY_FUZZ_FAILURE_PERSIST_DIR: persist }), extendEnv: false, reject: false, maxBuffer: 256 * 1024 * 1024 },
     );
     const events = (kind: string) => readFile(path.join(ws.dir, EVENTS_DIR, `${runId}.${kind}.log`), 'utf8').catch(() => '');
     const results = parseStandardForgeJson(String(p.stdout), SPECFIRST_ERC4626_PROPERTIES, {
       maxZeroEvents: await events('max-zero'),
       belowBoundEvents: await events('below-bound'),
+      unfundedBoundEvents: await events('bound-unfunded'),
       missingPrecompileEvents: await events('missing-precompile'),
       setupPrecompileEvents: await events('setup-precompile'),
     });
     if (!results) throw new Error(String(p.stderr));
     return new Map(results.map((x) => [x.id, x]));
   };
+
+  it('a 5 bps withdrawal fee that maxWithdraw ignores (sLVMON shape): sf-maxWithdraw fails at the bound itself with every seed', async () => {
+    // Drawn amounts reach the last 0.05% below maxWithdraw by luck; the harness before the bound rule passed all
+    // of these seeds at 4 runs. The bound is now tried in every run, so the first judged run fails.
+    for (const seed of ['0x1', '0x2', '0x3', '0xdead', '0xbeef']) {
+      const r = await sf('0x5f0000000000000000000000000000000000009b', { seed, runs: 4 });
+      const x = r.get('sf-maxWithdraw-honored')!;
+      expect(x.status, seed).toBe('fail');
+      const m = /^withdraw\((\d+)\) reverted with selector 0x4e487b71 while maxWithdraw is (\d+)$/.exec(x.reason ?? '');
+      expect(m, seed).not.toBeNull();
+      expect(m![1], seed).toBe(m![2]);
+      for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored', 'sf-maxRedeem-honored']) expect(r.get(id)!.status, `${seed} ${id}`).toBe('pass');
+    }
+  });
+
+  it('maxRedeem ignores illiquid assets and previewRedeem reverts at the bound (PreviewDodgeVault): sf-maxRedeem still fails at the bound', async () => {
+    for (const seed of ['0x1', '0x2', '0x3']) {
+      const r = await sf('0x5F0000000000000000000000000000000000009c', { seed, runs: 4 });
+      const x = r.get('sf-maxRedeem-honored')!;
+      expect(x.status, seed).toBe('fail');
+      const m = /^redeem\((\d+)\) reverted with selector 0x08c379a0 while maxRedeem is (\d+)$/.exec(x.reason ?? '');
+      expect(m, seed).not.toBeNull();
+      expect(m![1], seed).toBe(m![2]);
+      // maxWithdraw honours the illiquid part, so withdraw(maxWithdraw) goes through.
+      expect(r.get('sf-maxWithdraw-honored')!.status, seed).toBe('pass');
+    }
+  });
+
+  it('a vault and its asset that refuse funding exactly where the bound would fail (CollusionVault): never a pass', async () => {
+    const r = await sf('0x5F0000000000000000000000000000000000009e');
+    for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored']) {
+      const x = r.get(id)!;
+      expect(x.status, id).toBe('inconclusive');
+      // forge itself passed: the reason is the note alone, not forge's reject limit.
+      const n = Number(/^the bound could not be funded in (\d+) inputs/.exec(x.reason ?? '')?.[1]);
+      expect(n, id).toBeGreaterThan(0);
+      expect(x.reason, id).toBe(unfundedBoundNote(n));
+    }
+  });
+
+  it('a bound the harness cannot fund (approve refuses the 1e6-token bound): the inputs are not judged, never passed', async () => {
+    const r = await sf('0x5f0000000000000000000000000000000000009d');
+    for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored']) {
+      const x = r.get(id)!;
+      expect(x.status, id).toBe('inconclusive');
+      const n = Number(/the bound could not be funded in (\d+) inputs/.exec(x.reason ?? '')?.[1]);
+      expect(n, id).toBeGreaterThan(0);
+      expect(x.reason, id).toContain(unfundedBoundNote(n));
+    }
+    // withdraw and redeem need no funding at the bound.
+    expect(r.get('sf-maxWithdraw-honored')!.status).toBe('pass');
+    expect(r.get('sf-maxRedeem-honored')!.status).toBe('pass');
+  });
 
   it('(b) a vault that honours its max values: all four sf- properties pass', async () => {
     const r = await sf('0x5F00000000000000000000000000000000000031');

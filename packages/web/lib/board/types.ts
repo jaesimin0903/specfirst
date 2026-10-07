@@ -25,6 +25,7 @@ export type ReasonCategory =
   | 'unfundable-asset'
   | 'asset-transfer-restricted'
   | 'missing-precompile'
+  | 'unfunded-bound'
   | 'rpc-error'
   | 'separate-share-token'
   | 'native-asset'
