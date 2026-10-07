@@ -1,5 +1,38 @@
 # Specfirst 구현 계획
 
+## 개정 4판 변경 요약 (2026-10-07)
+
+이 판은 계획을 다시 쓰지 않고 바뀐 것만 적는다. 아래 상태 줄과 0~9절은 개정 3판(2026-09-29) 당시의 계획이다. 이 요약이나 ADR과 어긋나면 이 요약과 ADR을 따른다. 제출물은 이제 `docs/submission.md`에 적힌 것이고, 결과 숫자는 `docs/board-results.md`에 있다.
+
+| 날짜 | 변경 | 근거 |
+|---|---|---|
+| 9/29 | 사용자가 쓴 스펙 대신, 이미 배포된 컨트랙트를 제3자 표준 속성으로 검사하는 쪽으로 전환. a16z/erc4626-tests 26개와 Specfirst 고유 `sf-max*-honored` 4개를 고정 블록 forge fork에서 실행(`specfirst check`). 검사받는 쪽이 자기 시험을 쓰지 않는다 | ADR 0003, `docs/spike-standard-properties.md` |
+| 9/30 | 메인넷 결과를 테스트넷에 기록하는 `CheckAttestationRegistry`(reportHash, suiteHash, 대상 코드 해시, 블록, `isCompliant`와 `isCompliantWith`). 같은 날 메인넷 ERC-4626 볼트 285개 첫 전수 검사, 증명 18건 | ADR 0004, `docs/board-results.md` |
+| 9/30~10/1 | 유료 검사 요청 `CheckRequestDesk`와 무인 worker. 수수료는 이행된 뒤에만 수익이 되고, 처리하지 못한 요청은 전액 환불. 10/1 테스트넷 배포, 실제 요청 2건 이행 | ADR 0005 |
+| 10/6 | "체인이 입구" 전환. watcher(`specfirst watch`)가 팩토리 이벤트, 모르는 주소의 첫 `Deposit`, 업그레이드로 새 볼트를 스스로 찾아 검사하고, 바뀐 결과는 나중 블록의 두 번째 검사로 확인한 뒤 예산 안에서 증명. 하루 단위 선불 알림 구독 `CheckSubscriptions`와 webhook | ADR 0006 |
+| 10/7 | 비동기 출금 볼트 라벨(`async-redeem` trait, 판정은 바꾸지 않음), 지분 가치 하락 알림, 등록부를 읽어 돈을 움직이는 데모 통합자 `AllocationGate`(테스트넷 배포), 현황판의 EIP-4626 MUST와 SHOULD 수준, sf 속성이 매 실행마다 상한 자체를 시도, fork에 없는 Monad precompile에 닿은 입력은 판정하지 않음 | ADR 0003, 0006, 0007 |
+
+### 대체된 절
+
+- **3.1 스펙 파일 포맷, 3.3 수정 루프와 lock, 결정 B(수정 에이전트)**: 사용자가 YAML 스펙을 쓰고 에이전트가 반례를 고치는 흐름은 제출물에서 빠졌다. 검사 대상은 남이 배포한 볼트이고 속성은 제3자 스위트다. `init`, `lock`, `run` 코드는 저장소에 남아 있다.
+- **3.4 `CertificateRegistry` 증명서, 3.7 버전 계보와 실효 시연**: `CheckAttestationRegistry`의 검사 증명으로 바뀌었다(ADR 0004). 통합자는 `isCertifiedWith` 대신 `isCompliant`나 `isCompliantWith`를 읽는다. `CertificateRegistry.sol`, 증명서 페이지 `/c/<address>`, `/api/cert`는 저장소에 남아 있지만 제출물이 아니다.
+- **3.6 배포, 리허설, 배포 후 대조**: 자기 컨트랙트를 배포하고 대조하는 경로는 데모에서 빠졌다. 고정 블록 forge fork에서 속성을 돌리는 방식(ADR 0001)은 `check`가 이어받았다.
+- **3.8 어그리게이터 통합과 L0~L3 접촉 판정**: 접촉 판정 대신, 등록부를 직접 읽는 `AllocationGate`가 "누가 이 증명을 읽는가"에 답한다. `docs/bd-log.md`에는 9/29 초안 두 건만 있다. 9/29에 만든 모의 카드 페이지 `/demo/aggregator`는 저장소에 남아 있지만 제출물이 아니고, `CertifiedVaultRouter`는 만들지 않았다.
+- **3.9 GitHub Action**: 제출물에서 빠졌다. `action/`의 composite action은 저장소에 남아 있다.
+- **4 마일스톤, 7 스코프 컷 규칙의 제출물 번호 D1~D8, 데모 대본**: `docs/submission.md`의 제출물과 `docs/demo-script.md`의 대본으로 바뀌었다.
+
+### 지금의 제출물
+
+`docs/submission.md`가 기준이다. `specfirst check`, `specfirst watch`, `specfirst worker`, 컨트랙트 넷(CheckAttestationRegistry, CheckRequestDesk, CheckSubscriptions, AllocationGate)과 데모 볼트 팩토리와 토큰, 웹(현황판, 볼트 페이지, watcher 피드, 알림 수신함, 데스크, 게이트), 볼트별 JSON API와 SVG 배지.
+
+### 남은 일정 (마감 2026-10-13)
+
+- 웹 배포: 사용자가 맡는다. 배포 주소가 나오면 제출 문서의 자리표시자를 채운다.
+- GitHub 공개 push `jaesimin/specfirst`: 증명의 reportURI가 `https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks/...`를 가리키므로, push 전에는 등록부의 보고서 링크가 열리지 않는다. `certs/checks/` 사본을 함께 push한다.
+- 최종 녹화(`docs/demo-script.md`)와 제출: 2026-10-13까지.
+
+---
+
 - 상태: **approved 2026-09-29, week 1 code complete on anvil** (ADR 0001 fork 주 경로, ADR 0002 블록 번호 캐시. 키 필요 작업만 남음: 테스트넷 배포, 키 필요 실측, Ultrafuzz VM, 어그리게이터 발송) (사용자 승인: A3, B2, C1, D2, 예산 기본값, 데모 (a) 버전 대체, ultrawork 착수) (개정 3판, Architect와 Critic 2회차 검토 반영. 저장소는 공개가 기본값)
 - 작성일: 2026-09-28 (월)
 - 대회: Monad Metropolis 트랙 4, 제출 마감 2026-10-13 (화), 1인 팀, 남은 기간 15일

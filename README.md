@@ -1,8 +1,14 @@
 # Specfirst
 
-Spec-first verification certificates for Monad contracts. Built for Monad Metropolis, Track 4.
+Specfirst checks ERC-4626 vaults on Monad mainnet against 30 third-party properties, records each result on chain and alerts the people who subscribed to a vault when its result changes. Built for Monad Metropolis, Track 4.
 
-Plan of record: see docs/plan.md. Status: week 1, scaffolding.
+- The watcher (`specfirst watch`) reads Monad mainnet and finds vaults by itself: from factory events, from the first `Deposit` of an unknown address and from proxy upgrades. It checks each one with `specfirst check` on a fork at a fixed block: 26 properties from a16z/erc4626-tests and 4 of Specfirst's own that check `maxDeposit`, `maxMint`, `maxWithdraw` and `maxRedeem` are honored. A changed result is confirmed by a second check at a later block.
+- Results are attested on Monad testnet in `CheckAttestationRegistry` (first checks of vaults a factory announced, confirmed fails and confirmed changes, within a daily budget), so a contract can read `isCompliant` in one call. Every report names its block, seed and senders, so anyone can rerun the check and compare.
+- Subscribers to a vault (`CheckSubscriptions`, a fee per day in testnet MON) get a webhook when its result changes or its share value falls. `CheckRequestDesk` takes paid requests for an immediate check.
+- `AllocationGate` is a demo integrator on Monad testnet: it deposits only into vaults whose latest attestation is compliant, and anyone can make it pull its money out once that changes.
+- A failed property is a mismatch with a sentence of EIP-4626, shown by a concrete call on a fork. It is not a claim that funds are at risk.
+
+Where to read more: `docs/submission.md` (what it does and what it found), `docs/board-results.md` (results and the vaults that fail, in Korean), `docs/adr/` (each design decision and its reviews), `docs/plan.md` (the original plan, with what changed at the top, in Korean).
 
 ## Keys
 
