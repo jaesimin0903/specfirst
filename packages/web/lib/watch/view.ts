@@ -4,7 +4,7 @@ import { txUrl as testnetTxUrl } from '../board/attestations';
 import type { FailureLevel } from '../board/levels';
 import { chainName } from '../board/reproduce';
 import type { StatusCounts } from '../board/types';
-import type { FeedChange, FeedCheck, FeedEvent, FeedSource, WatchStatus, WatchVault } from './core';
+import type { FeedChange, FeedEvent, FeedSource, WatchStatus, WatchVault } from './core';
 import type { ChangeJson, FeedEventJson, FoundJson, OutcomeJson, VaultLabelJson, WatchStatusJson } from './types';
 
 /*
@@ -99,34 +99,25 @@ export function changeJson(c: FeedChange, levels: { from: FailureLevel | null; t
 function sameResult(a: { summary: StatusCounts; failed: readonly string[] }, b: { summary: StatusCounts; failed: readonly string[] }): boolean {
   const s = a.summary;
   const t = b.summary;
+  const x = [...a.failed].sort();
+  const y = [...b.failed].sort();
   return (
     s.pass === t.pass &&
     s.fail === t.fail &&
     s.inconclusive === t.inconclusive &&
     s.notApplicable === t.notApplicable &&
-    a.failed.length === b.failed.length &&
-    a.failed.every((id, i) => id === b.failed[i])
+    x.length === y.length &&
+    x.every((id, i) => id === y[i])
   );
 }
 
 /**
- * The check a change of result is against: the latest check of the same subject before `e` with the result
- * change.from, so its report can give that result's level. The change's own check (its `checked` event comes
- * first) is passed over, since an implementation change has the same result on both sides. Null for a first
- * result, a share value drop, or when the feed holds no such check.
+ * The report of the check a change of result is against, as the watcher names it in change.from (lines since
+ * 2026-10-07); null for a first result, a share value drop, an older line, or a last check saved without its hash.
  */
-export function checkBefore(e: FeedEvent, events: readonly FeedEvent[]): FeedCheck | null {
+export function reportBefore(e: FeedEvent): { reportPath: string; reportHash: string } | null {
   const from = e.change && e.change.kind !== 'price-drop' ? e.change.from : null;
-  if (!from) return null;
-  const a = e.subject.toLowerCase();
-  const own = e.check?.reportHash.toLowerCase();
-  let best: FeedEvent | null = null;
-  for (const x of events) {
-    if (!x.check || x.seq >= e.seq || x.chainId !== e.chainId || x.subject.toLowerCase() !== a) continue;
-    if (x.check.reportHash.toLowerCase() === own || !sameResult(x.check, from)) continue;
-    if (!best || x.seq > best.seq) best = x;
-  }
-  return best?.check ?? null;
+  return from?.reportPath && from.reportHash ? { reportPath: from.reportPath, reportHash: from.reportHash } : null;
 }
 
 /** Lowercase subject -> its first detected event, and the factories that announced subjects. */
@@ -174,7 +165,7 @@ export interface ReportInfo {
 
 export const NO_REPORT: ReportInfo = { cells: null, reportUrl: null, reportMatches: null, failureLevel: null };
 
-/** `before`: the report of the check a change of result is against (checkBefore). */
+/** `before`: the report of the check a change of result is against (reportBefore). */
 export function eventJson(e: FeedEvent, ctx: LabelContext, report: ReportInfo = NO_REPORT, found: FoundJson | null = null, before: ReportInfo = NO_REPORT): FeedEventJson {
   const subject = checksum(e.subject);
   return {

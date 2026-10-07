@@ -16,7 +16,7 @@ import { RevenueView } from '../components/watch/RevenueView';
 import { BoardExplorer } from '../components/board/BoardExplorer';
 import type { ExplorerRow } from '../lib/board/view';
 import { parseFeedText } from '../lib/watch/read';
-import { checkBefore, eventJson, foundOf, indexFeed, type LabelContext } from '../lib/watch/view';
+import { eventJson, foundOf, indexFeed, reportBefore, type LabelContext } from '../lib/watch/view';
 import { clearReportCache, reportCandidate } from '../lib/watch/reports';
 import { feedEventsJson } from '../lib/watch/service';
 import type { VaultWatchJson } from '../lib/watch/types';
@@ -77,21 +77,29 @@ describe('FeedItem', () => {
 });
 
 describe('MUST and SHOULD levels in the feed, as the board reads them', () => {
-  // tyYIELD of test/fixtures/levels, three round trips off by 1 base unit, checked twice with the same result, the
-  // second time on another implementation. The two report files live in a temp checks directory.
+  // tyYIELD of test/fixtures/levels, three round trips off by 1 base unit (A), and copies in a temp checks directory:
+  // B with the same failed ids but RT-redeem-mint off by 1e15 at 1e18 (more than rounding), C on another implementation.
   const TY = '0xB4641064f64E2F3aAffc1b4b4A66BE75c1C81408';
   const RESULT = { summary: { pass: 27, fail: 3, inconclusive: 0, notApplicable: 0 }, failed: ['RT-redeem-deposit', 'RT-redeem-mint', 'RT-withdraw-deposit'] };
   const saved = { ...process.env };
   let dir: string;
-  let feed: FeedEvent[];
+  let A: FeedCheck;
+  let B: FeedCheck;
+  let C: FeedCheck;
+  const ev = (seq: number, over: Partial<FeedEvent>): FeedEvent => ({ v: 1, seq, at: '2026-10-07T09:00:00.000Z', kind: 'checked', chainId: 143, subject: TY, ...over });
+  const before = (c: FeedCheck, over: Partial<{ reportPath: string; reportHash: `0x${string}` }> = {}) => ({ ...RESULT, reportPath: c.reportPath, reportHash: c.reportHash, ...over });
 
   beforeAll(async () => {
     dir = await mkdtemp(path.join(tmpdir(), 'sf-watch-levels-'));
     const vaultDir = path.join(dir, 'checks', '143', TY.toLowerCase());
     await mkdir(vaultDir, { recursive: true });
     const report = JSON.parse(await readFile(path.join(here, 'fixtures/levels/143', TY.toLowerCase(), '109195820.json'), 'utf8'));
+    const large = ['Error: a >=~ b not satisfied [uint]', '   Value a: 999000000000000000', '   Value b: 1000000000000000000', ' Max Delta: 0', `     Delta: ${10 ** 15}`];
+    const b = { ...report, blockNumber: '109195850', results: report.results.map((x: { id: string; counterexample?: object }) => (x.id === 'RT-redeem-mint' ? { ...x, counterexample: { ...x.counterexample, logs: large } } : x)) };
+    const c = { ...report, blockNumber: '109195900', identity: { ...report.identity, implementationKey: `0x${'ab'.repeat(32)}` } };
     await writeFile(path.join(vaultDir, '109195820.json'), JSON.stringify(report));
-    await writeFile(path.join(vaultDir, '109195900.json'), JSON.stringify({ ...report, blockNumber: '109195900', identity: { ...report.identity, implementationKey: `0x${'ab'.repeat(32)}` } }));
+    await writeFile(path.join(vaultDir, '109195850.json'), JSON.stringify(b));
+    await writeFile(path.join(vaultDir, '109195900.json'), JSON.stringify(c));
     Object.assign(process.env, { SPECFIRST_CHECKS_DIR: path.join(dir, 'checks'), SPECFIRST_WATCH_DIR: path.join(dir, 'watch'), SPECFIRST_BOARD_DATA: path.join(dir, 'board') });
     clearReportCache();
     const check = async (block: string): Promise<FeedCheck> => {
@@ -100,14 +108,7 @@ describe('MUST and SHOULD levels in the feed, as the board reads them', () => {
       const hex = (v: string) => v as `0x${string}`;
       return { block, ...RESULT, implementationKey: hex(candidate!.report.identity.implementationKey), reportPath, reportHash: hex(candidate!.reportHash), durationMs: 60_000 };
     };
-    const [a, b] = [await check('109195820'), await check('109195900')];
-    const ev = (seq: number, over: Partial<FeedEvent>): FeedEvent => ({ v: 1, seq, at: '2026-10-07T09:00:00.000Z', kind: 'checked', chainId: 143, subject: TY, ...over });
-    feed = [
-      ev(1, { check: a }),
-      ev(2, { check: b }),
-      ev(3, { kind: 'changed', check: b, change: { kind: 'implementation', from: RESULT, to: RESULT } }),
-      ev(4, { check: { ...a, reportHash: `0x${'00'.repeat(32)}` } }),
-    ];
+    [A, B, C] = [await check('109195820'), await check('109195850'), await check('109195900')];
   });
 
   afterAll(async () => {
@@ -117,7 +118,7 @@ describe('MUST and SHOULD levels in the feed, as the board reads them', () => {
   });
 
   it('a check whose only failures are rounding-sized round trips: "Rounding favors caller", not "Spec mismatch"', async () => {
-    const [first] = await feedEventsJson([feed[0]!], 143, feed);
+    const [first] = await feedEventsJson([ev(1, { check: A })], 143, []);
     expect(first!.check).toMatchObject({ status: 'mismatch', reportMatches: true, failureLevel: 'rounding' });
     render(
       <ol>
@@ -126,13 +127,17 @@ describe('MUST and SHOULD levels in the feed, as the board reads them', () => {
     );
     expect(screen.getByText('Rounding favors caller')).toHaveAttribute('data-s', 'should');
     expect(screen.queryByText('Spec mismatch')).toBeNull();
+    // B has the same ids, but a round trip off by more than rounding.
+    const [other] = await feedEventsJson([ev(2, { check: B })], 143, []);
+    expect(other!.check!.failureLevel).toBe('should');
   });
 
-  it('a change of implementation with the same result: both sides read from their own reports', async () => {
-    // The check before is the first one, not the change's own check, though both have the same result.
-    expect(checkBefore(feed[2]!, feed)).toBe(feed[0]!.check);
-    expect(checkBefore(feed[1]!, feed)).toBeNull();
-    const [changed] = await feedEventsJson([feed[2]!], 143, feed);
+  it("the before side reads the report the watcher names, the vault's last check, not a later superseded check with the same result", async () => {
+    // A is the last check; B, with the same result, was superseded by a newer attestation and never became the last
+    // check; C, on another implementation, is the change.
+    const feed = [ev(1, { check: A }), ev(2, { check: B, reason: 'not attested [newer]: ...' }), ev(3, { check: C }), ev(4, { kind: 'changed', check: C, change: { kind: 'implementation', from: before(A), to: RESULT } })];
+    expect(reportBefore(feed[3]!)).toEqual({ reportPath: A.reportPath, reportHash: A.reportHash });
+    const [changed] = await feedEventsJson([feed[3]!], 143, feed);
     expect(changed!.change).toMatchObject({ kind: 'implementation', from: { failureLevel: 'rounding' }, to: { failureLevel: 'rounding' } });
     render(
       <ol>
@@ -143,8 +148,29 @@ describe('MUST and SHOULD levels in the feed, as the board reads them', () => {
     expect(screen.queryByText('Spec mismatch')).toBeNull();
   });
 
+  it('the before side keeps the ids alone for an older line, or a report that does not hash to what the watcher recorded', async () => {
+    const lines = [
+      ev(4, { kind: 'changed', check: C, change: { kind: 'implementation', from: RESULT, to: RESULT } }),
+      ev(5, { kind: 'changed', check: C, change: { kind: 'implementation', from: before(A, { reportHash: B.reportHash }), to: RESULT } }),
+      ev(6, { kind: 'changed', check: C, change: { kind: 'implementation', from: before(A, { reportHash: undefined }), to: RESULT } }),
+    ];
+    expect(reportBefore(lines[0]!)).toBeNull();
+    expect(reportBefore(lines[2]!)).toBeNull();
+    for (const j of await feedEventsJson(lines, 143, lines)) {
+      expect(j.change).toMatchObject({ from: { failureLevel: null }, to: { failureLevel: 'rounding' } });
+      cleanup();
+      render(
+        <ol>
+          <FeedItem e={j} />
+        </ol>,
+      );
+      expect(screen.getByText('Spec mismatch')).toBeInTheDocument();
+      expect(screen.getByText('Rounding favors caller')).toBeInTheDocument();
+    }
+  });
+
   it("a report that does not hash to the feed's reportHash is not read for levels: the failed ids alone say mismatch", async () => {
-    const [stale] = await feedEventsJson([feed[3]!], 143, feed);
+    const [stale] = await feedEventsJson([ev(7, { check: { ...A, reportHash: `0x${'00'.repeat(32)}` } })], 143, []);
     expect(stale!.check).toMatchObject({ reportMatches: false, failureLevel: null });
     render(
       <ol>
