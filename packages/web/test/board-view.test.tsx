@@ -206,6 +206,16 @@ describe('loader', () => {
     expect(loadBoard(dir).source).toBe('none');
   });
 
+  it('reads a board.json written before traits existed: rows get no traits and still render as explorer rows', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'sf-load-'));
+    const older = { ...unread.board, vaults: unread.board.vaults.map(({ traits: _traits, ...v }) => v) };
+    await writeFile(path.join(dir, 'board.json'), JSON.stringify(older));
+    const loaded = loadBoard(dir);
+    expect(loaded.vaults.length).toBe(unread.board.vaults.length);
+    expect(loaded.vaults.every((v) => Array.isArray(v.traits) && v.traits.length === 0)).toBe(true);
+    expect(() => loaded.vaults.map(toExplorerRow)).not.toThrow();
+  });
+
   it('reads a vault detail and refuses paths that are not a chain id and an address', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'sf-load-'));
     await mkdir(path.join(dir, 'vaults/143'), { recursive: true });

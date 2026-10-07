@@ -28,7 +28,13 @@ export function loadBoard(dir: string = boardDataDir()): BoardData {
     const board = JSON.parse(readFileSync(path.join(dir, 'board.json'), 'utf8')) as BoardData;
     if (board?.version !== 1 || !Array.isArray(board.vaults)) throw new Error('unexpected board.json');
     // Fields added after the first board files were written; an older file still renders.
-    return { ...board, runs: board.runs ?? [], skipped: board.skipped ?? [], reasons: board.reasons ?? [] };
+    return {
+      ...board,
+      vaults: board.vaults.map((v) => ({ ...v, traits: v.traits ?? [] })),
+      runs: board.runs ?? [],
+      skipped: board.skipped ?? [],
+      reasons: board.reasons ?? [],
+    };
   } catch {
     return emptyBoard(NOT_BUILT, new Date(0).toISOString(), 'none');
   }
