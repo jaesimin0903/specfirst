@@ -1,6 +1,7 @@
 import type { PropertyStatus, VaultStatus } from '../../lib/board/types';
 
-export type GlyphKind = PropertyStatus | VaultStatus;
+/** 'should': a hollow signal mark, a vault whose only failures break SHOULD guidance (rounding favors the caller). */
+export type GlyphKind = PropertyStatus | VaultStatus | 'should';
 
 /**
  * The four marks the whole board uses, at any size: solid ink (pass), solid signal (fail), hollow
@@ -13,6 +14,7 @@ export function Glyph({ kind, size = 10 }: { kind: GlyphKind; size?: number }) {
       {(kind === 'pass' || kind === 'complete') && <rect className="p" x="0" y="0" width="10" height="10" />}
       {(kind === 'fail' || kind === 'mismatch') && <rect className="f" x="0" y="0" width="10" height="10" />}
       {kind === 'inconclusive' && <rect className="i" x="0.75" y="0.75" width="8.5" height="8.5" />}
+      {kind === 'should' && <rect className="s" x="0.75" y="0.75" width="8.5" height="8.5" />}
       {kind === 'not_applicable' && <rect className="n" x="0" y="4" width="10" height="2.5" />}
       {kind === 'partial' && (
         <>

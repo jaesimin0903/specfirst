@@ -144,6 +144,103 @@ export const SPECFIRST_ERC4626_PROPERTIES_V1: readonly StandardProperty[] = [
   },
 ];
 
+/** How binding the EIP-4626 sentence a property checks is, in the RFC 2119 words the EIP uses. */
+export type PropertyLevel = 'must' | 'should';
+
+export interface PropertyLevelInfo {
+  level: PropertyLevel;
+  /** Where in EIP-4626 (https://eips.ethereum.org/EIPS/eip-4626) the property comes from, quoting the sentence. */
+  eip: string;
+}
+
+const RT_ROUNDING =
+  'Security Considerations: "it is considered most secure to favor the Vault itself during calculations over its users"; shares issued and assets paid out "should round down", shares or assets a user supplies "should round up". Guidance, not a MUST.';
+
+/**
+ * The level of every ERC-4626 property, by id, read against the EIP text. Kept apart from the property tables on
+ * purpose: their rows are what propertiesHash, the suite hash and the reports are built from (test/attest.test.ts
+ * pins their canonical JSON), and a level is a reading of the EIP, not part of what ran. Reports carry no level, so
+ * old and new reports hash, attest and verify exactly as before.
+ * Two upstream properties besides the round trips are SHOULDs: the zero-allowance ones, since withdraw and redeem
+ * only "SHOULD check msg.sender can spend owner funds".
+ */
+export const ERC4626_PROPERTY_LEVELS: Readonly<Record<string, PropertyLevelInfo>> = {
+  asset: { level: 'must', eip: 'asset: "MUST NOT revert."' },
+  totalAssets: { level: 'must', eip: 'totalAssets: "MUST NOT revert."' },
+  convertToShares: { level: 'must', eip: 'convertToShares: "MUST NOT show any variations depending on the caller."' },
+  convertToAssets: { level: 'must', eip: 'convertToAssets: "MUST NOT show any variations depending on the caller."' },
+  maxDeposit: { level: 'must', eip: 'maxDeposit: "MUST NOT revert."' },
+  previewDeposit: {
+    level: 'must',
+    eip: 'previewDeposit: "MUST return as close to and no more than the exact amount of Vault shares that would be minted in a deposit call in the same transaction."',
+  },
+  deposit: {
+    level: 'must',
+    eip: 'deposit: "Mints shares Vault shares to receiver by depositing exactly assets of underlying tokens." and "MUST support EIP-20 approve / transferFrom on asset as a deposit flow."',
+  },
+  maxMint: { level: 'must', eip: 'maxMint: "MUST NOT revert."' },
+  previewMint: {
+    level: 'must',
+    eip: 'previewMint: "MUST return as close to and no fewer than the exact amount of assets that would be deposited in a mint call in the same transaction."',
+  },
+  mint: {
+    level: 'must',
+    eip: 'mint: "Mints exactly shares Vault shares to receiver by depositing assets of underlying tokens." and "MUST support EIP-20 approve / transferFrom on asset as a mint flow."',
+  },
+  maxWithdraw: { level: 'must', eip: 'maxWithdraw: "MUST NOT revert."' },
+  previewWithdraw: {
+    level: 'must',
+    eip: 'previewWithdraw: "MUST return as close to and no fewer than the exact amount of Vault shares that would be burned in a withdraw call in the same transaction."',
+  },
+  withdraw: {
+    level: 'must',
+    eip: 'withdraw: "Burns shares from owner and sends exactly assets of underlying tokens to receiver." and "MUST support a withdraw flow where the shares are burned from owner directly where msg.sender has EIP-20 approval over the shares of owner."',
+  },
+  'withdraw-zero-allowance': {
+    level: 'should',
+    eip: 'withdraw: "SHOULD check msg.sender can spend owner funds, assets needs to be converted to shares and shares should be checked for allowance."',
+  },
+  maxRedeem: { level: 'must', eip: 'maxRedeem: "MUST NOT revert."' },
+  previewRedeem: {
+    level: 'must',
+    eip: 'previewRedeem: "MUST return as close to and no more than the exact amount of assets that would be withdrawn in a redeem call in the same transaction."',
+  },
+  redeem: {
+    level: 'must',
+    eip: 'redeem: "Burns exactly shares from owner and sends assets of underlying tokens to receiver." and "MUST support a redeem flow where the shares are burned from owner directly where msg.sender has EIP-20 approval over the shares of owner."',
+  },
+  'redeem-zero-allowance': { level: 'should', eip: 'redeem: "SHOULD check msg.sender can spend owner funds using allowance."' },
+  'RT-deposit-redeem': { level: 'should', eip: RT_ROUNDING },
+  'RT-deposit-withdraw': { level: 'should', eip: RT_ROUNDING },
+  'RT-redeem-deposit': { level: 'should', eip: RT_ROUNDING },
+  'RT-redeem-mint': { level: 'should', eip: RT_ROUNDING },
+  'RT-mint-withdraw': { level: 'should', eip: RT_ROUNDING },
+  'RT-mint-redeem': { level: 'should', eip: RT_ROUNDING },
+  'RT-withdraw-mint': { level: 'should', eip: RT_ROUNDING },
+  'RT-withdraw-deposit': { level: 'should', eip: RT_ROUNDING },
+  'sf-maxDeposit-honored': {
+    level: 'must',
+    eip: 'maxDeposit: "MUST return the maximum amount of assets deposit would allow to be deposited for receiver and not cause a revert, which MUST NOT be higher than the actual maximum that would be accepted."',
+  },
+  'sf-maxMint-honored': {
+    level: 'must',
+    eip: 'maxMint: "MUST return the maximum amount of shares mint would allow to be deposited to receiver and not cause a revert, which MUST NOT be higher than the actual maximum that would be accepted."',
+  },
+  'sf-maxWithdraw-honored': {
+    level: 'must',
+    eip: 'maxWithdraw: "MUST return the maximum amount of assets that could be transferred from owner through withdraw and not cause a revert, which MUST NOT be higher than the actual maximum that would be accepted", and "MUST return 0" when withdrawals are disabled.',
+  },
+  'sf-maxRedeem-honored': {
+    level: 'must',
+    eip: 'maxRedeem: "MUST return the maximum amount of shares that could be transferred from owner through redeem and not cause a revert, which MUST NOT be higher than the actual maximum that would be accepted", and "MUST return 0" when redemptions are disabled.',
+  },
+};
+
+/** The level of property `id`; null for an id that is not in the table (a report's "not in the property table" extra). */
+export function erc4626PropertyLevel(id: string): PropertyLevel | null {
+  return ERC4626_PROPERTY_LEVELS[id]?.level ?? null;
+}
+
 /** Everything a check reports: the 26 upstream properties, then Specfirst's own. */
 export const ERC4626_CHECK_PROPERTIES: readonly StandardProperty[] = [...ERC4626_PROPERTIES, ...SPECFIRST_ERC4626_PROPERTIES];
 /** The table of reports written before 2026-10-07 (see SPECFIRST_ERC4626_PROPERTIES_V1). */

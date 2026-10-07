@@ -3,6 +3,13 @@ import { describeFailure, formatBlock, isNotApplicableCategory, REASON_DETAIL, R
 import { shortAddress } from '../../lib/format';
 import { Glyph } from './Glyph';
 import { FilterLink } from './FilterLink';
+import { LevelTag } from './StatusChip';
+import { classifyFailure, failureLevelOf } from '../../lib/board/levels';
+
+/** Vaults whose only failures are round trips: no MUST sentence failed, rounding favors the caller. */
+function roundingOnly(rows: ReadonlyArray<Pick<VaultRow, 'status' | 'failed'>>): number {
+  return rows.filter((r) => r.status === 'mismatch' && failureLevelOf(r.failed) === 'rounding').length;
+}
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
@@ -91,7 +98,10 @@ export function Figures({ board }: { board: BoardData }) {
         <span className="sb-figure-label">
           <Glyph kind="mismatch" /> spec mismatches
         </span>
-        <span className="sb-figure-note">in {plural(t.mismatchImplementations, 'implementation')}</span>
+        <span className="sb-figure-note">
+          in {plural(t.mismatchImplementations, 'implementation')}
+          {roundingOnly(board.vaults) > 0 ? `; ${roundingOnly(board.vaults)} of them only round trips, a SHOULD` : ''}
+        </span>
       </FilterLink>
       <FilterLink filters={{ status: 'partial' }} className="sb-figure">
         <span className="sb-figure-n">{t.partial}</span>
@@ -129,8 +139,9 @@ export function Findings({ board }: { board: BoardData }) {
         {sfOnly
           ? "Every failure below comes from Specfirst's max-honored properties: the vault's own maxDeposit, maxMint, maxWithdraw or maxRedeem promised an amount that the matching call then refused."
           : "Failures from Specfirst's max-honored properties mean the vault's own maxDeposit, maxMint, maxWithdraw or maxRedeem promised an amount that the matching call then refused."}{' '}
-        Software that trusts those values, such as aggregators and routers, gets a revert where the standard promised success. These are disagreements
-        with the specification, not reports of lost funds.
+        Software that trusts those values, such as aggregators and routers, gets a revert where the standard promised success. Each failure names
+        its level: a MUST sentence of EIP-4626, or SHOULD guidance such as the round trips, where rounding favors the caller instead of the vault and
+        no MUST sentence failed. These are disagreements with the specification, not reports of lost funds.
       </p>
       {rows.length === 0 ? (
         <p className="sb-empty">No property failed on any vault in this data.</p>
@@ -158,12 +169,13 @@ export function Findings({ board }: { board: BoardData }) {
                 </div>
                 <ul className="sb-finding-lines">
                   {r.failed.map((f) => {
-                    const { finding, rule } = describeFailure(f.reason);
+                    const { finding, rule } = describeFailure(f.reason, f);
                     return (
                       <li key={f.id}>
                         <Glyph kind="fail" />
                         <div>
                           <span className="sb-finding-prop">{f.id}</span>
+                          <LevelTag level={classifyFailure(f).level} />
                           <p>{finding}</p>
                           {rule && <p className="sb-rule">{rule}</p>}
                         </div>

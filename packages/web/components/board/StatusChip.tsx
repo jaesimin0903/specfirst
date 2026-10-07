@@ -1,5 +1,6 @@
 import type { AttestationLite, PropertyStatus, VaultStatus } from '../../lib/board/types';
-import { PROPERTY_STATUS_LABEL, VAULT_STATUS_LABEL } from '../../lib/board/reasons';
+import { LEVEL_LABEL, type FailureLevel, type PropertyLevel } from '../../lib/board/levels';
+import { PROPERTY_STATUS_LABEL, vaultLabel } from '../../lib/board/reasons';
 import { Glyph } from './Glyph';
 
 export function PropertyChip({ status }: { status: PropertyStatus }) {
@@ -11,12 +12,23 @@ export function PropertyChip({ status }: { status: PropertyStatus }) {
   );
 }
 
-export function VaultChip({ status }: { status: VaultStatus }) {
+/** A vault's status; `failure` turns a mismatch made only of round trips into the softer rounding chip. */
+export function VaultChip({ status, failure = null }: { status: VaultStatus; failure?: FailureLevel | null }) {
+  const soft = status === 'mismatch' && failure === 'rounding';
   return (
-    <span className="sb-chip" data-s={status}>
-      <Glyph kind={status} />
-      {VAULT_STATUS_LABEL[status]}
+    <span className="sb-chip" data-s={soft ? 'should' : status}>
+      <Glyph kind={soft ? 'should' : status} />
+      {vaultLabel(status, failure)}
     </span>
+  );
+}
+
+/** "EIP-4626 MUST" or "EIP-4626 SHOULD" next to a property or a failure. */
+export function LevelTag({ level }: { level: PropertyLevel }) {
+  return (
+    <small className="sb-level" data-level={level}>
+      {LEVEL_LABEL[level]}
+    </small>
   );
 }
 

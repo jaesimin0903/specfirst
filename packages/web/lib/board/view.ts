@@ -1,4 +1,4 @@
-import type { AttestationLite, VaultRow, VaultStatus, VaultTraitView } from './types';
+import type { AttestationLite, FailedProperty, VaultRow, VaultStatus, VaultTraitView } from './types';
 
 /* Filtering and sorting for the vault table. Client-safe: no Node imports. */
 
@@ -15,7 +15,7 @@ export interface WatchFoundMark {
 export type ExplorerRow = Pick<
   VaultRow,
   'id' | 'address' | 'name' | 'protocol' | 'assetSymbol' | 'status' | 'summary' | 'cells' | 'implementationKey' | 'implementationKeyKind' | 'implementationAddress' | 'groupSize'
-> & { failed: { id: string }[]; attestation: AttestationLite; found?: WatchFoundMark; traits?: VaultTraitView[] };
+> & { failed: Pick<FailedProperty, 'id' | 'topic' | 'delta' | 'amount'>[]; attestation: AttestationLite; found?: WatchFoundMark; traits?: VaultTraitView[] };
 
 export type ExplorerView = 'vaults' | 'implementations';
 
@@ -34,7 +34,7 @@ export function toExplorerRow(r: VaultRow): ExplorerRow {
     implementationKeyKind: r.implementationKeyKind,
     implementationAddress: r.implementationAddress,
     groupSize: r.groupSize,
-    failed: r.failed.map((f) => ({ id: f.id })),
+    failed: r.failed.map((f) => ({ id: f.id, ...(f.topic ? { topic: f.topic } : {}), ...(f.delta ? { delta: f.delta, amount: f.amount } : {}) })),
     ...(r.traits.length > 0 ? { traits: r.traits } : {}),
     attestation: a.kind === 'attested' ? { kind: 'attested', id: a.id, status: a.status, matchesReport: a.matchesReport, blockNumber: a.blockNumber } : a,
   };

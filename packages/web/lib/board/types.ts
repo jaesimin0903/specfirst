@@ -67,6 +67,8 @@ export interface AttestationRecord {
   reportURI: string;
   /** From data/attestation-txs.json; the registry itself does not store it. */
   txHash: string | null;
+  /** The attestation's failedBitmap as 0x hex (bit i: property i failed); absent in board data built before it was kept. */
+  failedBitmap?: string;
 }
 
 /**
@@ -103,6 +105,11 @@ export interface VaultTraitView {
 export interface FailedProperty {
   id: string;
   reason: string;
+  /** lib/board/levels FailureTopic, computed at build from the reason and forge's logs; absent in older board data. */
+  topic?: 'must' | 'allowance' | 'rounding' | 'round-trip';
+  /** For a round trip whose logs carry it: base units in the caller's favor, and the amount compared (decimal). */
+  delta?: string;
+  amount?: string;
 }
 
 export interface VaultRow {

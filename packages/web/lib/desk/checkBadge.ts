@@ -1,3 +1,4 @@
+import { failureLevelOf, idsOfBitmap } from '../board/levels';
 import type { AttestationRecord } from '../board/types';
 import type { LiveAttestation } from './registry';
 
@@ -7,7 +8,9 @@ import type { LiveAttestation } from './registry';
  * at /badge/<address> is a different product (spec certificates) and stays as it is.
  *
  * Colors follow the board: seal blue means recorded onchain and all passed, the signal red means a property
- * failed, and everything else stays in neutral ink.
+ * failed, and everything else stays in neutral ink. `level` says whether a failure is a MUST: read from the
+ * attestation's failedBitmap, it is 'should' only when every failed bit is a SHOULD property (the bitmap does not
+ * say how big a round trip's difference was, or which assertion of withdraw failed, so the state stays mismatch).
  */
 
 export type CheckBadgeState = 'compliant' | 'mismatch' | 'partial' | 'not-attested' | 'unavailable';
@@ -16,6 +19,8 @@ export interface CheckBadge {
   state: CheckBadgeState;
   /** "compliant, 30/30 pass" */
   text: string;
+  /** Only for a mismatch: 'must' when a MUST property failed or the bitmap is not known, 'should' when only SHOULDs did. */
+  level?: 'must' | 'should';
   attestationId: string | null;
 }
 
@@ -29,7 +34,11 @@ function fromRecord(r: AttestationRecord): CheckBadge {
   const c = r.counts;
   const total = c.pass + c.fail + c.inconclusive + c.notApplicable;
   if (r.status === 'Revoked' || r.status === 'None') return { state: 'not-attested', text: 'attestation revoked', attestationId: r.id };
-  if (c.fail > 0) return { state: 'mismatch', text: `mismatch, ${c.fail} of ${total} fail`, attestationId: r.id };
+  if (c.fail > 0) {
+    const ids = r.failedBitmap ? idsOfBitmap(BigInt(r.failedBitmap)) : null;
+    const should = ids !== null && ids.length === c.fail && failureLevelOf(ids.map((id) => ({ id }))) !== 'must';
+    return { state: 'mismatch', text: `mismatch, ${c.fail} of ${total} fail${should ? ', SHOULD only' : ''}`, attestationId: r.id, level: should ? 'should' : 'must' };
+  }
   // isCompliant is the registry's own word; when it could not be read, the counts say the same thing.
   const compliant = r.compliant ?? (total > 0 && c.pass === total);
   if (compliant) return { state: 'compliant', text: `compliant, ${c.pass}/${total} pass`, attestationId: r.id };

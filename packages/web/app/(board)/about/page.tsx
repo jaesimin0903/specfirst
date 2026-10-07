@@ -131,6 +131,22 @@ export default function AboutPage() {
           aggregators, routers and wallets that read maxWithdraw before building a transaction get a revert the standard says cannot happen.
         </p>
 
+        <h2>MUST and SHOULD</h2>
+        <p>
+          Not every property checks a MUST. The eight round trips of the upstream suite check EIP-4626&apos;s rounding guidance in Security
+          Considerations: rounding should favor the vault over its users. That is a SHOULD. When every failure of a vault is a round trip off by at most
+          2 base units or 1 basis point of the amount, often a base unit in the caller&apos;s favor through a wrapped asset, the board shows
+          &quot;Rounding favors caller&quot; instead of a spec mismatch. A round trip off by more, or by an amount the report does not give, is still
+          a SHOULD but keeps the spec mismatch chip and says by how much: that is a conversion that is wrong, not rounding.
+        </p>
+        <p>
+          Withdraw and redeem only SHOULD check that the caller may spend the owner&apos;s shares, so the two zero-allowance properties are
+          SHOULDs. A failure of the withdraw or redeem property itself counts as a MUST whatever its reason says, because the reason text can come from
+          the vault; a vault that only skips the allowance check shows up in the zero-allowance properties. A round trip is judged by every pair of
+          values in its logs, so values a vault writes there can only make the verdict stricter. Allowance failures keep the spec mismatch chip,
+          because the sentence names what went through. Every failure is shown with its level, and any failed MUST makes the vault a spec mismatch.
+        </p>
+
         <h2>Onchain attestations</h2>
         <p>
           Results are recorded on Monad testnet in CheckAttestationRegistry{' '}

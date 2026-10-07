@@ -18,6 +18,7 @@ import {
 } from '../../lib/board/view';
 import { shortAddress, shortHash } from '../../lib/format';
 import { AttestationMark, VaultChip } from './StatusChip';
+import { failureLevelOf } from '../../lib/board/levels';
 import { CellStrip } from './CellStrip';
 import { Glyph } from './Glyph';
 import { FILTER_EVENT, type FilterEventDetail } from './FilterLink';
@@ -113,6 +114,11 @@ export function BoardExplorer({ rows, protocols, split }: BoardExplorerProps) {
     for (const r of filterRows(rows, { ...filters, status: ALL })) c[r.status]++;
     return c;
   }, [rows, filters]);
+  // Mismatches whose only failures are round trips (SHOULD guidance): counted, not a status of their own.
+  const roundingCount = useMemo(
+    () => filterRows(rows, { ...filters, status: ALL }).filter((r) => r.status === 'mismatch' && failureLevelOf(r.failed) === 'rounding').length,
+    [rows, filters],
+  );
   const filtered = useMemo(() => filterRows(rows, filters), [rows, filters]);
   const sorted = useMemo(() => sortRows(filtered, sort.key, sort.dir), [filtered, sort]);
   const groups = useMemo(() => (view === 'implementations' ? groupsOf(filtered) : []), [filtered, view]);
@@ -161,6 +167,7 @@ export function BoardExplorer({ rows, protocols, split }: BoardExplorerProps) {
               <button key={s} type="button" aria-pressed={filters.status === s} onClick={() => setFilters((f) => ({ ...f, status: s }))}>
                 <Glyph kind={s} />
                 {VAULT_STATUS_LABEL[s]} <span className="soft num">{statusCounts[s]}</span>
+                {s === 'mismatch' && roundingCount > 0 && <span className="soft"> ({roundingCount} only rounding)</span>}
               </button>
             ))}
           </div>
@@ -214,7 +221,7 @@ export function BoardExplorer({ rows, protocols, split }: BoardExplorerProps) {
               {sorted.map((r) => (
                 <tr key={r.id}>
                   <td className="nowrap">
-                    <VaultChip status={r.status} />
+                    <VaultChip status={r.status} failure={failureLevelOf(r.failed)} />
                   </td>
                   <td className="sb-vault-cell">
                     <a href={`/v/${r.id}`} className={r.name ? undefined : 'mono'}>

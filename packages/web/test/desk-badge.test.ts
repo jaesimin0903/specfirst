@@ -28,7 +28,7 @@ describe('check badge state', () => {
 
   it('Mismatch as soon as one property failed, whatever else', () => {
     const b = checkBadgeOf({ kind: 'attested', record: record({ compliant: false, counts: { pass: 16, fail: 2, inconclusive: 12, notApplicable: 0 } }) });
-    expect(b).toEqual({ state: 'mismatch', text: 'mismatch, 2 of 30 fail', attestationId: '7' });
+    expect(b).toEqual({ state: 'mismatch', text: 'mismatch, 2 of 30 fail', attestationId: '7', level: 'must' });
   });
 
   it('Partly checked when nothing failed but not everything ran', () => {
