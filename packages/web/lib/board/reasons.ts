@@ -30,6 +30,8 @@ const FORGE_STATUS = /^forge status (\S+)/;
 const MAX_HONORED_FAIL = /^(deposit|mint|withdraw|redeem)\((\d+)\) reverted with (selector (0x[0-9a-fA-F]{8})|no revert data|short revert data) while (max(?:Deposit|Mint|Withdraw|Redeem)) is (\d+)(?:; [\s\S]*)?$/;
 /** core missingPrecompileNote: the precompile, and with a count when other inputs were judged. */
 const MISSING_PRECOMPILE = /a vault call reached Monad precompile (0x[0-9a-fA-F]{40}), which forge lacks(?:, in (\d+) inputs)?; these inputs were not judged/;
+/** core setupPrecompileNote: inputs rejected in a setup deposit that reached a missing precompile. */
+const SETUP_PRECOMPILE = /a vault call reached Monad precompile (0x[0-9a-fA-F]{40}) in the setup deposit, which forge lacks, in (\d+) inputs; these inputs were rejected/;
 /** core belowBoundNote. */
 const BELOW_BOUND = /(\d+) amounts below the bound were refused; the bound itself was accepted/;
 
@@ -173,6 +175,8 @@ export function countedNotes(reason: string | undefined): string {
   if (below) out.push(`${below[1]} amounts below the bound were refused; the bound itself was accepted.`);
   const pre = MISSING_PRECOMPILE.exec(r);
   if (pre?.[2]) out.push(`${pre[2]} inputs reached Monad precompile ${pre[1]}, which forge's EVM does not have, and were not judged.`);
+  const setup = SETUP_PRECOMPILE.exec(r);
+  if (setup) out.push(`${setup[2]} inputs were rejected because the setup deposit reached Monad precompile ${setup[1]}, which forge's EVM does not have.`);
   return out.join(' ');
 }
 

@@ -9,6 +9,7 @@ import {
   maxZeroNote,
   belowBoundNote,
   missingPrecompileNote,
+  setupPrecompileNote,
 } from '@specfirst/core';
 import {
   ASYNC_MAX_NOTE,
@@ -142,6 +143,9 @@ describe('explainResult', () => {
     );
     expect(explainResult({ status: 'fail', reason: `withdraw(5) reverted with selector 0x4e487b71 while maxWithdraw is 9; ${missingPrecompileNote('0x0000000000000000000000000000000000001001', 5)}` })).toBe(
       "maxWithdraw was 9, but withdraw(5) reverted with 0x4e487b71. EIP-4626: maxWithdraw MUST return the maximum amount of assets withdraw accepts without reverting, and 0 while withdrawals are disabled. 5 inputs reached Monad precompile 0x0000000000000000000000000000000000001001, which forge's EVM does not have, and were not judged.",
+    );
+    expect(explainResult({ status: 'inconclusive', reason: `\`vm.assume\` rejected too many inputs (4096 allowed); ${setupPrecompileNote('0x0000000000000000000000000000000000001000', 3923)}` })).toBe(
+      "Never exercised: the vault rejected nearly every amount the fuzzer tried, and forge gave up after 4096 discarded inputs. 3923 inputs were rejected because the setup deposit reached Monad precompile 0x0000000000000000000000000000000000001000, which forge's EVM does not have.",
     );
     // A property with unjudged inputs and no fail is inconclusive, never a pass (FeeLaunderVault).
     expect(explainResult({ status: 'inconclusive', runs: 16, reason: missingPrecompileNote('0x0000000000000000000000000000000000001001', 2) })).toBe(
