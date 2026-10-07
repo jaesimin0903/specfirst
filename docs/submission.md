@@ -102,7 +102,7 @@ The service loses money today, and we show it that way on the desk page. The wat
 | AllocationGate | `0xEE966282544FF5e0429e754856197A13b8340C8A` |
 | DemoVaultFactory | `0xE1FC8fa26Cb7496A68DD4e0ba896Ed8CAE2238FB` |
 
-- **Tests.** forge 195, core 568, cli 115, web 305, all passing. `scripts/check-chars.sh` runs with them.
+- **Tests.** forge 195, core 569, cli 115, web 318, all passing. `scripts/check-chars.sh` runs with them.
 - **Decisions.** `docs/adr/` records each design decision and what changed after review: third-party properties in 0003, the registry in 0004, the desk in 0005, the watcher and subscriptions in 0006, the gate in 0007.
 
 ---
