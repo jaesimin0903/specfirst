@@ -38,7 +38,9 @@ export default function AboutPage() {
           Specfirst adds 4 properties of its own, one EIP-4626 sentence each. For maxDeposit, maxMint, maxWithdraw and maxRedeem the standard says the
           value MUST be the most the matching call accepts without reverting, and MUST be 0 while the action is disabled. The upstream suite discards
           any input whose call reverts, so a vault whose withdraw always reverts never fails there; it only runs out of inputs. The max-honored
-          properties call deposit, mint, withdraw or redeem directly with an amount at or below the advertised max and fail when the call reverts.
+          properties call deposit, mint, withdraw or redeem directly with an amount at or below the advertised max, then at the bound itself (the max, or
+          one million whole tokens for deposit and mint when the max is larger). They fail when the call at the bound reverts; refusals of smaller
+          amounts are counted beside the verdict.
           Their source is in the Specfirst repository and its hash is in every report.
         </p>
 
