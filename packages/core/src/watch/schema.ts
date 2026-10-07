@@ -106,10 +106,19 @@ export type CheckChange = z.infer<typeof checkChangeSchema>;
 /**
  * A confirmed fall of the share value: convertToAssets of one whole share (10 ** decimals() of the vault) read at
  * fromBlock and at toBlock, in the asset's base units, and the fall in basis points of the first, rounded down. A
- * fact about two blocks, not a verdict on the vault.
+ * fact about two blocks, not a verdict on the vault. scale (1 to 6, absent for 0): both values are for 10 ** scale
+ * whole shares, read so for a vault whose one share is worth fewer than 10,000 base units.
  */
 export const priceDropChangeSchema = z
-  .object({ kind: z.literal('price-drop'), fromAssetsPerShare: decimal, toAssetsPerShare: decimal, dropBps: z.number().int().min(0).max(10_000), fromBlock: decimal, toBlock: decimal })
+  .object({
+    kind: z.literal('price-drop'),
+    fromAssetsPerShare: decimal,
+    toAssetsPerShare: decimal,
+    dropBps: z.number().int().min(0).max(10_000),
+    fromBlock: decimal,
+    toBlock: decimal,
+    scale: z.number().int().min(1).max(6).optional(),
+  })
   .strict();
 export type PriceDropChange = z.infer<typeof priceDropChangeSchema>;
 
@@ -149,7 +158,8 @@ export type FeedEvent = z.infer<typeof feedEventSchema>;
 /**
  * status.json, rewritten after every step. head: the latest subject block seen. cursor: the first block
  * whose logs have not been read yet. lagBlocks: how far below head the watcher reads and checks.
- * counts are over the last 24 hours except known (vaults.json). sources: one entry per signal source, seen
+ * counts are over the last 24 hours except known (vaults.json); changed24h counts changes of a result, priceDrops24h
+ * (optional, added with the share value) confirmed falls of a share value. sources: one entry per signal source, seen
  * = signals of that source since the watcher's state was created. attestBudget: attestations made on the
  * current UTC day against --max-attest-per-day, and (optional) the unsolicited part of them against its own
  * smaller budget, the fails of candidates no factory announced and nobody attested within that, the cap per
@@ -170,7 +180,7 @@ export const watchStatusSchema = z
       .strict()
       .nullable(),
     queue: z.array(z.object({ subject: checksummed, source: z.enum(FEED_SOURCES), enqueuedAt: iso }).strict()),
-    counts: z.object({ known: count, detected24h: count, checked24h: count, attested24h: count, changed24h: count }).strict(),
+    counts: z.object({ known: count, detected24h: count, checked24h: count, attested24h: count, changed24h: count, priceDrops24h: count.optional() }).strict(),
     sources: z.array(z.object({ name: z.string().min(1), address: checksummed.nullable(), topic0: hex32, seen: count }).strict()),
     attestBudget: z
       .object({

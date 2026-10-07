@@ -118,6 +118,7 @@ interface WatchOptions {
   priceDropBps: string;
   priceAll?: boolean;
   priceReadsPerMinute: string;
+  maxPriceDropsPerDay: string;
   maxAttestPerDay: string;
   maxUnsolicitedPerDay: string;
   maxAttestPerSubject: string;
@@ -259,7 +260,7 @@ async function verifyFixturesOnChain(
 }
 
 /** A read-only client over `urls` that also fails over on node errors, and refuses an RPC of another chain. */
-async function subjectClientFor(urls: string[], chainId: number): Promise<StandardCheckClient & SubjectClient & Pick<PublicClient, 'request'>> {
+async function subjectClientFor(urls: string[], chainId: number): Promise<StandardCheckClient & SubjectClient & Pick<PublicClient, 'request' | 'multicall'>> {
   const chain = Object.values(NETWORKS).find((c) => c.id === chainId);
   const client = createPublicClient({ ...(chain ? { chain } : {}), transport: rpcTransport(urls, { failoverIf: isNodeError }) });
   let reported: number;
@@ -269,7 +270,7 @@ async function subjectClientFor(urls: string[], chainId: number): Promise<Standa
     throw new ConfigError(`the subject RPC ${urls.join(', ')} did not answer eth_chainId: ${errorText(err)}`);
   }
   if (reported !== chainId) throw new ConfigError(`the subject RPC ${urls[0]} serves chain ${reported}, not --subject-chain ${chainId}`);
-  return client as unknown as StandardCheckClient & SubjectClient & Pick<PublicClient, 'request'>;
+  return client as unknown as StandardCheckClient & SubjectClient & Pick<PublicClient, 'request' | 'multicall'>;
 }
 
 /** The host of an RPC URL, for logs: the path and query of a provider URL often carry an API key. */
@@ -381,7 +382,12 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
     )
     .option('--price-drop-bps <n>', 'a fall of the share value of more than this many basis points, seen again at a later block, is a price-drop event', String(DEFAULT_WATCH_CONFIG.priceDropBps))
     .option('--price-all', 'also follow the share value of known vaults nobody subscribed to and nobody attested')
-    .option('--price-reads-per-minute <n>', 'share value reads per minute, all subjects together (three eth_calls each)', String(DEFAULT_WATCH_CONFIG.maxPriceReadsPerMinute))
+    .option(
+      '--price-reads-per-minute <n>',
+      'share value reads per minute, all subjects together (one eth_call each with Multicall3, else three); a quarter is kept for attested vaults',
+      String(DEFAULT_WATCH_CONFIG.maxPriceReadsPerMinute),
+    )
+    .option('--max-price-drops-per-day <n>', 'price-drop events (and alerts) of one vault per UTC day; more are logged only', String(DEFAULT_WATCH_CONFIG.maxPriceDropsPerDay))
     .option('--max-attest-per-day <n>', 'attestations per UTC day, every class; more wait for the next day', String(DEFAULT_WATCH_CONFIG.maxAttestPerDay))
     .option('--max-unsolicited-per-day <n>', 'of those, attestations nobody subscribed to (factory, fail, attested-change)', String(DEFAULT_WATCH_CONFIG.maxUnsolicitedPerDay))
     .option('--max-attest-per-subject <n>', 'attestations of one subject per UTC day', String(DEFAULT_WATCH_CONFIG.maxAttestPerSubjectPerDay))
@@ -414,6 +420,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         const priceMinutes = Number(nonNegative(opts.priceMinutes, '--price-minutes', 1_000_000n));
         const priceDropBps = Number(positive(opts.priceDropBps, '--price-drop-bps', 9_999n));
         const maxPriceReadsPerMinute = Number(positive(opts.priceReadsPerMinute, '--price-reads-per-minute', 100_000n));
+        const maxPriceDropsPerDay = Number(nonNegative(opts.maxPriceDropsPerDay, '--max-price-drops-per-day', 1_000n));
         const maxAttestPerDay = Number(nonNegative(opts.maxAttestPerDay, '--max-attest-per-day', 1_000_000n));
         const maxUnsolicitedPerDay = Number(nonNegative(opts.maxUnsolicitedPerDay, '--max-unsolicited-per-day', 1_000_000n));
         const maxAttestPerSubjectPerDay = Number(nonNegative(opts.maxAttestPerSubject, '--max-attest-per-subject', 1_000n));
@@ -518,6 +525,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             priceDropBps,
             priceAll: Boolean(opts.priceAll),
             maxPriceReadsPerMinute,
+            maxPriceDropsPerDay,
             maxAttestPerDay,
             maxUnsolicitedPerDay,
             maxAttestPerSubjectPerDay,
@@ -570,7 +578,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             cont(
               pc.dim(
                 priceMinutes > 0
-                  ? `share value: subscribed at every pass, ${opts.priceAll ? 'attested and every other known vault' : 'attested'} every ${priceMinutes} min, a drop over ${priceDropBps} bps confirmed at a later block, ${maxPriceReadsPerMinute} reads a minute`
+                  ? `share value: subscribed every ${DEFAULT_WATCH_CONFIG.priceUrgentSec}s, ${opts.priceAll ? 'attested and every other known vault' : 'attested'} every ${priceMinutes} min, a drop over ${priceDropBps} bps confirmed at a later block, ${maxPriceReadsPerMinute} reads a minute, ${maxPriceDropsPerDay} drops a vault a day`
                   : 'share value not read (--price-minutes 0)',
               ),
             ),
@@ -614,6 +622,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             priceDropBps,
             priceAll: Boolean(opts.priceAll),
             maxPriceReadsPerMinute,
+            maxPriceDropsPerDay,
             reportBaseUrl: base,
             subs: alerting?.subs ?? null,
             webhooks: alerting ? rel(alerting.webhooksFile) : null,
@@ -828,8 +837,17 @@ function registerWatchDemo(watch: Command): void {
         const { net, client, wallet } = signer(command);
         try {
           const tx = await setDemoVaultLoss({ client, wallet, vault, bps });
-          printLine(ctx, stage('demo', `${pc.bold(vault)} lost ${dropPercentText(bps)} of its assets (${tx.assets} base units)  ${pc.dim(`block ${tx.blockNumber}  tx ${tx.hash}`)}`));
-          emitEvent(ctx, { type: 'watch-demo-loss', chainId: net.clients.chain.id, vault, bps, assets: tx.assets.toString(), txHash: tx.hash, blockNumber: tx.blockNumber.toString() });
+          const event = { type: 'watch-demo-loss', chainId: net.clients.chain.id, vault, bps, assets: tx.assets.toString() };
+          if (!tx.sent) {
+            printLine(ctx, stage('demo', `${pc.bold(vault)} nothing changed: ${dropPercentText(bps)} of its ${tx.totalAssets} base units of assets rounds to 0, so the share value stays; nothing sent`));
+            emitEvent(ctx, { ...event, changed: false, totalAssets: tx.totalAssets.toString(), txHash: null, blockNumber: null });
+          } else if (tx.assets === 0n) {
+            printLine(ctx, stage('demo', `${pc.bold(vault)} nothing changed: the loss rounded to 0 base units, so the share value stays  ${pc.dim(`block ${tx.blockNumber}  tx ${tx.hash}`)}`));
+            emitEvent(ctx, { ...event, changed: false, txHash: tx.hash, blockNumber: tx.blockNumber.toString() });
+          } else {
+            printLine(ctx, stage('demo', `${pc.bold(vault)} lost ${dropPercentText(bps)} of its assets (${tx.assets} base units)  ${pc.dim(`block ${tx.blockNumber}  tx ${tx.hash}`)}`));
+            emitEvent(ctx, { ...event, changed: true, txHash: tx.hash, blockNumber: tx.blockNumber.toString() });
+          }
         } catch (err) {
           failed(err);
         }

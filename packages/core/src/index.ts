@@ -166,6 +166,7 @@ export {
   isRateLimited,
   isTransportFailure,
   isNodeError,
+  isContractFailureMessage,
   WriteTargetError,
   type RpcTransportOptions,
 } from './chain/transport.js';
@@ -516,7 +517,22 @@ export {
   type WatchVaults,
 } from './watch/schema.js';
 export { NO_SUBSCRIPTIONS, NO_ALERTS, type ActiveSubscription, type SubscriptionSource, type AlertSink } from './watch/hooks.js';
-export { BPS, dropBpsOf, exceedsDrop, priceStep, dropPercentText, type SharePrice, type SharePriceRead, type PriceTrack, type PriceStep } from './watch/price.js';
+export {
+  BPS,
+  MIN_PRICE_UNITS,
+  MAX_PRICE_SCALE,
+  dropBpsOf,
+  exceedsDrop,
+  priceScaleFor,
+  priceStep,
+  priceMiss,
+  dropPercentText,
+  type SharePrice,
+  type SharePriceRead,
+  type PriceTrack,
+  type PriceStep,
+  type PriceRules,
+} from './watch/price.js';
 export {
   WATCH_SIGNALS,
   GENERIC_SOURCE_SPECS,
@@ -593,6 +609,8 @@ export {
   batchedLogsReader,
   fingerprintOf,
   readSharePrice,
+  MULTICALL3_ADDRESS,
+  type SharePriceReadOptions,
   watchFuzzSeedOf,
   CHAIN_SUBJECT,
   DEFAULT_WATCH_CONFIG,
@@ -668,6 +686,7 @@ export {
   emptyWebhooksFile,
   webhookPayload,
   webhookKindOf,
+  webhookKeyOf,
   reportUrlOf,
   postWebhook,
   deliverWebhookAlerts,

@@ -44,6 +44,7 @@ export {
   emptyWebhooksFile,
   webhookPayload,
   webhookKindOf,
+  webhookKeyOf,
   reportUrlOf,
   postWebhook,
   deliverWebhookAlerts,

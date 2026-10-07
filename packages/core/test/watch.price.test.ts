@@ -1,41 +1,69 @@
 import type { Address } from 'viem';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   dropBpsOf,
   dropPercentText,
   exceedsDrop,
   feedEventSchema,
+  priceMiss,
+  priceScaleFor,
   priceStep,
   readSharePrice,
   webhookPayload,
-  type ActiveSubscription,
-  type AlertSink,
-  type FeedEvent,
+  type PriceRules,
   type PriceTrack,
-  type SharePriceRead,
-  type WatchEvent,
 } from '../src/index.js';
-import { addr, attestParams, cleanupHarnesses, ERC4626, harness, kinds, reportOf, T0, type Harness } from './helpers/watchHarness.js';
-
-afterEach(cleanupHarnesses);
+import { addr } from './helpers/watchHarness.js';
 
 const E18 = 10n ** 18n;
 const V = addr(0x9a01);
-const W = addr(0x9a02);
-const X = addr(0x9a03);
+const MIN = 60_000;
+/** The watcher's defaults: 10 bps, confirmed 2 min and 10 blocks later, forgotten after an hour or 5 misses. */
+const RULES: PriceRules = { thresholdBps: 10, confirmMs: 2 * MIN, confirmBlocks: 10, dropTtlMs: 60 * MIN, dropMaxMisses: 5 };
+
+const read = (assetsPerShare: bigint, block: bigint, at = Number(block) * MIN, o: { decimals?: number; scale?: number } = {}) => ({
+  assetsPerShare,
+  block,
+  at,
+  shareDecimals: o.decimals ?? 18,
+  scale: o.scale ?? 0,
+});
+const track = (assetsPerShare: bigint, block: bigint, o: Partial<PriceTrack> = {}): PriceTrack => ({
+  decimals: 18,
+  scale: 0,
+  assetsPerShare,
+  block,
+  readAssetsPerShare: assetsPerShare,
+  readBlock: block,
+  ...o,
+});
+/** Applies reads in order; the step kinds and the last track. */
+const run = (reads: Array<ReturnType<typeof read>>, rules = RULES) => {
+  let t: PriceTrack | null = null;
+  const kinds: string[] = [];
+  let last: ReturnType<typeof priceStep> | null = null;
+  for (const r of reads) {
+    last = priceStep(t, r, rules);
+    kinds.push(last.kind);
+    t = last.next;
+  }
+  return { kinds, track: t!, last: last! };
+};
 
 describe('priceStep', () => {
-  const read = (assetsPerShare: bigint, block: bigint, shareDecimals = 18) => ({ assetsPerShare, block, shareDecimals });
-  const track = (assetsPerShare: bigint, block: bigint, o: Partial<PriceTrack> = {}): PriceTrack => ({ decimals: 18, assetsPerShare, block, readBlock: block, ...o });
-
   it('the first read is the reference', () => {
-    expect(priceStep(null, read(E18, 100n), 10)).toEqual({ kind: 'first', next: track(E18, 100n) });
+    expect(priceStep(null, read(E18, 100n), RULES)).toEqual({ kind: 'first', next: track(E18, 100n) });
   });
 
-  it('a fall over the threshold waits for a read at a later block, which confirms it with both values and blocks', () => {
-    const pending = priceStep(track(E18, 100n), read((E18 * 9958n) / 10_000n, 110n), 10);
-    expect(pending).toEqual({ kind: 'pending', next: { ...track(E18, 100n, { readBlock: 110n }), drop: { assetsPerShare: (E18 * 9958n) / 10_000n, block: 110n } } });
-    const confirmed = priceStep(pending.next, read((E18 * 9957n) / 10_000n, 120n), 10);
+  it('a fall over the threshold is confirmed by a read at least 10 blocks and 2 minutes after it was first seen', () => {
+    const low = (E18 * 9958n) / 10_000n;
+    const pending = priceStep(track(E18, 100n), read(low, 110n, 0), RULES);
+    expect(pending).toEqual({ kind: 'pending', next: track(E18, 100n, { readAssetsPerShare: low, readBlock: 110n, drop: { assetsPerShare: low, block: 110n, at: 0, misses: 0 } }) });
+    // Review L1: a later block alone is not enough, during a catch-up that is one block and no time.
+    expect(priceStep(pending.next, read(low, 111n, 0), RULES).kind).toBe('waiting');
+    expect(priceStep(pending.next, read(low, 130n, MIN), RULES).kind).toBe('waiting');
+    expect(priceStep(pending.next, read(low, 115n, 3 * MIN), RULES).kind).toBe('waiting');
+    const confirmed = priceStep(pending.next, read((E18 * 9957n) / 10_000n, 120n, 2 * MIN), RULES);
     expect(confirmed).toEqual({
       kind: 'confirmed',
       next: track((E18 * 9957n) / 10_000n, 120n),
@@ -44,39 +72,74 @@ describe('priceStep', () => {
     });
   });
 
+  it('review A2: a confirming read one block later is not accepted', () => {
+    const p = priceStep(track(E18, 100n), read(E18 / 2n, 101n, 0), RULES);
+    expect(priceStep(p.next, read(E18 / 2n, 102n, 0), RULES).kind).toBe('waiting');
+  });
+
+  it('review M1 and A: a one-read upward spike does not become the reference, so the return to normal is no drop', () => {
+    const spike = run([read(E18, 100n), read((E18 * 101n) / 100n, 101n), read(E18, 102n), read(E18, 103n)]);
+    expect(spike.kinds).toEqual(['first', 'rise', 'same', 'same']);
+    expect(spike.track).toMatchObject({ assetsPerShare: E18, block: 103n });
+  });
+
+  it('a rise seen at two blocks becomes the reference: the lower of the two, at its own block', () => {
+    expect(run([read(E18, 100n), read(E18 + 50n, 101n), read(E18 + 50n, 102n)]).track).toMatchObject({ assetsPerShare: E18 + 50n, block: 102n });
+    expect(run([read(E18, 100n), read(E18 + 50n, 101n), read(E18 + 90n, 102n)]).track).toMatchObject({ assetsPerShare: E18 + 50n, block: 101n });
+    // Accrual: the reference follows one read behind.
+    expect(run([read(E18, 100n), read(E18 + 1n, 101n), read(E18 + 2n, 102n), read(E18 + 3n, 103n)]).track).toMatchObject({ assetsPerShare: E18 + 2n, block: 102n });
+    // After a fall within the threshold, a rise never lowers the reference.
+    expect(run([read(10_000n, 100n), read(9_995n, 101n), read(9_999n, 102n)]).track).toMatchObject({ assetsPerShare: 10_000n, block: 100n });
+  });
+
   it('a fall within the threshold keeps the reference, so small falls add up', () => {
-    const one = priceStep(track(10_000n, 100n), read(9_995n, 110n), 10);
-    expect(one).toEqual({ kind: 'small-drop', next: track(10_000n, 100n, { readBlock: 110n }) });
-    const two = priceStep(one.next, read(9_989n, 120n), 10);
-    expect(two.kind).toBe('pending');
-    expect(two.next.drop).toEqual({ assetsPerShare: 9_989n, block: 120n });
+    const r = run([read(10_000n, 100n), read(9_995n, 110n), read(9_989n, 120n)]);
+    expect(r.kinds).toEqual(['first', 'small-drop', 'pending']);
+    expect(r.track.drop).toMatchObject({ assetsPerShare: 9_989n, block: 120n });
   });
 
-  it('a rise moves the reference silently; an unchanged value moves only its block', () => {
-    expect(priceStep(track(E18, 100n), read(E18 + 5n, 110n), 10)).toEqual({ kind: 'rise', next: track(E18 + 5n, 110n) });
-    expect(priceStep(track(E18, 100n), read(E18, 110n), 10)).toEqual({ kind: 'same', next: track(E18, 110n) });
+  it('a pending fall that a later read does not bear out is cleared; one older than its lifetime is cleared as expired', () => {
+    const pending = priceStep(track(E18, 100n), read(E18 / 2n, 110n, 0), RULES).next;
+    expect(priceStep(pending, read(E18, 120n, MIN), RULES)).toEqual({
+      kind: 'same',
+      next: track(E18, 120n),
+      cleared: { assetsPerShare: E18 / 2n, block: 110n, expired: false },
+    });
+    // Still low, but an hour and more after the first sighting: a fresh pending fall, not a confirmation.
+    const late = priceStep(pending, read(E18 / 2n, 500n, 61 * MIN), RULES);
+    expect(late).toMatchObject({ kind: 'pending', cleared: { block: 110n, expired: true }, next: { drop: { block: 500n, at: 61 * MIN } } });
   });
 
-  it('a pending fall that a later read does not bear out is cleared (a one-block glitch), and nothing is confirmed', () => {
-    const pending = priceStep(track(E18, 100n), read(E18 / 2n, 110n), 10).next;
-    const back = priceStep(pending, read(E18, 120n), 10);
-    expect(back).toEqual({ kind: 'same', next: track(E18, 120n), cleared: { assetsPerShare: E18 / 2n, block: 110n } });
-    const small = priceStep(pending, read(E18 - 1n, 120n), 10);
-    expect(small).toEqual({ kind: 'small-drop', next: track(E18, 100n, { readBlock: 120n }), cleared: { assetsPerShare: E18 / 2n, block: 110n } });
+  it('a read at a block not after the last one is stale; other decimals or another scale reset the reference', () => {
+    const pending = priceStep(track(E18, 100n), read(E18 / 2n, 110n, 0), RULES).next;
+    expect(priceStep(pending, read(E18 / 2n, 110n, 5 * MIN), RULES)).toEqual({ kind: 'stale', next: pending });
+    expect(priceStep(pending, read(1_000_000n, 130n, 5 * MIN, { decimals: 6 }), RULES)).toEqual({ kind: 'reset', next: { ...track(1_000_000n, 130n), decimals: 6 } });
+    expect(priceStep(pending, read(50_000n, 130n, 5 * MIN, { scale: 2 }), RULES).kind).toBe('reset');
   });
 
-  it('a read at a block not after the last one is stale: a fall is not confirmed at the block it was seen', () => {
-    const pending = priceStep(track(E18, 100n), read(E18 / 2n, 110n), 10).next;
-    expect(priceStep(pending, read(E18 / 2n, 110n), 10)).toEqual({ kind: 'stale', next: pending });
-    expect(priceStep(track(E18, 100n), read(1n, 90n), 10)).toEqual({ kind: 'stale', next: track(E18, 100n) });
+  it('review M3a: reads without a value count as misses; the fall is forgotten after five, or after its lifetime', () => {
+    let t = priceStep(track(E18, 100n), read(E18 / 2n, 110n, 0), RULES).next;
+    for (let i = 1; i <= 4; i++) {
+      const m = priceMiss(t, i * MIN, RULES);
+      expect(m.forgotten).toBe(false);
+      expect(m.next.drop!.misses).toBe(i);
+      t = m.next;
+    }
+    const fifth = priceMiss(t, 5 * MIN, RULES);
+    expect(fifth.forgotten).toBe(true);
+    expect(fifth.next.drop).toBeUndefined();
+    expect(fifth.next.assetsPerShare).toBe(E18);
+    const old = priceStep(track(E18, 100n), read(E18 / 2n, 110n, 0), RULES).next;
+    expect(priceMiss(old, 61 * MIN, RULES).forgotten).toBe(true);
+    expect(priceMiss(track(E18, 100n), 0, RULES)).toEqual({ next: track(E18, 100n), forgotten: false });
   });
 
-  it('other share decimals make the read a new reference and forget a pending fall', () => {
-    const pending = priceStep(track(E18, 100n), read(E18 / 2n, 110n), 10).next;
-    expect(priceStep(pending, read(1_000_000n, 120n, 6), 10)).toEqual({ kind: 'decimals', next: { decimals: 6, assetsPerShare: 1_000_000n, block: 120n, readBlock: 120n } });
+  it('the change carries the scale when the values are for 10 ** scale shares', () => {
+    const scaled = run([read(50_000n, 100n, 0, { scale: 2 }), read(40_000n, 110n, 0, { scale: 2 }), read(40_000n, 120n, 2 * MIN, { scale: 2 })]);
+    expect(scaled.last).toMatchObject({ kind: 'confirmed', change: { dropBps: 2_000, scale: 2 } });
   });
 
-  it('measures exactly: 10 bps is not over a threshold of 10, 10.01 is; the reported drop rounds down', () => {
+  it('measures exactly; the reported drop rounds down; the scale reaches 10,000 base units', () => {
     expect(exceedsDrop(10_000n, 9_990n, 10)).toBe(false);
     expect(exceedsDrop(100_000n, 99_899n, 10)).toBe(true);
     expect(exceedsDrop(10_000n, 10_001n, 10)).toBe(false);
@@ -87,13 +150,18 @@ describe('priceStep', () => {
     expect(dropBpsOf(5n, 7n)).toBe(0);
     expect(dropPercentText(42)).toBe('0.42%');
     expect(dropPercentText(10_000)).toBe('100.00%');
+    expect([10_000n, 9_999n, 999n, 100n, 1n, 0n].map(priceScaleFor)).toEqual([0, 1, 2, 2, 4, null]);
   });
 });
 
-describe('readSharePrice', () => {
+describe('readSharePrice with a stand-in client', () => {
   type Call = { functionName: string; args?: readonly bigint[]; blockNumber: bigint };
-  const client = (answer: (c: Call) => unknown) => {
+  const revert = () => Object.assign(new Error('The contract function "convertToAssets" reverted.'), { name: 'ContractFunctionRevertedError' });
+  const transport = () => Object.assign(new Error('HTTP request failed.'), { name: 'HttpRequestError', status: 502 });
+  /** A vault: decimals, supply, and convertToAssets by the number of shares asked for. */
+  const client = (v: { decimals?: number | Error; supply?: bigint | Error; assets: (shares: bigint) => bigint | Error }) => {
     const calls: Call[] = [];
+    const answer = (c: Call): unknown => (c.functionName === 'decimals' ? (v.decimals ?? 18) : c.functionName === 'totalSupply' ? (v.supply ?? 5n) : v.assets(c.args![0]!));
     return {
       calls,
       readContract: (async (c: Call) => {
@@ -102,256 +170,70 @@ describe('readSharePrice', () => {
         if (a instanceof Error) throw a;
         return a;
       }) as never,
+      multicalls: [] as Call[][],
+      answer,
     };
   };
-  const revert = () => Object.assign(new Error('The contract function "convertToAssets" reverted.'), { name: 'ContractFunctionRevertedError' });
-  /** viem files a JSON-RPC -32603 under a revert whatever the node said (rpc1's "Error getting block by number"). */
-  const nodeError = () =>
-    Object.assign(new Error('The contract function "convertToAssets" reverted.'), {
-      name: 'ContractFunctionExecutionError',
-      cause: Object.assign(new Error('Error getting block by number'), { name: 'ContractFunctionRevertedError', cause: { code: -32603, message: 'Error getting block by number' } }),
-    });
-  const transport = () => Object.assign(new Error('HTTP request failed.'), { name: 'HttpRequestError', status: 502 });
 
-  it('reads decimals(), then totalSupply() and convertToAssets of one whole share, all at the block', async () => {
-    const c = client((x) => (x.functionName === 'decimals' ? 6 : x.functionName === 'totalSupply' ? 5n : 1_004_200n));
-    expect(await readSharePrice(c, V, 1234n)).toEqual({ ok: true, assetsPerShare: 1_004_200n, shareDecimals: 6 });
-    expect(c.calls.find((x) => x.functionName === 'convertToAssets')).toMatchObject({ args: [1_000_000n], blockNumber: 1234n });
+  it('a new track: decimals() first, then totalSupply() and convertToAssets of one whole share, all at the block', async () => {
+    const c = client({ decimals: 6, assets: () => 1_004_200n });
+    expect(await readSharePrice(c, V, 1234n)).toEqual({ ok: true, assetsPerShare: 1_004_200n, shareDecimals: 6, scale: 0 });
+    expect(c.calls.map((x) => x.functionName)).toEqual(['decimals', 'totalSupply', 'convertToAssets']);
+    expect(c.calls[2]).toMatchObject({ args: [1_000_000n], blockNumber: 1234n });
     expect(c.calls.every((x) => x.blockNumber === 1234n)).toBe(true);
   });
 
-  it('a revert or no share at all gives no value; nothing to record', async () => {
-    const reverted = await readSharePrice(client((x) => (x.functionName === 'convertToAssets' ? revert() : x.functionName === 'decimals' ? 18 : 1n)), V, 1n);
-    expect(reverted).toMatchObject({ ok: false, reason: expect.stringMatching(/^convertToAssets\(\) at block 1: revert/) });
-    const empty = await readSharePrice(client((x) => (x.functionName === 'decimals' ? 18 : x.functionName === 'totalSupply' ? 0n : E18)), V, 1n);
-    expect(empty).toEqual({ ok: false, reason: 'totalSupply() is 0 at block 1: no share to value' });
-    const huge = await readSharePrice(client(() => 200), V, 1n);
-    expect(huge).toMatchObject({ ok: false, reason: expect.stringMatching(/decimals\(\) is 200/) });
-  });
-
-  it('an RPC failure is thrown, never a value: a transport failure, and a node error viem files as a revert', async () => {
-    await expect(readSharePrice(client((x) => (x.functionName === 'decimals' ? 18 : x.functionName === 'totalSupply' ? 1n : transport())), V, 1n)).rejects.toThrow(/HTTP request failed/);
-    await expect(readSharePrice(client((x) => (x.functionName === 'decimals' ? 18 : x.functionName === 'totalSupply' ? 1n : nodeError())), V, 1n)).rejects.toThrow(/reverted/);
-  });
-});
-
-/** The harness with a share value per subject: a bigint, 'rpc' (a transport failure) or 'empty' (totalSupply 0). */
-function withPrices(h: Harness) {
-  const prices = new Map<string, bigint | 'rpc' | 'empty'>();
-  const reads: Array<{ subject: Address; block: bigint }> = [];
-  h.effects.sharePrice = async (subject, block): Promise<SharePriceRead> => {
-    reads.push({ subject, block });
-    const p = prices.get(subject.toLowerCase());
-    if (p === undefined) return { ok: false, reason: 'no such vault' };
-    if (p === 'rpc') throw Object.assign(new Error('HTTP request failed.'), { name: 'HttpRequestError', status: 503 });
-    if (p === 'empty') return { ok: false, reason: `totalSupply() is 0 at block ${block}: no share to value` };
-    return { ok: true, assetsPerShare: p, shareDecimals: 18 };
-  };
-  return { prices, reads };
-}
-
-/** A vault the watcher checked at block 100 (outcome as reportOf), with a Valid attestation of that outcome when `attested`. */
-function known(h: Harness, subject: Address, attested: boolean): void {
-  h.store.vaults.vaults[subject.toLowerCase()] = {
-    firstSeen: { source: 'backfill', block: '100', at: '2026-10-01T00:00:00.000Z' },
-    deployBlock: null,
-    lastCheck: { block: '100', at: T0.toISOString(), reportPath: 'certs/checks/x.json', summary: { pass: 30, fail: 0, inconclusive: 0, notApplicable: 0 }, failed: [], implementationKey: reportOf(subject, 1n).identity.implementationKey as `0x${string}` },
-    lastAttestationId: attested ? String(h.registry.list.length) : null,
-    firstDepositBlock: null,
-  };
-  if (attested) h.registry.attest(attestParams(subject, 100n));
-}
-
-const later = (h: Harness, ms: number) => {
-  h.clock.now = new Date(h.clock.now.getTime() + ms);
-};
-const priceEvents = (h: Harness) => h.events.filter((e): e is Extract<WatchEvent, { type: 'watch-price' }> => e.type === 'watch-price');
-
-describe('the watcher follows the share value', { timeout: 60_000 }, () => {
-  it('an attested vault: a fall over the threshold waits for a later block, then one changed event and a re-check that attests nothing', async () => {
-    const h = await harness();
-    const { prices, reads } = withPrices(h);
-    known(h, V, true);
-    prices.set(V.toLowerCase(), E18);
-    h.store.state.cursor = '1991';
-    const w = h.watcher();
-    await w.pass();
-    expect(reads).toEqual([{ subject: V, block: 1990n }]);
-    expect(h.store.state.prices[V.toLowerCase()]).toMatchObject({ decimals: 18, assetsPerShare: E18.toString(), block: '1990', readBlock: '1990' });
-    expect(await h.feed()).toEqual([]);
-
-    // Not subscribed: read again only after --price-minutes.
-    prices.set(V.toLowerCase(), (E18 * 9958n) / 10_000n);
-    h.chain.head = 2010n;
-    await w.pass();
-    expect(reads).toHaveLength(1);
-    later(h, 5 * 60_000);
-    await w.pass();
-    expect(reads).toHaveLength(2);
-    expect(priceEvents(h)).toEqual([
-      { type: 'watch-price', subject: V, step: 'pending', block: '2000', assetsPerShare: '995800000000000000', referenceAssetsPerShare: E18.toString(), dropBps: 42 },
+  it('review M3c: a known track sends one batch with its decimals and scale, and decimals() is still checked', async () => {
+    const c = client({ decimals: 18, assets: (s) => s / 1_000n });
+    expect(await readSharePrice(c, V, 9n, { known: { decimals: 18, scale: 2 } })).toEqual({ ok: true, assetsPerShare: 10n ** 17n, shareDecimals: 18, scale: 2 });
+    expect(c.calls.map((x) => [x.functionName, x.args?.[0]])).toEqual([
+      ['decimals', undefined],
+      ['totalSupply', undefined],
+      ['convertToAssets', 10n ** 20n],
     ]);
-    expect(await h.feed()).toEqual([]);
+    // decimals() moved: read again as a new track, the new decimals and scale come back (priceStep resets on them).
+    const moved = client({ decimals: 6, assets: () => 1_000_000n });
+    expect(await readSharePrice(moved, V, 9n, { known: { decimals: 18, scale: 0 } })).toEqual({ ok: true, assetsPerShare: 1_000_000n, shareDecimals: 6, scale: 0 });
+  });
 
-    // The second read comes at the next pass with a later block, whatever the cadence.
-    h.chain.head = 2020n;
-    await w.pass();
-    const feed = await h.feed();
-    expect(kinds(feed)).toEqual(['changed:price-drop', 'queued:price-drop', 'checked:price-drop']);
-    expect(feed[0]).toMatchObject({
-      subject: V,
-      block: '2010',
-      change: { kind: 'price-drop', fromAssetsPerShare: E18.toString(), toAssetsPerShare: '995800000000000000', dropBps: 42, fromBlock: '1990', toBlock: '2010' },
-      reason: 'confirmed by a second read at block 2010 after block 2000',
+  it('review L3: a share worth fewer than 10,000 base units is valued for 10 ** scale shares; when that fails, low resolution', async () => {
+    const small = client({ decimals: 18, assets: (s) => (s * 999n) / E18 });
+    expect(await readSharePrice(small, V, 1n)).toEqual({ ok: true, assetsPerShare: 99_900n, shareDecimals: 18, scale: 2 });
+    expect(small.calls.at(-1)).toMatchObject({ functionName: 'convertToAssets', args: [10n ** 20n] });
+    const capped = client({ decimals: 18, assets: (s) => (s === E18 ? 999n : revert()) });
+    expect(await readSharePrice(capped, V, 1n)).toMatchObject({ ok: false, lowResolution: true, reason: expect.stringMatching(/^one share is worth 999 base units at block 1, under 10000, and convertToAssets of 10 \*\* 2 shares failed/) });
+    const drained = client({ decimals: 18, assets: () => 0n });
+    expect(await readSharePrice(drained, V, 1n)).toMatchObject({ ok: false, lowResolution: true, reason: expect.stringMatching(/no scale up to 10 \*\* 6 shares/) });
+    // A known track keeps its scale whatever the value: a fall below 10,000 units is still compared.
+    expect(await readSharePrice(small, V, 1n, { known: { decimals: 18, scale: 0 } })).toEqual({ ok: true, assetsPerShare: 999n, shareDecimals: 18, scale: 0 });
+  });
+
+  it('a revert or no share at all gives no value; an RPC failure is thrown', async () => {
+    expect(await readSharePrice(client({ assets: () => revert() }), V, 1n)).toMatchObject({ ok: false, reason: expect.stringMatching(/^convertToAssets\(\) at block 1: revert/) });
+    expect(await readSharePrice(client({ supply: 0n, assets: () => E18 }), V, 1n)).toEqual({ ok: false, reason: 'totalSupply() is 0 at block 1: no share to value' });
+    expect(await readSharePrice(client({ decimals: 200, assets: () => E18 }), V, 1n)).toMatchObject({ ok: false, reason: expect.stringMatching(/decimals\(\) is 200/) });
+    await expect(readSharePrice(client({ assets: () => transport() }), V, 1n)).rejects.toThrow(/HTTP request failed/);
+  });
+
+  it('with Multicall3, a batch is one multicall; a call that failed inside it is the contract answering, a failed multicall is thrown', async () => {
+    const c = client({ assets: () => 2n * E18 });
+    const mc = Object.assign(c, {
+      multicall: (async (m: { contracts: Array<{ functionName: string; args?: readonly bigint[] }>; blockNumber: bigint; multicallAddress: Address }) => {
+        c.multicalls.push(m.contracts.map((x) => ({ functionName: x.functionName, ...(x.args ? { args: x.args } : {}), blockNumber: m.blockNumber })));
+        return m.contracts.map((x) => {
+          const a = c.answer({ functionName: x.functionName, ...(x.args ? { args: x.args } : {}), blockNumber: m.blockNumber });
+          return a instanceof Error ? { status: 'failure', error: a } : { status: 'success', result: a };
+        });
+      }) as never,
     });
-    expect(feed[0]!.check).toBeUndefined();
-    expect(feed[0]!.attestation).toBeUndefined();
-    expect(feed[1]).toMatchObject({ block: '2010', reason: 'share value fell 0.42% between block 1990 and block 2010' });
-    expect(feed[2]!.reason).toBe('not attested [unchanged]: unchanged since attestation 0');
-    expect(h.registry.list).toHaveLength(1);
-    expect(h.store.state.prices[V.toLowerCase()]).toMatchObject({ assetsPerShare: '995800000000000000', block: '2010' });
-    expect(h.store.state.prices[V.toLowerCase()]!.drop).toBeUndefined();
-    expect(w.status().counts.changed24h).toBe(1);
-  });
-
-  it('a subscribed vault is read at every pass with a new block; its subscribers get the drop, which is not their first check', async () => {
-    const h = await harness();
-    const { prices, reads } = withPrices(h);
-    const delivered: Array<{ event: FeedEvent; subs: string[] }> = [];
-    const sink: AlertSink = {
-      deliver: async (event, subs) => {
-        delivered.push({ event, subs: subs.map((s) => s.id.toString()) });
-        return subs.map((s) => ({ ...event, v: 1, seq: 0, kind: 'alerted', alert: { subscriptionId: s.id.toString(), subscriber: s.subscriber, channel: 'webhook', ok: true, status: 204 } }));
-      },
-    };
-    const sub: ActiveSubscription = { id: 3n, subscriber: addr(0x5b), subjectChainId: 143n, subject: W, standardId: ERC4626, startsAt: 0n, endsAt: 10n ** 12n };
-    known(h, W, true);
-    prices.set(W.toLowerCase(), 2n * E18);
-    h.store.state.cursor = '1991';
-    const w = h.watcher({ subscribedMinutes: 600 }, { subscriptions: { active: async () => [sub] }, alerts: sink });
-    await w.pass();
-    h.chain.head = 2001n;
-    await w.pass();
-    // Same head: nothing new to read.
-    await w.pass();
-    expect(reads.map((r) => r.block)).toEqual([1990n, 1991n]);
-    expect(h.store.state.prices[W.toLowerCase()]!.block).toBe('1991');
-
-    prices.set(W.toLowerCase(), E18);
-    h.chain.head = 2002n;
-    await w.pass();
-    h.chain.head = 2003n;
-    await w.pass();
-    const feed = await h.feed();
-    // The drop, its delivery, the re-check; that re-check is the subscription's first check and is delivered as one.
-    expect(kinds(feed)).toEqual(['changed:price-drop', 'alerted:price-drop', 'queued:price-drop', 'checked:price-drop', 'alerted:price-drop']);
-    expect(delivered.map((d) => [d.event.kind, d.subs])).toEqual([
-      ['changed', ['3']],
-      ['checked', ['3']],
-    ]);
-    expect(delivered[0]!.event).toMatchObject({ seq: feed[0]!.seq, change: { kind: 'price-drop', dropBps: 5_000, fromBlock: '1991', toBlock: '1993' } });
-    expect(feed[1]).toMatchObject({ seq: feed[0]!.seq + 1, alert: { subscriptionId: '3', ok: true } });
-    expect(feed[3]!.reason).toBe('not attested [unchanged]: unchanged since attestation 0');
-    expect(h.registry.list).toHaveLength(1);
-  });
-
-  it('an RPC failure is never a drop and a vault without a value records nothing; a pending fall waits for a real read', async () => {
-    const h = await harness();
-    const { prices, reads } = withPrices(h);
-    known(h, V, true);
-    prices.set(V.toLowerCase(), E18);
-    h.store.state.cursor = '1991';
-    const w = h.watcher({ priceMinutes: 1 });
-    await w.pass();
-    const reference = { ...h.store.state.prices[V.toLowerCase()]! };
-
-    const step = async (p: bigint | 'rpc' | 'empty', head: bigint) => {
-      prices.set(V.toLowerCase(), p);
-      h.chain.head = head;
-      later(h, 60_000);
-      await w.pass();
-    };
-    await step('rpc', 2010n);
-    expect(h.events.filter((e) => e.type === 'watch-error' && e.step === 'price').map((e) => (e as { error: string }).error)).toEqual([
-      `${V}: share value not read at block 2000, not a verdict: transport failure: HTTP request failed.`,
-    ]);
-    await step('empty', 2020n);
-    expect(priceEvents(h).map((e) => [e.step, e.reason])).toEqual([['skipped', 'totalSupply() is 0 at block 2010: no share to value']]);
-    expect(h.store.state.prices[V.toLowerCase()]).toEqual(reference);
-
-    await step(E18 / 2n, 2030n);
-    expect(h.store.state.prices[V.toLowerCase()]!.drop).toMatchObject({ block: '2020' });
-    await step('rpc', 2040n);
-    await step('empty', 2050n);
-    expect(h.store.state.prices[V.toLowerCase()]!.drop).toMatchObject({ block: '2020' });
-    expect(await h.feed()).toEqual([]);
-    await step(E18 / 2n, 2060n);
-    expect(kinds(await h.feed()).slice(0, 2)).toEqual(['changed:price-drop', 'queued:price-drop']);
-    expect((await h.feed())[0]!.change).toMatchObject({ fromBlock: '1990', toBlock: '2050', dropBps: 5_000 });
-    expect(reads.length).toBe(7);
-  });
-
-  it('a one-block glitch is cleared without a feed line; a rise moves the reference silently', async () => {
-    const h = await harness();
-    const { prices } = withPrices(h);
-    known(h, V, true);
-    prices.set(V.toLowerCase(), E18);
-    h.store.state.cursor = '1991';
-    const w = h.watcher({ priceMinutes: 1 });
-    await w.pass();
-    for (const [p, head] of [
-      [E18 / 10n, 2010n],
-      [E18, 2020n],
-      [E18 + 7n, 2030n],
-    ] as const) {
-      prices.set(V.toLowerCase(), p);
-      h.chain.head = head;
-      later(h, 60_000);
-      await w.pass();
-    }
-    expect(priceEvents(h).map((e) => e.step)).toEqual(['pending', 'cleared']);
-    expect(await h.feed()).toEqual([]);
-    expect(h.store.state.prices[V.toLowerCase()]).toMatchObject({ assetsPerShare: (E18 + 7n).toString(), block: '2020' });
-  });
-
-  it('nobody subscribed and nobody attested: not followed unless --price-all, then within the reads per minute, longest unread first', async () => {
-    const h = await harness();
-    const { prices, reads } = withPrices(h);
-    for (const s of [V, W, X]) {
-      known(h, s, false);
-      prices.set(s.toLowerCase(), E18);
-    }
-    h.store.state.cursor = '1991';
-    await h.watcher().pass();
-    expect(reads).toEqual([]);
-
-    const w = h.watcher({ priceAll: true, maxPriceReadsPerMinute: 2 });
-    await w.pass();
-    expect(reads.map((r) => r.subject)).toEqual([V, W]);
-    h.chain.head = 2010n;
-    later(h, 30_000);
-    await w.pass();
-    expect(reads).toHaveLength(2);
-    later(h, 31_000);
-    await w.pass();
-    expect(reads.map((r) => r.subject)).toEqual([V, W, X]);
-
-    // Followed no more: the tracks are forgotten, so a later subscription starts from a fresh reference.
-    await h.watcher().pass();
-    expect(h.store.state.prices).toEqual({});
-  });
-
-  it('without the effect, or with --price-minutes 0, nothing is read', async () => {
-    const h = await harness();
-    const { prices, reads } = withPrices(h);
-    known(h, V, true);
-    prices.set(V.toLowerCase(), E18);
-    h.store.state.cursor = '1991';
-    await h.watcher({ priceMinutes: 0 }).pass();
-    expect(reads).toEqual([]);
-    delete h.effects.sharePrice;
-    await h.watcher().pass();
-    expect(h.store.state.prices).toEqual({});
+    const at = '0xcA11bde05977b3631167028862bE2a173976CA11' as Address;
+    expect(await readSharePrice(mc, V, 7n, { known: { decimals: 18, scale: 0 }, multicall: at })).toEqual({ ok: true, assetsPerShare: 2n * E18, shareDecimals: 18, scale: 0 });
+    expect(c.multicalls).toHaveLength(1);
+    expect(c.calls).toHaveLength(0);
+    const failing = Object.assign(client({ assets: () => revert() }), { multicall: async () => [{ status: 'success', result: 18 }, { status: 'success', result: 5n }, { status: 'failure', error: revert() }] });
+    expect(await readSharePrice(failing as never, V, 7n, { known: { decimals: 18, scale: 0 }, multicall: at })).toMatchObject({ ok: false, reason: expect.stringMatching(/^convertToAssets\(\)/) });
+    const down = Object.assign(client({ assets: () => E18 }), { multicall: async () => Promise.reject(transport()) });
+    await expect(readSharePrice(down as never, V, 7n, { known: { decimals: 18, scale: 0 }, multicall: at })).rejects.toThrow(/HTTP request failed/);
   });
 });
 
@@ -360,8 +242,9 @@ describe('the price-drop change in the feed and the webhook payload', () => {
   const change = { kind: 'price-drop', fromAssetsPerShare: '1000000000000000000', toAssetsPerShare: '995800000000000000', dropBps: 42, fromBlock: '1990', toBlock: '2010' };
   const event = { v: 1, seq: 9, at: '2026-10-07T00:00:00.000Z', kind: 'changed', chainId: 143, subject, source: 'price-drop', block: '2010', change } as const;
 
-  it('feed.ndjson accepts the price-drop shape and nothing that mixes it with a check change', () => {
+  it('feed.ndjson accepts the price-drop shape (with an optional scale) and nothing that mixes it with a check change', () => {
     expect(feedEventSchema.parse(event).change).toEqual(change);
+    expect(feedEventSchema.parse({ ...event, change: { ...change, scale: 2 } }).change).toMatchObject({ scale: 2 });
     const bad: Array<[string, unknown]> = [
       ['from and to on a price-drop', { ...change, from: null, to: { summary: { pass: 1, fail: 0, inconclusive: 0, notApplicable: 0 }, failed: [] } }],
       ['no dropBps', { ...change, dropBps: undefined }],
@@ -370,15 +253,18 @@ describe('the price-drop change in the feed and the webhook payload', () => {
       ['a value with decimals', { ...change, toAssetsPerShare: '0.99' }],
       ['a negative value', { ...change, toAssetsPerShare: '-1' }],
       ['a block as a number', { ...change, toBlock: 2010 }],
+      ['a scale of 0 (it is left out)', { ...change, scale: 0 }],
+      ['a scale over 6', { ...change, scale: 7 }],
       ['a check kind with the price-drop fields', { ...change, kind: 'changed' }],
     ];
     for (const [why, c] of bad) expect(feedEventSchema.safeParse({ ...event, change: c }).success, why).toBe(false);
   });
 
-  it('the webhook payload is kind price-drop with the numbers in change, no check, attestation or report', () => {
+  it('review L2: the webhook payload is kind price-drop with the numbers in change and an idempotency key from the reference block', () => {
     expect(webhookPayload(feedEventSchema.parse(event), [4n, 2n], 'https://example.org/checks')).toEqual({
       v: 1,
       kind: 'price-drop',
+      key: `price-drop:143:${subject.toLowerCase()}:1990`,
       subscriptionId: '2',
       subscriptionIds: ['2', '4'],
       subject,
@@ -388,5 +274,8 @@ describe('the price-drop change in the feed and the webhook payload', () => {
       attestation: null,
       reportURL: null,
     });
+    // The same drop confirmed again later (after a restart) measures from the same reference: the same key.
+    const again = feedEventSchema.parse({ ...event, seq: 12, block: '2050', change: { ...change, toBlock: '2050' } });
+    expect(webhookPayload(again, [2n]).key).toBe(webhookPayload(feedEventSchema.parse(event), [2n]).key);
   });
 });

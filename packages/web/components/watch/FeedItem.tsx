@@ -156,8 +156,9 @@ function ChangeDetail({ e }: { e: FeedEventJson }) {
       <>
         <p className="sw-line">{priceDropSentence(ch)}</p>
         <p className="sw-line soft">
-          convertToAssets of one share, in the asset&apos;s base units: {units(ch.fromAssetsPerShare)} at block {blockText(ch.fromBlock)}, {units(ch.toAssetsPerShare)} at
-          block {blockText(ch.toBlock)}. Seen at two blocks before it was recorded; the watcher re-checks the vault after a drop.
+          convertToAssets of {ch.scale ? `${(10 ** ch.scale).toLocaleString('en-US')} shares` : 'one share'}, in the asset&apos;s base units: {units(ch.fromAssetsPerShare)} at block{' '}
+          {blockText(ch.fromBlock)}, {units(ch.toAssetsPerShare)} at block {blockText(ch.toBlock)}. Seen at two blocks before it was recorded; the watcher re-checks
+          the vault after a drop.
         </p>
       </>
     );

@@ -110,11 +110,24 @@ export function isTransportFailure(err: unknown): boolean {
 }
 
 /**
+ * A node message that reports what the contract did, whatever the code it comes with: the call ran out of gas (a
+ * view function that burns gas answers -32603 "EVM error OutOfGas" on anvil and other revm nodes) or reverted.
+ */
+const CONTRACT_FAILURE = /out ?of ?gas|execution reverted/i;
+
+/** True when any link of the cause chain carries a node message about the contract (CONTRACT_FAILURE). */
+export function isContractFailureMessage(err: unknown): boolean {
+  return chain(err).some((e) => CONTRACT_FAILURE.test(`${e.message ?? ''} ${e.details ?? ''}`));
+}
+
+/**
  * A JSON-RPC answer that reports a failure of the node rather than of the request: -32603 "Internal error"
  * (rpc1.monad.xyz answers "Error getting block by number" for some archive blocks), "missing trie node",
- * "header not found". Another node may serve the same request.
+ * "header not found". Another node may serve the same request. A -32603 whose message says the call ran out of
+ * gas or reverted is the contract's answer, not the node's failure: every node gives it.
  */
 export function isNodeError(err: unknown): boolean {
+  if (isContractFailureMessage(err)) return false;
   return chain(err).some(
     (e) => e.code === -32603 || /internal error|missing trie node|header not found|error getting block/i.test(`${e.message ?? ''} ${e.details ?? ''}`),
   );
@@ -123,10 +136,11 @@ export function isNodeError(err: unknown): boolean {
 /**
  * A JSON-RPC error answer in the server range: -32603 (internal error) or -32000 to -32099 (implementation
  * defined, such as "header not found" or "resource unavailable"). It says the node could not serve the call,
- * so the desk worker never counts it toward a reject; a revert reported with such a code ("execution
- * reverted") is excluded, since it is the contract's answer.
+ * so the desk worker never counts it toward a reject; a revert or an out-of-gas reported with such a code
+ * ("execution reverted", "EVM error OutOfGas") is excluded, since it is the contract's answer.
  */
 export function isRpcServerError(err: unknown): boolean {
+  if (isContractFailureMessage(err)) return false;
   return chain(err).some(
     (e) => typeof e.code === 'number' && (e.code === -32603 || (e.code <= -32000 && e.code >= -32099)) && !/revert/i.test(`${e.message ?? ''} ${e.details ?? ''}`),
   );

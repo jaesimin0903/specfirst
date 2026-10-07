@@ -635,6 +635,7 @@ describe('webhook delivery against a local HTTP server', () => {
     expect(body).toEqual({
       v: 1,
       kind: 'change',
+      key: `change:143:${VAULT.toLowerCase()}:${changed.check!.block}`,
       subscriptionId: '3',
       subscriptionIds: ['3', '8'],
       subject: VAULT,
@@ -771,6 +772,7 @@ describe('webhook delivery against a local HTTP server', () => {
     expect(JSON.parse(hits[0]!.body)).toEqual({
       v: 1,
       kind: 'first-check',
+      key: `first-check:143:${VAULT.toLowerCase()}:${changed.check!.block}`,
       subscriptionId: '9',
       subscriptionIds: ['9'],
       subject: VAULT,

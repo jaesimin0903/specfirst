@@ -81,8 +81,10 @@ export const queueEntrySchema = z
  * or BeaconUpgraded of known vaults whose fingerprint could not be read yet, carried to the next pass.
  * implementations: the implementation each known vault ran at its last check. prices: the share value of each
  * subject whose value is followed (docs/adr/0006, "Share value"): the reference a drop is measured from
- * (assetsPerShare of one share of `decimals` at `block`), the block and time of the last read, and a drop over the
- * threshold waiting for a read at a later block.
+ * (assetsPerShare of 10 ** (decimals + scale) shares at `block`), the last read, a drop over the threshold waiting
+ * for its confirming read, and the per-subject limits of drops. priceLowResolution: vaults whose share value is too
+ * small to measure, not read again for six hours. recent entries of a price-drop carry drop: true, so status.json
+ * counts them apart from changes of a result.
  */
 export const watchStateSchema = z
   .object({
@@ -110,7 +112,7 @@ export const watchStateSchema = z
     subscriptions: z.record(decimal, z.object({ firstCheckAt: iso }).strict()),
     sweeps: z.array(iso),
     attestDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), used: count, unsolicited: count.default(0), candidateFails: count.default(0) }).strict(),
-    recent: z.array(z.object({ kind: z.enum(FEED_KINDS), at: iso }).strict()),
+    recent: z.array(z.object({ kind: z.enum(FEED_KINDS), at: iso, drop: z.literal(true).optional() }).strict()),
     sourcesSeen: z.record(z.string(), count),
     deferred: z.record(
       lowerAddress,
@@ -194,15 +196,25 @@ export const watchStateSchema = z
         z
           .object({
             decimals: count,
+            scale: count.default(0),
             assetsPerShare: decimal,
             block: decimal,
+            readAssetsPerShare: decimal,
             readBlock: decimal,
             readAt: iso,
-            drop: z.object({ assetsPerShare: decimal, block: decimal, at: iso }).strict().optional(),
+            drop: z.object({ assetsPerShare: decimal, block: decimal, at: iso, misses: count.default(0) }).strict().optional(),
+            /** Since when the subject is not followed (no subscription, no attestation, no --price-all); forgotten 24 hours later. */
+            unfollowedAt: iso.optional(),
+            /** Price-drop events of this subject on one UTC day, against maxPriceDropsPerDay. */
+            dropsDay: z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), count }).strict().optional(),
+            /** When a drop last queued a re-check of the subject (one per upgradeCooldownMs). */
+            recheckAt: iso.optional(),
           })
           .strict(),
       )
       .default({}),
+    /** Vaults whose share value is too small to measure a drop in at any scale, and when that was found. */
+    priceLowResolution: z.record(lowerAddress, iso).default({}),
   })
   .strict();
 export type WatchState = z.output<typeof watchStateSchema>;
@@ -242,6 +254,7 @@ export function emptyWatchState(chainId: number): WatchState {
     upgrades: {},
     implementations: {},
     prices: {},
+    priceLowResolution: {},
   };
 }
 
@@ -392,7 +405,7 @@ export class WatchStore {
     this.state.seq = seq;
     const since = new Date(now.getTime() - DAY_MS).toISOString();
     this.state.recent = this.state.recent.filter((r) => r.at >= since);
-    for (const e of stamped) if (COUNTED.has(e.kind)) this.state.recent.push({ kind: e.kind, at: e.at });
+    for (const e of stamped) if (COUNTED.has(e.kind)) this.state.recent.push({ kind: e.kind, at: e.at, ...(e.change?.kind === 'price-drop' ? { drop: true as const } : {}) });
     return stamped;
   }
 

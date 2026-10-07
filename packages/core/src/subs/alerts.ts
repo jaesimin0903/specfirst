@@ -273,14 +273,28 @@ export function webhookKindOf(event: FeedEvent): WebhookAlertKind {
 }
 
 /**
+ * The payload's idempotency key: `<kind>:<chainId>:<subject lowercase>:<block>`, the block being the reference block
+ * a drop was measured from (fromBlock) or the block of the check. A retried POST, or the same drop or change found
+ * again after a restart, carries the same key, so a receiver that keeps the keys it has handled can drop repeats.
+ */
+export function webhookKeyOf(event: FeedEvent): string {
+  const kind = webhookKindOf(event);
+  const block = event.change?.kind === 'price-drop' ? event.change.fromBlock : (event.check?.block ?? `seq${event.seq}`);
+  return `${kind}:${event.chainId}:${event.subject.toLowerCase()}:${block}`;
+}
+
+/**
  * The JSON body POSTed to a webhook for one `changed` event (a change of the result, or a fall of the share value),
  * or for the first check after a subscription started (ADR 0006). One POST per subscriber: subscriptionIds lists the
  * active subscriptions it holds on the subject that the event is for, subscriptionId is the lowest of them. v stays
- * 1: price-drop is a third kind, and a receiver dispatches on kind.
+ * 1 with kinds and fields added (price-drop, key): a receiver dispatches on kind and ignores kinds and fields it does
+ * not know.
  */
 export interface WebhookPayload {
   v: 1;
   kind: WebhookAlertKind;
+  /** Idempotency key (webhookKeyOf); added with price-drop, so a receiver can drop repeats. */
+  key: string;
   subscriptionId: string;
   subscriptionIds: string[];
   subject: Address;
@@ -311,6 +325,7 @@ export function webhookPayload(event: FeedEvent, ids: readonly bigint[], reportB
   return {
     v: 1,
     kind: webhookKindOf(event),
+    key: webhookKeyOf(event),
     subscriptionId: sorted[0]!,
     subscriptionIds: sorted,
     subject: event.subject,

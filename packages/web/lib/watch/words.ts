@@ -46,7 +46,13 @@ export function alertSummary(body: unknown): string | null {
   if (!b || typeof b !== 'object' || typeof b.subject !== 'string') return null;
   const c = b.change;
   const drop = b.kind === 'price-drop' && c && typeof c.dropBps === 'number' && typeof c.fromBlock === 'string' && typeof c.toBlock === 'string';
-  const what = drop ? `share value fell ${dropPercentText(c.dropBps as number)} between block ${c.fromBlock as string} and block ${c.toBlock as string}` : (c?.kind ?? 'change');
+  const what = drop
+    ? `share value fell ${dropPercentText(c.dropBps as number)} between block ${c.fromBlock as string} and block ${c.toBlock as string}`
+    : typeof c?.kind === 'string'
+      ? c.kind
+      : typeof b.kind === 'string'
+        ? b.kind
+        : 'change';
   return `Subscription #${b.subscriptionId ?? '?'}: ${what} on ${shortAddress(b.subject)}${b.chainId ? `, chain ${b.chainId}` : ''}`;
 }
 

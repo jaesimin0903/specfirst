@@ -25,10 +25,14 @@ export interface DemoHookEntry {
 
 const entrySchema = z.object({ n: z.number().int(), receivedAt: z.string(), userAgent: z.string().nullable(), bytes: z.number().int(), body: z.unknown() });
 
-/** The alert payload ADR 0006 has the watcher POST (core's WebhookPayload, from webhookPayload in @specfirst/core/subs). */
+/**
+ * The alert payload ADR 0006 has the watcher POST (core's WebhookPayload, from webhookPayload in @specfirst/core/subs).
+ * As the ADR asks of every receiver, a kind or a field it does not know is taken, not refused: v 1 grows by adding.
+ */
 export const alertPayloadSchema = z.object({
   v: z.literal(1),
-  kind: z.enum(['change', 'first-check', 'price-drop']),
+  kind: z.string().min(1),
+  key: z.string().optional(),
   subscriptionId: z.string(),
   subscriptionIds: z.array(z.string()).min(1),
   subject: z.string(),

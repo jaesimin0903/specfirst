@@ -55,6 +55,9 @@ export async function deployDemoVault(i: {
   factory?: Address;
 }): Promise<{ vault: Address; tx: TxOutcome }> {
   const factory = i.factory ?? DEMO_FACTORY_ADDRESS;
+  // Without code at the factory the call would "succeed" with no vault and no event: say so before sending.
+  const code = await i.client.getCode({ address: factory });
+  if (!code || code === '0x') throw new Error(`no DemoVaultFactory at ${factory} on this chain: deploy it first (specfirst watch demo deploy)`);
   const call = { address: factory, abi: demoVaultFactoryAbi, functionName: 'deploy', args: [i.asset, i.broken], account: i.wallet.account } as const;
   const gas = gasLimitFor(await i.client.estimateContractGas(call));
   const hash = await i.wallet.writeContract({ ...call, gas });
@@ -80,22 +83,30 @@ const SET_LOSS_SELECTOR = toFunctionSelector('setLoss(uint256)').slice(2);
 /**
  * DemoVault.setLoss from the vault's operator: sends `bps` basis points (1 to 9,999) of its assets away, so the value
  * of a share falls by that fraction. A vault of the factory before setLoss (LEGACY_DEMO_FACTORY_ADDRESS) has no such
- * function; that is said before anything is sent.
+ * function; that is said before anything is sent. A loss that rounds to 0 base units changes nothing and is not sent
+ * (`sent: false`); `assets` is what the LossSet event says left the vault.
  */
-export async function setDemoVaultLoss(i: { client: SpecfirstPublicClient; wallet: SpecfirstWalletClient; vault: Address; bps: number }): Promise<TxOutcome & { assets: bigint }> {
+export async function setDemoVaultLoss(i: {
+  client: SpecfirstPublicClient;
+  wallet: SpecfirstWalletClient;
+  vault: Address;
+  bps: number;
+}): Promise<({ sent: true } & TxOutcome & { assets: bigint }) | { sent: false; assets: 0n; totalAssets: bigint }> {
   if (!Number.isInteger(i.bps) || i.bps < 1 || i.bps > 9_999) throw new Error(`the loss must be 1 to 9999 basis points, got ${i.bps}`);
   const code = await i.client.getCode({ address: i.vault });
   if (!code || code === '0x') throw new Error(`no contract at ${i.vault}`);
   if (!code.toLowerCase().includes(SET_LOSS_SELECTOR)) {
     throw new Error(`${i.vault} has no setLoss: a DemoVault from the factory before setLoss (${LEGACY_DEMO_FACTORY_ADDRESS}); deploy a new one from ${DEMO_FACTORY_ADDRESS}`);
   }
+  const totalAssets = (await i.client.readContract({ address: i.vault, abi: demoVaultAbi, functionName: 'totalAssets' })) as bigint;
+  if ((totalAssets * BigInt(i.bps)) / 10_000n === 0n) return { sent: false, assets: 0n, totalAssets };
   const call = { address: i.vault, abi: demoVaultAbi, functionName: 'setLoss', args: [BigInt(i.bps)], account: i.wallet.account } as const;
   const gas = gasLimitFor(await i.client.estimateContractGas(call));
   const hash = await i.wallet.writeContract({ ...call, gas });
   const receipt = await i.client.waitForTransactionReceipt({ hash });
   if (receipt.status !== 'success') throw new Error(`DemoVault.setLoss ${hash} reverted`);
   const [lost] = parseEventLogs({ abi: demoVaultAbi, eventName: 'LossSet', logs: receipt.logs }).filter((l) => l.address.toLowerCase() === i.vault.toLowerCase());
-  return { hash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed, assets: lost?.args.assets ?? 0n };
+  return { sent: true, hash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed, assets: lost?.args.assets ?? 0n };
 }
 
 /** Mints `amount` DemoToken to the wallet, approves the vault and deposits it (a first deposit for the demo). */

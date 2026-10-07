@@ -7,6 +7,7 @@ import { FeedItem } from '../components/watch/FeedItem';
 import { VaultHistory } from '../components/watch/VaultHistory';
 import { alertPayloadSchema } from '../lib/watch/demoHook';
 import { alertSummary, inboxNote } from '../lib/watch/words';
+import { changedNote } from '../components/watch/WatchLive';
 import type { FeedEvent } from '../lib/watch/core';
 import { WatcherVaultView } from '../components/watch/WatcherVaultView';
 import { RevenueView } from '../components/watch/RevenueView';
@@ -122,10 +123,40 @@ describe('a share value drop', () => {
     expect(screen.queryByRole('img')).toBeNull();
   });
 
-  it('the demo receiver takes the price-drop payload as an alert and says what fell', () => {
-    const payload = { v: 1, kind: 'price-drop', subscriptionId: '3', subscriptionIds: ['3'], subject: drop.subject, chainId: 143, change, check: null, attestation: null, reportURL: null };
+  it('values of 10 ** scale shares say so', () => {
+    render(
+      <ol>
+        <FeedItem e={eventJson({ ...drop, change: { ...change, fromAssetsPerShare: '99900', toAssetsPerShare: '90000', dropBps: 990, scale: 3 } }, ctx)} />
+      </ol>,
+    );
+    expect(screen.getByText(/convertToAssets of 1,000 shares, in the asset's base units: 99,900 at block 110,977,300, 90,000 at block 110,977,400/)).toBeInTheDocument();
+  });
+
+  it('review L4: the 24 h figure of changed results names the share value drops apart', () => {
+    expect(changedNote(undefined)).toBe('results that moved, last 24 h');
+    expect(changedNote(0)).toBe('results that moved, last 24 h');
+    expect(changedNote(1)).toBe('results that moved, last 24 h; apart from them 1 share value drop');
+    expect(changedNote(3)).toBe('results that moved, last 24 h; apart from them 3 share value drops');
+  });
+
+  it('the demo receiver takes the price-drop payload as an alert and says what fell; review L5: a kind it does not know is still an alert', () => {
+    const payload = {
+      v: 1,
+      kind: 'price-drop',
+      key: 'price-drop:143:0xfeed000000000000000000000000000000000001:110977300',
+      subscriptionId: '3',
+      subscriptionIds: ['3'],
+      subject: drop.subject,
+      chainId: 143,
+      change,
+      check: null,
+      attestation: null,
+      reportURL: null,
+    };
     expect(alertPayloadSchema.safeParse(payload).success).toBe(true);
-    expect(alertPayloadSchema.safeParse({ ...payload, kind: 'price-rise' }).success).toBe(false);
+    expect(alertPayloadSchema.safeParse({ ...payload, kind: 'price-rise', future: 1 }).success).toBe(true);
+    expect(alertSummary({ ...payload, kind: 'price-rise', change: null })).toBe('Subscription #3: price-rise on 0xFEeD...0001, chain 143');
+    expect(alertPayloadSchema.safeParse({ ...payload, v: 2 }).success).toBe(false);
     expect(alertSummary(payload)).toBe('Subscription #3: share value fell 0.41% between block 110977300 and block 110977400 on 0xFEeD...0001, chain 143');
     expect(alertSummary({ ...payload, kind: 'change', change: { kind: 'regressed' } })).toBe('Subscription #3: regressed on 0xFEeD...0001, chain 143');
     expect(alertSummary({ ...payload, change: { ...change, dropBps: '<b>' } })).toBe('Subscription #3: price-drop on 0xFEeD...0001, chain 143');

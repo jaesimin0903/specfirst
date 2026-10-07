@@ -40,7 +40,7 @@ export interface FoundJson {
  */
 export type ChangeJson =
   | { kind: CheckChangeKind; from: OutcomeJson | null; to: OutcomeJson }
-  | { kind: 'price-drop'; fromAssetsPerShare: string; toAssetsPerShare: string; dropBps: number; fromBlock: string; toBlock: string };
+  | { kind: 'price-drop'; fromAssetsPerShare: string; toAssetsPerShare: string; dropBps: number; fromBlock: string; toBlock: string; scale?: number };
 
 export interface FeedEventJson {
   seq: number;
@@ -114,7 +114,8 @@ export interface WatchStatusJson {
   now: { subject: string; vaultPath: string; label: VaultLabelJson; source: string; stage: WatchStage; startedAt: string; forSec: number } | null;
   queue: QueueItemJson[];
   queueLength: number;
-  counts: { known: number; detected24h: number; checked24h: number; attested24h: number; changed24h: number } | null;
+  /** changed24h counts changes of a result; priceDrops24h (absent from older watchers) confirmed falls of a share value. */
+  counts: { known: number; detected24h: number; checked24h: number; attested24h: number; changed24h: number; priceDrops24h?: number } | null;
   sources: { name: string; address: string | null; topic0: string; seen: number }[];
   attestBudget: { perDay: number; usedToday: number } | null;
   gasCostWei: string | null;

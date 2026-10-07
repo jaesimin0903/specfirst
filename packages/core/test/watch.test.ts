@@ -775,6 +775,7 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
         body: {
           v: 1,
           kind: 'change',
+          key: `change:143:${V.toLowerCase()}:${changed.check!.block}`,
           subscriptionId: '3',
           subscriptionIds: ['3', '7'],
           subject: V,

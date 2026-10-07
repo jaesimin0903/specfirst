@@ -67,8 +67,10 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch: a share value drop of a subscribed
   const register = (p: import('commander').Command) => {
     registerAttestRegistryCommand(p);
     registerSubsCommand(p);
-    // No subscribed cadence in this test: a check runs only when a signal or the drop queues one.
-    registerWatchCommand(p, { runCheck, config: { subscribedMinutes: 600, confirmDelayMs: 0 }, sleep: async () => {} });
+    // No subscribed cadence in this test: a check runs only when a signal or the drop queues one. The runs follow each
+    // other within seconds, so the 30 s between reads of a subscribed vault and the 2 min before a confirmation are off;
+    // the 10 blocks of a confirmation are mined.
+    registerWatchCommand(p, { runCheck, config: { subscribedMinutes: 600, confirmDelayMs: 0, priceUrgentSec: 0 }, sleep: async () => {} });
   };
   const cli = async (...args: string[]) => {
     process.exitCode = undefined;
@@ -81,7 +83,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch: a share value drop of a subscribed
   const kinds = (events: FeedEvent[]) => events.map((e) => `${e.kind}:${e.source ?? ''}`);
   const watch = (...extra: string[]) =>
     cli('watch', '--network', 'anvil', '--subject-chain', '31337', '--subject-rpc', anvil.url, '--sources', sourcesFile, '--once', '--block-lag', '0', '--sweep-per-hour', '0', '--report-base-url', BASE, ...extra);
-  const mine = () => clients.publicClient.request({ method: 'anvil_mine' as never, params: ['0x1'] as never });
+  const mine = (blocks = 1) => clients.publicClient.request({ method: 'anvil_mine' as never, params: [`0x${blocks.toString(16)}`] as never });
   const state = async () => watchStateSchema.parse(JSON.parse(await readFile(path.join(dir, '.specfirst/watch/31337/state.json'), 'utf8')));
 
   beforeAll(async () => {
@@ -153,7 +155,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch: a share value drop of a subscribed
     // First run: found, checked, attested for the subscription; the share value read is the reference.
     const first = await watch('--webhook-local-origin', origin);
     expect(first.err).toBe('');
-    expect(event(first, 'watch-start')).toMatchObject({ priceMinutes: 5, priceDropBps: 10, priceAll: false, maxPriceReadsPerMinute: 60 });
+    expect(event(first, 'watch-start')).toMatchObject({ priceMinutes: 5, priceDropBps: 10, priceAll: false, maxPriceReadsPerMinute: 60, maxPriceDropsPerDay: 4 });
     expect(kinds(fed(first))).toEqual(['detected:factory', 'queued:factory', 'checked:factory', 'attested:factory', 'changed:factory', 'alerted:']);
     const reference = (await state()).prices[vault.toLowerCase()]!;
     expect(reference).toMatchObject({ decimals: 18, assetsPerShare: parseEther('1').toString() });
@@ -161,7 +163,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch: a share value drop of a subscribed
 
     const loss = await cli('watch', 'demo', 'loss', vault, '42', '--network', 'anvil');
     expect(loss.code).toBe(0);
-    expect(event(loss, 'watch-demo-loss')).toMatchObject({ vault, bps: 42, assets: (42n * 10n ** 14n).toString() });
+    expect(event(loss, 'watch-demo-loss')).toMatchObject({ vault, bps: 42, assets: (42n * 10n ** 14n).toString(), changed: true });
     await mine();
 
     // Second run: the fall is seen once and waits; nothing in the feed, nothing delivered.
@@ -171,9 +173,13 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch: a share value drop of a subscribed
     expect(event(seen, 'watch-price')).toMatchObject({ subject: vault, step: 'pending', assetsPerShare: '995800000000000000', referenceAssetsPerShare: parseEther('1').toString(), dropBps: 42 });
     const pendingBlock = (await state()).prices[vault.toLowerCase()]!.drop!.block;
     expect(hits).toHaveLength(1);
+    // One block later is not enough to confirm it (review L1): it waits.
     await mine();
+    const early = await watch('--webhook-local-origin', origin);
+    expect(fed(early)).toEqual([]);
+    await mine(10);
 
-    // Third run, a later block: confirmed. Delivered as price-drop, re-checked, the re-check attests nothing.
+    // Third run, 10 blocks after it was seen: confirmed. Delivered as price-drop, re-checked, the re-check attests nothing.
     const confirmed = await watch('--webhook-local-origin', origin);
     expect(confirmed.err).toBe('');
     const feed = fed(confirmed);
@@ -186,12 +192,34 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch: a share value drop of a subscribed
     expect(feed[2]).toMatchObject({ reason: `share value fell 0.42% between block ${reference.block} and block ${toBlock}` });
     expect(feed[3]!.reason).toBe('not attested [unchanged]: unchanged since attestation 0');
     expect(hits).toHaveLength(2);
-    expect(hits[1]!.body).toEqual({ v: 1, kind: 'price-drop', subscriptionId: '0', subscriptionIds: ['0'], subject: vault, chainId: 31337, change, check: null, attestation: null, reportURL: null });
+    expect(hits[1]!.body).toEqual({
+      v: 1,
+      kind: 'price-drop',
+      key: `price-drop:31337:${vault.toLowerCase()}:${reference.block}`,
+      subscriptionId: '0',
+      subscriptionIds: ['0'],
+      subject: vault,
+      chainId: 31337,
+      change,
+      check: null,
+      attestation: null,
+      reportURL: null,
+    });
 
     const onDisk = parseFeed(await readFile(path.join(dir, '.specfirst/watch/31337/feed.ndjson'), 'utf8'));
     expect(onDisk.invalid).toBe(0);
     expect(onDisk.events.filter((e) => e.kind === 'attested')).toHaveLength(1);
     expect(onDisk.events.map((e) => e.seq)).toEqual(onDisk.events.map((_, i) => i + 1));
     expect((await state()).attestDay.used).toBe(1);
+  });
+
+  it('review L7: a loss that rounds to 0 base units sends nothing, and the output says nothing changed', async () => {
+    const empty = event(await cli('watch', 'demo', 'vault', '--asset', token, '--network', 'anvil'), 'watch-demo-vault').vault as Address;
+    const nothing = await cli('watch', 'demo', 'loss', empty, '42', '--network', 'anvil');
+    expect(nothing.code).toBe(0);
+    expect(event(nothing, 'watch-demo-loss')).toMatchObject({ vault: empty, bps: 42, assets: '0', changed: false, totalAssets: '0', txHash: null });
+    process.exitCode = undefined;
+    const human = await capture(() => buildProgram(register).parseAsync(['node', 'specfirst', '--project', dir, 'watch', 'demo', 'loss', empty, '42', '--network', 'anvil']));
+    expect(human.out.join('\n')).toMatch(/nothing changed: 0\.42% of its 0 base units of assets rounds to 0, so the share value stays; nothing sent/);
   });
 });
