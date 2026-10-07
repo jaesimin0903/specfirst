@@ -23,6 +23,18 @@ export const GATE_FRESH_ATTESTATION_HINT =
 /** Default slippage of `watch demo gate allocate` when no --min-shares is given: 1%, in basis points. */
 export const DEFAULT_GATE_SLIPPAGE_BPS = 100n;
 
+/**
+ * Default stipends of `watch demo gate deploy`: gas each redeem or withdraw, and each maxWithdraw or balanceOf, of an
+ * exit gets. Sized for Monad, where a cold account costs 10,100 and a cold storage page 8,100 and the gas limit is
+ * what a transaction pays (docs/adr/0007).
+ */
+export const DEFAULT_GATE_VAULT_CALL_GAS = 2_000_000n;
+export const DEFAULT_GATE_VAULT_VIEW_GAS = 300_000n;
+
+/** Keeper backoff after an exit that would move nothing (ExitFailed): from a minute, doubling, up to an hour. */
+export const GATE_BACKOFF_MIN_MS = 60_000;
+export const GATE_BACKOFF_MAX_MS = 3_600_000;
+
 /** AllocationGate.Position as viem decodes it. */
 export interface GatePosition {
   shares: bigint;
@@ -39,6 +51,8 @@ export interface GateSummary {
   standardId: Hex;
   /** The suite the gate pins; zero accepts any. */
   suiteHash: Hex;
+  vaultCallGas: bigint;
+  vaultViewGas: bigint;
   asset: Address;
   owner: Address;
   maxAttestationAge: bigint;
@@ -128,6 +142,9 @@ export interface DeployGateInput {
   owner: Address;
   /** Seconds; 1 to 2^64 - 1. */
   maxAttestationAge: bigint;
+  /** Exit's stipends (default DEFAULT_GATE_VAULT_CALL_GAS and DEFAULT_GATE_VAULT_VIEW_GAS). */
+  vaultCallGas?: bigint;
+  vaultViewGas?: bigint;
 }
 
 /**
@@ -139,7 +156,17 @@ export async function deployAllocationGate(i: DeployGateInput): Promise<{ addres
   const data = encodeDeployData({
     abi: allocationGateAbi,
     bytecode: allocationGateBytecode,
-    args: [i.registry, i.subjectChainId, i.standardId, i.suiteHash ?? ZERO_HASH, i.asset, i.owner, i.maxAttestationAge],
+    args: [
+      i.registry,
+      i.subjectChainId,
+      i.standardId,
+      i.suiteHash ?? ZERO_HASH,
+      i.asset,
+      i.owner,
+      i.maxAttestationAge,
+      i.vaultCallGas ?? DEFAULT_GATE_VAULT_CALL_GAS,
+      i.vaultViewGas ?? DEFAULT_GATE_VAULT_VIEW_GAS,
+    ],
   });
   let gas: bigint;
   try {
@@ -192,7 +219,7 @@ export class AllocationGateClient {
     return this.client.readContract({ address: this.address, abi: allocationGateAbi, functionName, args } as never) as Promise<T>;
   }
 
-  private async write(functionName: 'allocate' | 'exit' | 'withdraw', args: readonly unknown[]): Promise<Mined> {
+  private async write(functionName: 'allocate' | 'exit' | 'withdraw' | 'resync', args: readonly unknown[]): Promise<Mined> {
     if (!this.wallet) throw new GateError(`${functionName} needs a wallet client`);
     const call = { address: this.address, abi: allocationGateAbi, functionName, args, account: this.wallet.account } as never;
     try {
@@ -208,7 +235,7 @@ export class AllocationGateClient {
     }
   }
 
-  private events<N extends 'Allocated' | 'Exited' | 'ExitFailed' | 'IdleWithdrawn'>(out: Mined, eventName: N) {
+  private events<N extends 'Allocated' | 'Exited' | 'ExitFailed' | 'IdleWithdrawn' | 'Resynced'>(out: Mined, eventName: N) {
     const self = this.address.toLowerCase();
     return parseEventLogs({ abi: allocationGateAbi, eventName, logs: out.receipt.logs }).filter((l) => l.address.toLowerCase() === self);
   }
@@ -219,18 +246,20 @@ export class AllocationGateClient {
   }
 
   async summary(): Promise<GateSummary> {
-    const [registry, subjectChainId, standardId, suiteHash, asset, owner, maxAttestationAge, idle, vaults] = await Promise.all([
+    const [registry, subjectChainId, standardId, suiteHash, vaultCallGas, vaultViewGas, asset, owner, maxAttestationAge, idle, vaults] = await Promise.all([
       this.read<Address>('registry'),
       this.read<bigint>('subjectChainId'),
       this.read<Hex>('standardId'),
       this.read<Hex>('suiteHash'),
+      this.read<bigint>('vaultCallGas'),
+      this.read<bigint>('vaultViewGas'),
       this.read<Address>('asset'),
       this.read<Address>('owner'),
       this.read<bigint>('maxAttestationAge'),
       this.read<bigint>('idle'),
       this.read<readonly Address[]>('vaults'),
     ]);
-    return { address: this.address, registry, subjectChainId, standardId, suiteHash, asset, owner, maxAttestationAge, idle, vaults: [...vaults] };
+    return { address: this.address, registry, subjectChainId, standardId, suiteHash, vaultCallGas, vaultViewGas, asset, owner, maxAttestationAge, idle, vaults: [...vaults] };
   }
 
   position(vault: Address): Promise<GatePosition> {
@@ -291,31 +320,108 @@ export class AllocationGateClient {
     throw new GateError(`exit tx ${out.hash}: expected one Exited or ExitFailed event from ${this.address}, found none`);
   }
 
+  /**
+   * What exit(vault) would return if sent now by this client's account: false means the vault would move nothing
+   * (ExitFailed). Reverts surface as GateError (StillCompliant, NothingToExit, ...). Costs no gas.
+   */
+  async simulateExit(vault: Address): Promise<boolean> {
+    try {
+      const { result } = await this.client.simulateContract({ address: this.address, abi: allocationGateAbi, functionName: 'exit', args: [vault], ...(this.wallet ? { account: this.wallet.account } : {}) } as never);
+      return result as boolean;
+    } catch (err) {
+      throw failure('exit would fail', err);
+    }
+  }
+
+  /** Owner only: set the books of `vault` to the vault's balanceOf(gate); from and to come from Resynced. */
+  async resync(vault: Address): Promise<GateTx & { vault: Address; fromShares: bigint; toShares: bigint }> {
+    const out = await this.write('resync', [vault]);
+    const ev = this.events(out, 'Resynced');
+    if (ev.length !== 1) throw new GateError(`resync tx ${out.hash}: expected one Resynced event from ${this.address}, found ${ev.length}`);
+    const e = ev[0]!.args;
+    return { ...AllocationGateClient.strip(out), vault: getAddress(e.vault), fromShares: e.fromShares, toShares: e.toShares };
+  }
+
   /** Owner only: idle assets out of the gate. */
   async withdraw(to: Address, amount: bigint): Promise<GateTx> {
     return AllocationGateClient.strip(await this.write('withdraw', [to, amount]));
   }
 }
 
+/** The gate calls a keeper makes; AllocationGateClient has them, a test can fake them. */
+export interface GateKeeperTarget {
+  summary(): Promise<Pick<GateSummary, 'vaults'>>;
+  position(vault: Address): Promise<GatePosition>;
+  verdict(vault: Address): Promise<{ verdict: GateVerdict; attestationId: bigint | null }>;
+  simulateExit(vault: Address): Promise<boolean>;
+  exit(vault: Address): Promise<GateExitOutcome>;
+}
+
 /**
- * One keeper pass: every vault of the gate whose exit is open (shares held, verdict neither Compliant nor Stale) is
- * exited, one transaction each, in the gate's order. A vault whose exit fails to send is reported and the pass goes
- * on, so one broken vault never holds up the others.
+ * What one keeper pass did with one vault. empty: no shares, nothing else read. closed: exit is not open to anyone.
+ * waiting: backing off, not tried. backoff: the exit would move nothing (simulated, or mined as ExitFailed), so a new,
+ * longer wait starts; this is the one to log. exited: assets came back. error: a read, simulation or send failed
+ * (no wait: an RPC hiccup should not hold an exit back).
  */
-export async function exitDueVaults(gate: AllocationGateClient): Promise<Array<{ state: GateVaultState; outcome?: GateExitOutcome; error?: GateError }>> {
-  const { vaults } = await gate.summary();
-  const results: Array<{ state: GateVaultState; outcome?: GateExitOutcome; error?: GateError }> = [];
-  for (const vault of vaults) {
-    const state = await gate.vaultState(vault);
-    if (!state.canExit) {
-      results.push({ state });
-      continue;
-    }
+export type GateKeeperResult =
+  | { vault: Address; kind: 'empty' }
+  | { vault: Address; kind: 'closed'; verdict: GateVerdict }
+  | { vault: Address; kind: 'waiting'; until: number }
+  | { vault: Address; kind: 'backoff'; verdict: GateVerdict; delayMs: number; until: number; outcome?: GateExitOutcome }
+  | { vault: Address; kind: 'exited'; outcome: GateExitOutcome }
+  | { vault: Address; kind: 'error'; error: GateError };
+
+/**
+ * The keeper behind `watch demo gate keep`: each pass looks at every vault of the gate, in the gate's order, one
+ * transaction at most per vault. A vault whose exit would move nothing is simulated, not sent, and then left alone for
+ * GATE_BACKOFF_MIN_MS, doubling after each further try that moves nothing up to GATE_BACKOFF_MAX_MS; the wait ends
+ * when the vault pays, its exit closes or its position empties.
+ */
+export class GateKeeper {
+  private readonly waits = new Map<string, { delayMs: number; until: number }>();
+
+  constructor(
+    readonly gate: GateKeeperTarget,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  async pass(): Promise<GateKeeperResult[]> {
+    const { vaults } = await this.gate.summary();
+    const results: GateKeeperResult[] = [];
+    for (const vault of vaults) results.push(await this.one(vault));
+    return results;
+  }
+
+  private backoff(vault: Address, verdict: GateVerdict, outcome?: GateExitOutcome): GateKeeperResult {
+    const key = vault.toLowerCase();
+    const prev = this.waits.get(key);
+    const delayMs = prev ? Math.min(prev.delayMs * 2, GATE_BACKOFF_MAX_MS) : GATE_BACKOFF_MIN_MS;
+    const until = this.now() + delayMs;
+    this.waits.set(key, { delayMs, until });
+    return { vault, kind: 'backoff', verdict, delayMs, until, ...(outcome ? { outcome } : {}) };
+  }
+
+  private async one(vault: Address): Promise<GateKeeperResult> {
+    const key = vault.toLowerCase();
     try {
-      results.push({ state, outcome: await gate.exit(vault) });
+      if ((await this.gate.position(vault)).shares === 0n) {
+        this.waits.delete(key);
+        return { vault, kind: 'empty' };
+      }
+      const wait = this.waits.get(key);
+      if (wait && this.now() < wait.until) return { vault, kind: 'waiting', until: wait.until };
+      const { verdict } = await this.gate.verdict(vault);
+      if (!exitAllowed(verdict)) {
+        this.waits.delete(key);
+        return { vault, kind: 'closed', verdict };
+      }
+      if (!(await this.gate.simulateExit(vault))) return this.backoff(vault, verdict);
+      const outcome = await this.gate.exit(vault);
+      if (!outcome.exited) return this.backoff(vault, verdict, outcome);
+      this.waits.delete(key);
+      return { vault, kind: 'exited', outcome };
     } catch (err) {
-      results.push({ state, error: err instanceof GateError ? err : failure(`exit ${vault} failed`, err) });
+      return { vault, kind: 'error', error: err instanceof GateError ? err : failure(`keeping ${vault} failed`, err) };
     }
   }
-  return results;
 }

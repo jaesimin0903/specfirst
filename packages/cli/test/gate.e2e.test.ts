@@ -1,8 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  allocationGateAbi,
   AllocationGateClient,
   anvilChain,
   createChainClients,
@@ -11,7 +14,7 @@ import {
   type ChainClients,
   type StandardCheckReport,
 } from '@specfirst/core';
-import { parseEther, type Address, type Hex } from 'viem';
+import { parseEther, toFunctionSelector, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { registerAttestRegistryCommand } from '../src/commands/attest.js';
@@ -30,6 +33,31 @@ const KEEPER_KEY = ANVIL_KEYS[3] as Hex;
 const DEPLOYER = privateKeyToAccount(DEPLOYER_KEY).address;
 const KEEPER = privateKeyToAccount(KEEPER_KEY).address;
 const NOWHERE = 'http://127.0.0.1:1';
+const VERDICT_OF = toFunctionSelector(allocationGateAbi.find((x) => x.type === 'function' && x.name === 'verdictOf')!);
+
+/** Forwards JSON-RPC to anvil but answers every eth_call of verdictOf with a JSON-RPC error. */
+async function verdictReadsFail(target: string): Promise<{ url: string; close: () => Promise<void> }> {
+  const server: Server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c: Buffer) => (body += c.toString('utf8')));
+    req.on('end', async () => {
+      const msgs = JSON.parse(body) as { id: number; method: string; params?: Array<{ data?: string; input?: string }> } | Array<never>;
+      const one = Array.isArray(msgs) ? null : msgs;
+      const data = one?.params?.[0]?.data ?? one?.params?.[0]?.input ?? '';
+      if (one?.method === 'eth_call' && data.startsWith(VERDICT_OF)) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: one.id, error: { code: -32000, message: 'verdictOf blocked by the test' } }));
+        return;
+      }
+      const upstream = await fetch(target, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+      res.writeHead(upstream.status, { 'content-type': 'application/json' });
+      res.end(await upstream.text());
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const { port } = server.address() as AddressInfo;
+  return { url: `http://127.0.0.1:${port}`, close: () => new Promise<void>((r) => server.close(() => r())) };
+}
 
 /**
  * The allocation gate of ADR 0007 on a local anvil, through the CLI: deploy the registry, a DemoToken, the factory
@@ -132,11 +160,14 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
     expect(d.err).toBe('');
     expect(d.code).toBe(0);
     expect(d.events.map((e) => e.type)).toEqual(['watch-demo-gate-deployed', 'watch-demo-gate-funded']);
-    expect(event(d, 'watch-demo-gate-deployed')).toMatchObject({ chainId: 31337, registry: process.env.SPECFIRST_ATTEST_REGISTRY_31337, asset: token, owner: DEPLOYER, standard: 'erc4626', suiteHash: `0x${'00'.repeat(32)}`, maxAttestationAge: '3600', envName: 'SPECFIRST_GATE_31337' });
+    expect(event(d, 'watch-demo-gate-deployed')).toMatchObject({ chainId: 31337, registry: process.env.SPECFIRST_ATTEST_REGISTRY_31337, asset: token, owner: DEPLOYER, standard: 'erc4626', suiteHash: `0x${'00'.repeat(32)}`, maxAttestationAge: '3600', vaultCallGas: '2000000', vaultViewGas: '300000', envName: 'SPECFIRST_GATE_31337' });
     gate = event(d, 'watch-demo-gate-deployed').gate as Address;
     process.env.SPECFIRST_GATE_31337 = gate;
     const s = await reader().summary();
-    expect(s).toMatchObject({ owner: DEPLOYER, asset: token, subjectChainId: 31337n, maxAttestationAge: 3600n, idle: parseEther('100'), vaults: [] });
+    expect(s).toMatchObject({ owner: DEPLOYER, asset: token, subjectChainId: 31337n, maxAttestationAge: 3600n, vaultCallGas: 2_000_000n, vaultViewGas: 300_000n, idle: parseEther('100'), vaults: [] });
+    const badGas = await demo('gate', 'deploy', '--asset', token, '--vault-call-gas', '0');
+    expect(badGas.code).toBe(19);
+    expect(badGas.err).toMatch(/--vault-call-gas must be a positive amount of gas/);
   });
 
   it('refuses to allocate into a vault nobody attested', async () => {
@@ -171,6 +202,16 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
     } finally {
       process.env.DEPLOYER_PRIVATE_KEY = DEPLOYER_KEY;
     }
+    // A verdict that cannot be read is no reason to exit: the owner's key is refused without --as-owner.
+    const proxy = await verdictReadsFail(anvil.url);
+    try {
+      const blind = await cli('watch', 'demo', 'gate', 'exit', a, '--network', 'anvil', '--rpc', proxy.url);
+      expect(blind.code).toBe(19);
+      expect(blind.err).toMatch(/exit refused: could not read the vault's verdict; you are the gate's owner and may exit it anyway with --as-owner/);
+    } finally {
+      await proxy.close();
+    }
+    expect((await reader().position(a)).shares).toBe(parseEther('10'));
     const keep = await demo('gate', 'keep', '--once');
     expect(keep.code).toBe(0);
     expect(event(keep, 'watch-demo-gate-pass')).toMatchObject({ vaults: 2, due: 0, exited: 0 });
@@ -215,9 +256,22 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
       expect.objectContaining({ vault: a, verdict: 'NotCompliant', canExit: false, attestation: expect.objectContaining({ id: failA, status: 'Valid', failCount: 1, issuerAllowed: true }) }),
       expect.objectContaining({ vault: b, verdict: 'NotCompliant', canExit: false }),
     ]);
-    const nothing = await demo('gate', 'exit', a);
+    const nothing = await demo('gate', 'exit', a, '--as-owner');
     expect(nothing.code).toBe(19);
     expect(nothing.err).toMatch(/the gate holds no shares of/);
+
+    // resync: owner only; books already equal the vault's balance here, so 0 to 0.
+    const rs = await demo('gate', 'resync', a);
+    expect(rs.err).toBe('');
+    expect(event(rs, 'watch-demo-gate-resynced')).toMatchObject({ vault: a, fromShares: '0', toShares: '0' });
+    process.env.DEPLOYER_PRIVATE_KEY = KEEPER_KEY;
+    try {
+      const stranger = await demo('gate', 'resync', a);
+      expect(stranger.code).toBe(19);
+      expect(stranger.err).toMatch(/NotOwner/);
+    } finally {
+      process.env.DEPLOYER_PRIVATE_KEY = DEPLOYER_KEY;
+    }
   });
 
   it('the owner exits a healthy vault with --as-owner; an hour later allocate is Stale and says how to get a fresh attestation', async () => {
@@ -242,6 +296,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
     expect(r.code).toBe(0);
     expect(r.out).toMatch(/AllocationGate 0x[0-9a-fA-F]{40}/);
     expect(r.out).toMatch(/any suite, attestations fresh for 3600 s/);
+    expect(r.out).toMatch(/exit stipends 2000000 gas per vault call, 300000 per read/);
     expect(r.out).toMatch(/idle 100, 3 vaults/);
     expect(r.out).toMatch(new RegExp(`${a}\\s+NotCompliant`));
     expect(r.out).toMatch(/0 shares, 10 in, 10 out, last exit attempt block \d+/);

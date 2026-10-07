@@ -43,13 +43,16 @@ interface IGateAsset {
 ///      that trusts the registry's issuers trusts each of them.
 ///      Vault calls are external and untrusted. allocate, exit and withdraw share a reentrancy lock (a storage flag,
 ///      as in CheckRequestDesk), and exit clears the position before it calls the vault. Each vault call in exit gets
-///      a fixed stipend (VAULT_CALL_GAS for redeem and withdraw, VAULT_VIEW_GAS for reads) and exit reverts with
-///      InsufficientGas when less is left, so a gas estimate finds the limit an honest exit needs, and whatever a call
-///      does with its stipend (revert, run out, answer without doing anything) is the vault's own behavior: exit moves
-///      on to the withdraw fallback and, when nothing moved, records ExitFailed instead of reverting. At most 32 bytes
-///      of what a vault returns are copied. Shares are counted on the vault's balanceOf(gate) before and after each
-///      call (the books never go above it) and assets on the asset's balance, never on a vault's return value or
-///      success flag. The asset is trusted (set at deployment). The owner is immutable (no transfer, no renounce).
+///      a fixed stipend (vaultCallGas for redeem and withdraw, vaultViewGas for reads, set at deployment) and exit
+///      reverts with InsufficientGas when less is left, so a gas estimate finds the limit an honest exit needs, and
+///      whatever a call does with its stipend (revert, run out, answer without doing anything) is the vault's own
+///      behavior. Progress is assets arriving on the gate's asset balance, never a vault's return value or success
+///      flag: when redeem brings nothing, exit tries withdraw, and when that brings nothing either it records
+///      ExitFailed and keeps the books instead of reverting. After assets arrived the books follow the vault's
+///      balanceOf(gate), never above what they were; a vault that no longer answers balanceOf is taken to have taken
+///      back what was asked, and the owner's resync sets the books to its balance once it answers. At most 32 bytes of
+///      what a vault returns are copied. The asset is trusted (set at deployment). The owner is immutable (no transfer,
+///      no renounce).
 contract AllocationGate {
     enum Verdict {
         Compliant,
@@ -68,7 +71,7 @@ contract AllocationGate {
     }
 
     struct Position {
-        uint256 shares; // vault shares the gate holds: what allocations added, never above the vault's balanceOf(gate) after an exit
+        uint256 shares; // vault shares the gate holds: what allocations added, then the vault's balanceOf(gate) after an exit or a resync
         uint256 assetsIn; // assets the vault took, summed over every allocation
         uint256 assetsOut; // assets exits brought back, summed
         uint64 lastAllocatedBlock; // 0: never allocated
@@ -76,7 +79,8 @@ contract AllocationGate {
     }
 
     event Allocated(address indexed vault, uint256 indexed attestationId, uint256 assets, uint256 shares);
-    /// @dev `shares` is the drop of the vault's balanceOf(gate), `assets` the rise of the gate's asset balance.
+    /// @dev `assets` is the rise of the gate's asset balance; `shares` what the books dropped by: to the vault's
+    ///      balanceOf(gate), or by all of them when the vault did not answer balanceOf after paying.
     event Exited(
         address indexed vault,
         uint256 indexed attestationId,
@@ -86,8 +90,8 @@ contract AllocationGate {
         uint256 shares,
         uint256 assets
     );
-    /// @dev Nothing moved. Each error is the first 4 bytes of that call's revert; zero when the call did not revert
-    ///      (it answered without moving anything, or withdraw was not tried because maxWithdraw gave 0).
+    /// @dev No assets arrived; the books are kept. Each error is the first 4 bytes of that call's revert; zero when the
+    ///      call did not revert (it answered without paying, or withdraw was not tried because maxWithdraw gave 0).
     event ExitFailed(
         address indexed vault,
         uint256 indexed attestationId,
@@ -98,11 +102,13 @@ contract AllocationGate {
         bytes4 withdrawError
     );
     event IdleWithdrawn(address indexed to, uint256 amount);
+    event Resynced(address indexed vault, uint256 fromShares, uint256 toShares);
 
     error NotOwner();
     error ZeroAddress();
     error ZeroAmount();
     error ZeroMaxAge();
+    error BadStipend(uint256 vaultCallGas, uint256 vaultViewGas);
     error EmptyStandardId();
     error WithoutCode(address account);
     error WrongSubjectChain(uint64 subjectChainId, uint256 chainId);
@@ -118,17 +124,18 @@ contract AllocationGate {
     error NoSharesMinted(address vault);
     error TooFewShares(address vault, uint256 minted, uint256 minShares);
     error NothingToExit(address vault);
+    error NotAllocated(address vault);
     error StillCompliant(address vault, uint256 attestationId, Verdict verdict);
     error InsufficientGas(uint256 needed);
     error TokenCallFailed();
     error Reentrancy();
 
-    /// @notice Gas each redeem or withdraw call of exit gets, exactly.
-    uint256 public constant VAULT_CALL_GAS = 1_500_000;
-    /// @notice Gas each maxWithdraw or balanceOf call of exit gets, exactly.
-    uint256 public constant VAULT_VIEW_GAS = 100_000;
-    /// @notice Gas kept on top of a stipend: the call itself and exit's bookkeeping and event after it.
-    uint256 public constant EXIT_GAS_RESERVE = 60_000;
+    /// @notice Gas kept on top of a stipend: the call itself and exit's bookkeeping and event after it. Sized for
+    ///         Monad, where a cold account costs 10,100 and a cold storage page 8,100 (docs/adr/0007).
+    uint256 public constant EXIT_GAS_RESERVE = 100_000;
+    /// @notice Most an exit's stipends may add up to (two calls and two reads), so a fallback exit stays below the
+    ///         per-transaction gas cap of 2^24 with room for the rest.
+    uint256 public constant MAX_EXIT_STIPENDS = 15_000_000;
 
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     CheckAttestationRegistry public immutable registry;
@@ -146,6 +153,12 @@ contract AllocationGate {
     /// @notice Seconds after its issuedAt during which a compliant attestation lets the owner allocate.
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint64 public immutable maxAttestationAge;
+    /// @notice Gas each redeem or withdraw call of exit gets, exactly.
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint256 public immutable vaultCallGas;
+    /// @notice Gas each maxWithdraw or balanceOf call of exit gets, exactly.
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint256 public immutable vaultViewGas;
 
     mapping(address => Position) private _positions;
     address[] private _vaults;
@@ -169,7 +182,9 @@ contract AllocationGate {
         bytes32 suiteHash_,
         address asset_,
         address owner_,
-        uint64 maxAttestationAge_
+        uint64 maxAttestationAge_,
+        uint256 vaultCallGas_,
+        uint256 vaultViewGas_
     ) {
         if (registry_ == address(0) || asset_ == address(0) || owner_ == address(0)) {
             revert ZeroAddress();
@@ -179,6 +194,9 @@ contract AllocationGate {
         if (subjectChainId_ != block.chainid) revert WrongSubjectChain(subjectChainId_, block.chainid);
         if (standardId_ == bytes32(0)) revert EmptyStandardId();
         if (maxAttestationAge_ == 0) revert ZeroMaxAge();
+        if (vaultCallGas_ == 0 || vaultViewGas_ == 0 || 2 * (vaultCallGas_ + vaultViewGas_) > MAX_EXIT_STIPENDS) {
+            revert BadStipend(vaultCallGas_, vaultViewGas_);
+        }
         registry = CheckAttestationRegistry(registry_);
         subjectChainId = subjectChainId_;
         standardId = standardId_;
@@ -186,6 +204,8 @@ contract AllocationGate {
         asset = asset_;
         owner = owner_;
         maxAttestationAge = maxAttestationAge_;
+        vaultCallGas = vaultCallGas_;
+        vaultViewGas = vaultViewGas_;
     }
 
     /// @notice Deposit `assets` of the gate's idle asset into `vault` and get at least `minShares` (the vault's
@@ -242,9 +262,8 @@ contract AllocationGate {
         bytes32 withdrawError;
         bytes32 redeemError =
             _callVault(vault, abi.encodeCall(IGateVault.redeem, (shares, address(this), address(this))));
-        uint256 held = _heldBy(vault, shares);
-        if (held == shares && idle() == idleBefore) {
-            // redeem moved nothing, whatever it answered
+        if (idle() == idleBefore) {
+            // redeem brought nothing back, whatever it answered
             path = ExitPath.Withdraw;
             (bool read, bytes32 max) = _readVault(vault, abi.encodeCall(IGateVault.maxWithdraw, (address(this))));
             if (!read) withdrawError = max;
@@ -252,13 +271,12 @@ contract AllocationGate {
                 withdrawError = _callVault(
                     vault, abi.encodeCall(IGateVault.withdraw, (uint256(max), address(this), address(this)))
                 );
-                held = _heldBy(vault, shares);
             }
         }
 
-        p.shares = held;
         uint256 received = idle() - idleBefore;
-        if (held == shares && received == 0) {
+        if (received == 0) {
+            p.shares = shares;
             emit ExitFailed(
                 vault,
                 attestationId,
@@ -273,9 +291,21 @@ contract AllocationGate {
             );
             return false;
         }
+        uint256 held = _heldAfterPayout(vault, shares);
+        p.shares = held;
         p.assetsOut += received;
         emit Exited(vault, attestationId, msg.sender, verdict, path, shares - held, received);
         return true;
+    }
+
+    /// @notice Owner only: set the books of `vault` to the vault's balanceOf(gate) now, for a vault whose exit
+    ///         misreported what it took (see exit). Reverts when the vault does not answer.
+    function resync(address vault) external onlyOwner nonReentrant returns (uint256 shares) {
+        Position storage p = _positions[vault];
+        if (p.lastAllocatedBlock == 0) revert NotAllocated(vault);
+        shares = IGateVault(vault).balanceOf(address(this));
+        emit Resynced(vault, p.shares, shares);
+        p.shares = shares;
     }
 
     /// @notice Send `amount` of the gate's idle asset to `to`. Owner only. Shares held in vaults are not idle.
@@ -355,26 +385,26 @@ contract AllocationGate {
         revert StaleAttestation(vault, attestationId);
     }
 
-    /// @dev The gate's shares as the vault reports them now, capped at `books`; `books` when the vault does not answer
-    ///      balanceOf, so an exit never forgets shares on a vault's silence.
-    function _heldBy(address vault, uint256 books) private returns (uint256) {
-        (bool ok, bytes32 word) = _readVault(vault, abi.encodeCall(IGateVault.balanceOf, (address(this))));
-        if (!ok) return books;
-        return uint256(word) < books ? uint256(word) : books;
+    /// @dev The books after assets arrived: the vault's balanceOf(gate), never above `books`; 0 when it does not answer
+    ///      (it is taken to have taken back what was asked; the owner's resync corrects that once it answers).
+    function _heldAfterPayout(address vault, uint256 books) private returns (uint256) {
+        (bool answered, bytes32 balance) = _readVault(vault, abi.encodeCall(IGateVault.balanceOf, (address(this))));
+        if (!answered) return 0;
+        return uint256(balance) < books ? uint256(balance) : books;
     }
 
-    /// @dev A view call to `vault` with VAULT_VIEW_GAS: success and the first word it returned (zero when it returned
-    ///      less than a word, which counts as no answer).
+    /// @dev A view call to `vault` with vaultViewGas: success and the first word it returned (less than a word counts
+    ///      as no answer).
     function _readVault(address vault, bytes memory data) private returns (bool ok, bytes32 word) {
         uint256 size;
-        (ok, word, size) = _call(vault, data, VAULT_VIEW_GAS, true);
+        (ok, word, size) = _call(vault, data, vaultViewGas, true);
         ok = ok && size >= 0x20;
     }
 
-    /// @dev A state-changing call to `vault` with VAULT_CALL_GAS: the first word of its revert, zero when it did not
+    /// @dev A state-changing call to `vault` with vaultCallGas: the first word of its revert, zero when it did not
     ///      revert.
     function _callVault(address vault, bytes memory data) private returns (bytes32 revertWord) {
-        (bool ok, bytes32 word,) = _call(vault, data, VAULT_CALL_GAS, false);
+        (bool ok, bytes32 word,) = _call(vault, data, vaultCallGas, false);
         return ok ? bytes32(0) : word;
     }
 

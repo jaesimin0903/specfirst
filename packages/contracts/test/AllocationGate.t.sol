@@ -20,7 +20,9 @@ contract HostileVault {
         BurnGas, // redeem and maxWithdraw spin until out of gas
         HugeRevert, // redeem and withdraw revert with 600 KB of zeros
         NoOp, // redeem and withdraw answer as if they paid, and move nothing (a fallback that accepts any call)
-        SilentBalance // pays out like Honest, but balanceOf reverts
+        SilentBalance, // pays out like Honest, but balanceOf reverts
+        SilentHalf, // redeem burns and pays half, balanceOf reverts
+        UnderReport // redeem and withdraw answer without paying, balanceOf says 0
     }
 
     error Nope();
@@ -43,7 +45,8 @@ contract HostileVault {
     }
 
     function balanceOf(address account) external view returns (uint256) {
-        if (mode == Mode.SilentBalance) revert Nope();
+        if (mode == Mode.SilentBalance || mode == Mode.SilentHalf) revert Nope();
+        if (mode == Mode.UnderReport) return 0;
         return _shares[account];
     }
 
@@ -60,13 +63,14 @@ contract HostileVault {
     }
 
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256) {
-        if (mode == Mode.NoOp) return shares;
+        if (mode == Mode.NoOp || mode == Mode.UnderReport) return shares;
+        if (mode == Mode.SilentHalf) return _out(shares / 2, receiver, owner);
         if (mode != Mode.Honest && mode != Mode.SilentBalance) _misbehave();
         return _out(shares, receiver, owner);
     }
 
     function withdraw(uint256 assets, address receiver, address owner) external returns (uint256) {
-        if (mode == Mode.NoOp) return assets;
+        if (mode == Mode.NoOp || mode == Mode.UnderReport) return assets;
         if (mode != Mode.Honest && mode != Mode.RevertRedeem && mode != Mode.HalfWithdraw) _misbehave();
         return _out(assets, receiver, owner);
     }
@@ -241,9 +245,13 @@ contract AllocationGateTest is Test {
         bytes4 withdrawError
     );
     event IdleWithdrawn(address indexed to, uint256 amount);
+    event Resynced(address indexed vault, uint256 fromShares, uint256 toShares);
 
     bytes32 internal constant ERC4626 = 0x45f39c8c7e3105201fd8b1288ac068347728af9cfd16f3f08e97171ef955c9ab;
     uint64 internal constant MAX_AGE = 1 days;
+    /// The stipends the CLI deploys with, sized for Monad's cold access pricing.
+    uint256 internal constant CALL_GAS = 2_000_000;
+    uint256 internal constant VIEW_GAS = 300_000;
     uint256 internal constant FUND = 1000e18;
 
     CheckAttestationRegistry internal reg;
@@ -267,7 +275,9 @@ contract AllocationGateTest is Test {
         token = new DemoToken();
         factory = new DemoVaultFactory();
         vault = _demoVault();
-        gate = new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE);
+        gate = new AllocationGate(
+            address(reg), chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE, CALL_GAS, VIEW_GAS
+        );
         token.mint(address(gate), FUND);
     }
 
@@ -353,29 +363,45 @@ contract AllocationGateTest is Test {
         assertEq(gate.idle(), FUND);
         assertEq(gate.vaultCount(), 0);
         assertEq(gate.suiteHash(), bytes32(0));
-        assertEq(gate.VAULT_CALL_GAS(), 1_500_000);
-        assertEq(gate.VAULT_VIEW_GAS(), 100_000);
-        assertEq(gate.EXIT_GAS_RESERVE(), 60_000);
+        assertEq(gate.vaultCallGas(), CALL_GAS);
+        assertEq(gate.vaultViewGas(), VIEW_GAS);
+        assertEq(gate.EXIT_GAS_RESERVE(), 100_000);
     }
 
     function test_constructor_refusesBadParams() public {
         vm.expectRevert(AllocationGate.ZeroAddress.selector);
-        new AllocationGate(address(0), chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE);
+        new AllocationGate(address(0), chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE, CALL_GAS, VIEW_GAS);
         vm.expectRevert(AllocationGate.ZeroAddress.selector);
-        new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(0), owner, MAX_AGE);
+        new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(0), owner, MAX_AGE, CALL_GAS, VIEW_GAS);
         vm.expectRevert(AllocationGate.ZeroAddress.selector);
-        new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(token), address(0), MAX_AGE);
+        new AllocationGate(
+            address(reg), chain, ERC4626, bytes32(0), address(token), address(0), MAX_AGE, CALL_GAS, VIEW_GAS
+        );
         vm.expectRevert(abi.encodeWithSelector(AllocationGate.WithoutCode.selector, keeper));
-        new AllocationGate(keeper, chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE);
+        new AllocationGate(keeper, chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE, CALL_GAS, VIEW_GAS);
         vm.expectRevert(abi.encodeWithSelector(AllocationGate.WithoutCode.selector, keeper));
-        new AllocationGate(address(reg), chain, ERC4626, bytes32(0), keeper, owner, MAX_AGE);
+        new AllocationGate(address(reg), chain, ERC4626, bytes32(0), keeper, owner, MAX_AGE, CALL_GAS, VIEW_GAS);
         // The vaults live on this chain: an attestation about the same address on another chain is not about them.
         vm.expectRevert(abi.encodeWithSelector(AllocationGate.WrongSubjectChain.selector, uint64(143), block.chainid));
-        new AllocationGate(address(reg), 143, ERC4626, bytes32(0), address(token), owner, MAX_AGE);
+        new AllocationGate(address(reg), 143, ERC4626, bytes32(0), address(token), owner, MAX_AGE, CALL_GAS, VIEW_GAS);
         vm.expectRevert(AllocationGate.EmptyStandardId.selector);
-        new AllocationGate(address(reg), chain, bytes32(0), bytes32(0), address(token), owner, MAX_AGE);
+        new AllocationGate(
+            address(reg), chain, bytes32(0), bytes32(0), address(token), owner, MAX_AGE, CALL_GAS, VIEW_GAS
+        );
         vm.expectRevert(AllocationGate.ZeroMaxAge.selector);
-        new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(token), owner, 0);
+        new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(token), owner, 0, CALL_GAS, VIEW_GAS);
+        vm.expectRevert(abi.encodeWithSelector(AllocationGate.BadStipend.selector, 0, VIEW_GAS));
+        new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE, 0, VIEW_GAS);
+        vm.expectRevert(abi.encodeWithSelector(AllocationGate.BadStipend.selector, CALL_GAS, 0));
+        new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE, CALL_GAS, 0);
+        // Two calls and two reads must stay within MAX_EXIT_STIPENDS: 2 x (7.2M + 0.3M) = 15M passes, one more does not.
+        new AllocationGate(
+            address(reg), chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE, 7_200_000, VIEW_GAS
+        );
+        vm.expectRevert(abi.encodeWithSelector(AllocationGate.BadStipend.selector, 7_200_001, VIEW_GAS));
+        new AllocationGate(
+            address(reg), chain, ERC4626, bytes32(0), address(token), owner, MAX_AGE, 7_200_001, VIEW_GAS
+        );
     }
 
     // ---------------------------------------------------------------- allocate
@@ -524,14 +550,18 @@ contract AllocationGateTest is Test {
 
     function test_tokenCalls_acceptNoReturnValue_refuseFalse() public {
         OddToken quiet = new OddToken(true);
-        AllocationGate g = new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(quiet), owner, MAX_AGE);
+        AllocationGate g = new AllocationGate(
+            address(reg), chain, ERC4626, bytes32(0), address(quiet), owner, MAX_AGE, CALL_GAS, VIEW_GAS
+        );
         quiet.mint(address(g), 10);
         vm.prank(owner);
         g.withdraw(owner, 4);
         assertEq(quiet.balanceOf(owner), 4);
 
         OddToken liar = new OddToken(false);
-        g = new AllocationGate(address(reg), chain, ERC4626, bytes32(0), address(liar), owner, MAX_AGE);
+        g = new AllocationGate(
+            address(reg), chain, ERC4626, bytes32(0), address(liar), owner, MAX_AGE, CALL_GAS, VIEW_GAS
+        );
         liar.mint(address(g), 10);
         vm.prank(owner);
         vm.expectRevert(AllocationGate.TokenCallFailed.selector);
@@ -760,7 +790,7 @@ contract AllocationGateTest is Test {
     /// Less gas than a stipend needs is the caller's fault: InsufficientGas, nothing changes.
     function test_exit_lessGasThanAStipendRevertsWithInsufficientGas() public {
         HostileVault h = _hostile(HostileVault.Mode.BurnGas);
-        uint256 needed = gate.VAULT_CALL_GAS() * 64 / 63 + gate.EXIT_GAS_RESERVE();
+        uint256 needed = gate.vaultCallGas() * 64 / 63 + gate.EXIT_GAS_RESERVE();
         vm.prank(keeper);
         vm.expectRevert(abi.encodeWithSelector(AllocationGate.InsufficientGas.selector, needed));
         gate.exit{gas: 1_000_000}(address(h));
@@ -768,7 +798,7 @@ contract AllocationGateTest is Test {
         vm.prank(keeper);
         vm.expectRevert(
             abi.encodeWithSelector(
-                AllocationGate.InsufficientGas.selector, gate.VAULT_VIEW_GAS() * 64 / 63 + gate.EXIT_GAS_RESERVE()
+                AllocationGate.InsufficientGas.selector, gate.vaultViewGas() * 64 / 63 + gate.EXIT_GAS_RESERVE()
             )
         );
         gate.exit{gas: needed + 60_000}(address(h));
@@ -786,11 +816,11 @@ contract AllocationGateTest is Test {
         assertEq(_neverExitFailed(address(vault), new address[](0)), 0);
     }
 
-    /// Every gas limit from 40,000 to 1,800,000 in steps of 10,000, with cold storage: how many end in ExitFailed
+    /// Every gas limit from 40,000 to 2,400,000 in steps of 10,000, with cold storage: how many end in ExitFailed
     /// (must stay 0 for an honest vault); at least one must exit.
     function _neverExitFailed(address v, address[] memory alsoCool) internal returns (uint256 failed) {
         uint256 exited;
-        for (uint256 g = 40_000; g <= 1_800_000; g += 10_000) {
+        for (uint256 g = 40_000; g <= 2_400_000; g += 10_000) {
             uint256 snap = vm.snapshotState();
             vm.cool(address(gate));
             vm.cool(v);
@@ -809,13 +839,13 @@ contract AllocationGateTest is Test {
     }
 
     /// The vault pays about 742,000 gas to revert with 600 KB, twice. A gate that copied what it returns would pay
-    /// as much again for each copy and run out of the 2.7M given; this one copies 32 bytes and records the failure.
+    /// as much again for each copy and run out of the 3M given; this one copies 32 bytes and records the failure.
     function test_exit_aHugeRevertIsCutTo32Bytes() public {
         HostileVault h = _hostile(HostileVault.Mode.HugeRevert);
         vm.expectEmit(true, false, false, true, address(gate));
         emit ExitFailed(address(h), 0, keeper, AllocationGate.Verdict.NotCompliant, 100e18, bytes4(0), bytes4(0));
         vm.prank(keeper);
-        assertFalse(gate.exit{gas: 2_700_000}(address(h)));
+        assertFalse(gate.exit{gas: 3_000_000}(address(h)));
         assertEq(gate.positionOf(address(h)).shares, 100e18);
     }
 
@@ -860,18 +890,59 @@ contract AllocationGateTest is Test {
         assertEq(gate.positionOf(address(vault)).lastExitBlock, 0);
     }
 
-    /// A vault that pays but will not say what the gate still holds: the assets are counted, the shares are not
-    /// forgotten on the vault's silence (the books keep them, a later exit can try again).
-    function test_exit_aVaultThatDoesNotAnswerBalanceOfKeepsTheBooks() public {
+    /// A vault that pays and then will not say what the gate still holds is taken to have taken back what was asked:
+    /// the books go to 0, so the keeper does not retry it forever.
+    function test_exit_aVaultThatPaysButDoesNotAnswerBalanceOf_zeroesTheBooks() public {
         HostileVault h = _hostile(HostileVault.Mode.SilentBalance);
         vm.expectEmit(true, false, false, true, address(gate));
         emit Exited(
-            address(h), 0, keeper, AllocationGate.Verdict.NotCompliant, AllocationGate.ExitPath.Redeem, 0, 100e18
+            address(h), 0, keeper, AllocationGate.Verdict.NotCompliant, AllocationGate.ExitPath.Redeem, 100e18, 100e18
         );
         vm.prank(keeper);
         assertTrue(gate.exit(address(h)));
+        assertEq(gate.positionOf(address(h)).shares, 0);
+        assertFalse(gate.canExit(address(h)));
+    }
+
+    /// The review's case: redeem and withdraw succeed without paying and balanceOf says 0. No assets arrived, so the
+    /// books keep the 100 shares (ExitFailed) and a later exit, once the vault pays, takes them.
+    function test_exit_aVaultThatUnderReportsKeepsTheBooksUntilItPays() public {
+        HostileVault h = _hostile(HostileVault.Mode.UnderReport);
+        vm.expectEmit(true, false, false, true, address(gate));
+        emit ExitFailed(address(h), 0, keeper, AllocationGate.Verdict.NotCompliant, 100e18, bytes4(0), bytes4(0));
+        vm.prank(keeper);
+        assertFalse(gate.exit(address(h)));
         assertEq(gate.positionOf(address(h)).shares, 100e18);
-        assertEq(gate.positionOf(address(h)).assetsOut, 100e18);
+        h.arm(HostileVault.Mode.Honest, gate, address(0));
+        vm.prank(keeper);
+        assertTrue(gate.exit(address(h)));
+        assertEq(gate.idle(), FUND);
+    }
+
+    /// resync: the vault paid half, kept half and did not answer balanceOf, so the books went to 0. Once it answers,
+    /// the owner sets the books to its balance and the rest can be exited.
+    function test_resync_setsTheBooksToTheVaultsBalance() public {
+        HostileVault h = _hostile(HostileVault.Mode.SilentHalf);
+        vm.prank(keeper);
+        assertTrue(gate.exit(address(h)));
+        assertEq(gate.positionOf(address(h)).shares, 0);
+        h.arm(HostileVault.Mode.Honest, gate, address(0));
+        assertEq(h.balanceOf(address(gate)), 50e18);
+
+        vm.prank(keeper);
+        vm.expectRevert(AllocationGate.NotOwner.selector);
+        gate.resync(address(h));
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(AllocationGate.NotAllocated.selector, keeper));
+        gate.resync(keeper);
+
+        vm.expectEmit(true, false, false, true, address(gate));
+        emit Resynced(address(h), 0, 50e18);
+        vm.prank(owner);
+        assertEq(gate.resync(address(h)), 50e18);
+        vm.prank(keeper);
+        assertTrue(gate.exit(address(h)));
+        assertEq(gate.idle(), FUND);
     }
 
     // ---------------------------------------------------------------- owner exit
@@ -907,6 +978,55 @@ contract AllocationGateTest is Test {
         assertEq(gate.idle(), FUND);
     }
 
+    // ---------------------------------------------------------------- verdict order
+
+    /// An old attestation that is also bad must open exit to anyone: Stale is checked after every rule that opens
+    /// exit, so a quiet watcher never hides a revoked, failing, untrusted, foreign, future or other-suite attestation.
+    function test_order_aStaleAttestationThatIsAlsoBadOpensExitForAnyone() public {
+        AllocationGate pinned = new AllocationGate(
+            address(reg), chain, ERC4626, keccak256("suite"), address(token), owner, MAX_AGE, CALL_GAS, VIEW_GAS
+        );
+        token.mint(address(pinned), 100e18);
+        AllocationGate.Verdict[6] memory expected = [
+            AllocationGate.Verdict.NotCompliant, // revoked
+            AllocationGate.Verdict.NotCompliant, // failing
+            AllocationGate.Verdict.UntrustedIssuer, // issuer removed
+            AllocationGate.Verdict.CodeMismatch,
+            AllocationGate.Verdict.FutureBlock,
+            AllocationGate.Verdict.OtherSuite
+        ];
+        for (uint256 k; k < 6; ++k) {
+            AllocationGate g = k == 5 ? pinned : gate;
+            DemoVault v = _demoVault();
+            _pass(address(v));
+            vm.prank(owner);
+            g.allocate(address(v), 10e18, 0);
+            CheckAttestationRegistry.AttestParams memory p = _params(address(v), 30, 0, 0, 0, bytes32(0));
+            if (k == 0) {
+                (uint256 id,) = reg.latest(chain, address(v), ERC4626);
+                vm.prank(issuer);
+                reg.revoke(id, keccak256("evidence"));
+            } else if (k == 2) {
+                // issuer removed below, after the age has passed
+            } else {
+                if (k == 1) p = _params(address(v), 29, 1, 0, 0, bytes32(0));
+                if (k == 3) p.subjectCodeHash = keccak256("other code");
+                if (k == 4) p.blockNumber = uint64(block.number + 1_000_000);
+                if (k == 5) p.suiteHash = keccak256("suite v2");
+                vm.prank(issuer);
+                reg.attest(p);
+            }
+            vm.warp(block.timestamp + MAX_AGE + 1);
+            if (k == 2) reg.setIssuer(issuer, false);
+            (AllocationGate.Verdict verdict,) = g.verdictOf(address(v));
+            assertEq(uint8(verdict), uint8(expected[k]), "verdict");
+            assertTrue(g.canExit(address(v)), "exit open");
+            vm.prank(keeper);
+            assertTrue(g.exit(address(v)), "exited by a stranger");
+            if (k == 2) reg.setIssuer(issuer, true);
+        }
+    }
+
     // ---------------------------------------------------------------- future block, pinned suite, slippage
 
     /// The vault is on this chain, so an attestation of a block that does not exist yet is not about it. It would
@@ -933,8 +1053,9 @@ contract AllocationGateTest is Test {
 
     /// A gate that pins a suite takes a pass of another suite for no verdict at all, like isCompliantWith.
     function test_pinnedSuite_anotherSuiteRefusesAllocateAndOpensExit() public {
-        AllocationGate pinned =
-            new AllocationGate(address(reg), chain, ERC4626, keccak256("suite"), address(token), owner, MAX_AGE);
+        AllocationGate pinned = new AllocationGate(
+            address(reg), chain, ERC4626, keccak256("suite"), address(token), owner, MAX_AGE, CALL_GAS, VIEW_GAS
+        );
         token.mint(address(pinned), 100e18);
         _pass(address(vault));
         vm.prank(owner);

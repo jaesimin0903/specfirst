@@ -177,6 +177,8 @@ contract GateHandler is Test {
 
 contract AllocationGateInvariantTest is Test {
     uint256 internal constant FUND = 1_000_000e18;
+    uint256 internal constant CALL_GAS = 2_000_000;
+    uint256 internal constant VIEW_GAS = 300_000;
 
     GateHandler internal handler;
     AllocationGate internal gate;
@@ -195,7 +197,9 @@ contract AllocationGateInvariantTest is Test {
             bytes32(0),
             address(token),
             owner,
-            1 days
+            1 days,
+            CALL_GAS,
+            VIEW_GAS
         );
         token.mint(address(gate), FUND);
         // The registry's owner is this test; the handler's issuer is the same labelled address.

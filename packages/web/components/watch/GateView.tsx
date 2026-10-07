@@ -82,6 +82,8 @@ function eventLine(e: GateEventJson, d: number): string {
       return `the vault moved nothing on redeem (${e.redeemError}) or withdraw (${e.withdrawError}); ${formatTokens(e.shares, d)} shares stay`;
     case 'IdleWithdrawn':
       return `${formatTokens(e.amount, d)} idle withdrawn by the owner`;
+    case 'Resynced':
+      return `the owner set the books from ${formatTokens(e.fromShares, d)} to ${formatTokens(e.toShares, d)} shares, the vault's own balance`;
   }
 }
 
@@ -234,6 +236,10 @@ export function GateView({ data }: { data: GatePageJson }) {
           <dt>Idle</dt>
           <dd>
             {formatTokens(v.idle, v.assetDecimals)} {unit}
+          </dd>
+          <dt>Exit gas</dt>
+          <dd>
+            {Number(v.vaultCallGas).toLocaleString('en-US')} per vault call, {Number(v.vaultViewGas).toLocaleString('en-US')} per read
           </dd>
           <dt>Read at</dt>
           <dd>block {Number(v.head).toLocaleString('en-US')}</dd>

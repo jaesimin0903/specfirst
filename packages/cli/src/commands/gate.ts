@@ -6,9 +6,11 @@ import {
   badChecksum,
   DEFAULT_GATE_MAX_AGE_SEC,
   DEFAULT_GATE_SLIPPAGE_BPS,
+  DEFAULT_GATE_VAULT_CALL_GAS,
+  DEFAULT_GATE_VAULT_VIEW_GAS,
   deployAllocationGate,
   errorText,
-  exitDueVaults,
+  GateKeeper,
   GATE_FRESH_ATTESTATION_HINT,
   GATE_VERDICT_TEXT,
   exitAllowed,
@@ -118,7 +120,7 @@ function printOutcome(ctx: CliContext, o: GateExitOutcome): void {
 }
 
 /**
- * `specfirst watch demo gate deploy|allocate|exit|keep|status`: the allocation gate of docs/adr/0007 on
+ * `specfirst watch demo gate deploy|allocate|exit|keep|resync|status`: the allocation gate of docs/adr/0007 on
  * monad-testnet or anvil. Writes are signed with DEPLOYER_PRIVATE_KEY through the guarded wallet (monad-mainnet is
  * refused before a key is read); the deployer is the gate's owner. --network, --rpc and --registry-attest are the
  * ones of `watch`.
@@ -136,7 +138,9 @@ export function registerWatchDemoGate(demo: Command): void {
     .option('--max-age <sec>', 'seconds after it was issued that a compliant attestation still lets the owner allocate', DEFAULT_GATE_MAX_AGE_SEC.toString())
     .option('--fund <tokens>', 'DemoToken to mint to the gate after the deploy (0: none)', '100')
     .option('--suite-hash <bytes32>', "accept only attestations of this suite (the registry's suiteHash); default: any suite")
-    .action(async (opts: { asset: string; maxAge: string; fund: string; suiteHash?: string }, command: Command) => {
+    .option('--vault-call-gas <gas>', 'gas each redeem or withdraw of an exit gets (Monad prices cold accounts at 10,100)', DEFAULT_GATE_VAULT_CALL_GAS.toString())
+    .option('--vault-view-gas <gas>', 'gas each maxWithdraw or balanceOf of an exit gets', DEFAULT_GATE_VAULT_VIEW_GAS.toString())
+    .action(async (opts: { asset: string; maxAge: string; fund: string; suiteHash?: string; vaultCallGas: string; vaultViewGas: string }, command: Command) => {
       const ctx = contextFrom(command);
       await runStage(ctx, 'watch demo gate deploy', WATCH_FAILED_EXIT_CODE, async () => {
         const asset = address(opts.asset, '--asset');
@@ -144,6 +148,9 @@ export function registerWatchDemoGate(demo: Command): void {
         const fund = tokens(opts.fund, '--fund');
         if (opts.suiteHash !== undefined && !/^0x[0-9a-fA-F]{64}$/.test(opts.suiteHash)) throw new ConfigError(`--suite-hash must be a 0x bytes32, got "${opts.suiteHash}"`);
         const suiteHash = (opts.suiteHash?.toLowerCase() ?? ZERO_HASH) as Hex;
+        for (const [flag, v] of [['--vault-call-gas', opts.vaultCallGas], ['--vault-view-gas', opts.vaultViewGas]] as const) {
+          if (!/^[1-9]\d{0,8}$/.test(v)) throw new ConfigError(`${flag} must be a positive amount of gas, got "${v}"`);
+        }
         const net = network(command);
         const registry = resolveAttestRegistry(net, { ...(globals(command).registryAttest ? { registryAttest: globals(command).registryAttest! } : {}) });
         const wallet = net.clients.wallet(resolveKey(net, DEPLOYER_KEY_ENV));
@@ -161,10 +168,13 @@ export function registerWatchDemoGate(demo: Command): void {
             asset,
             owner: wallet.account.address,
             maxAttestationAge: BigInt(opts.maxAge),
+            vaultCallGas: BigInt(opts.vaultCallGas),
+            vaultViewGas: BigInt(opts.vaultViewGas),
           });
           printLine(ctx, stage('gate', `AllocationGate ${pc.bold(out.address)}  ${pc.dim(`${net.name} ${chainId}, tx ${out.tx.hash}`)}`));
           printLine(ctx, cont(`registry ${registry}, asset ${asset}, owner ${wallet.account.address}, ${STANDARD}, ${suiteHash === ZERO_HASH ? 'any suite' : `suite ${suiteHash}`}, attestations fresh for ${opts.maxAge} s`));
           printLine(ctx, cont(pc.dim(`fresh means issued in the last ${opts.maxAge} s: ${GATE_FRESH_ATTESTATION_HINT}`)));
+          printLine(ctx, cont(pc.dim(`exit gives each vault call ${opts.vaultCallGas} gas and each read ${opts.vaultViewGas}`)));
           printLine(ctx, cont(`export ${gateEnvVar(chainId)}=${out.address}${chainId === 10143 ? `  (the web reads ${WEB_GATE_ENV})` : ''}`));
           emitEvent(ctx, {
             type: 'watch-demo-gate-deployed',
@@ -177,6 +187,8 @@ export function registerWatchDemoGate(demo: Command): void {
             standardId: standardIdOf(STANDARD),
             suiteHash,
             maxAttestationAge: opts.maxAge,
+            vaultCallGas: opts.vaultCallGas,
+            vaultViewGas: opts.vaultViewGas,
             creationCodeKeccak: allocationGateCreationCodeHash,
             txHash: out.tx.hash,
             blockNumber: out.tx.blockNumber,
@@ -241,10 +253,13 @@ export function registerWatchDemoGate(demo: Command): void {
         const wallet = net.clients.wallet(resolveKey(net, DEPLOYER_KEY_ENV));
         const g = new AllocationGateClient(at, net.clients.publicClient, wallet);
         // The owner's exit is open on any verdict; ask for that on purpose rather than drain a healthy vault by habit.
-        const { verdict: now } = await g.verdict(vault).catch(() => ({ verdict: null as GateVerdict | null }));
-        if (now && !exitAllowed(now) && !opts.asOwner) {
-          const owner = (await g.summary().catch(() => null))?.owner;
-          if (owner && owner.toLowerCase() === wallet.account.address.toLowerCase()) {
+        // When the verdict or the owner cannot be read, refuse rather than guess.
+        if (!opts.asOwner) {
+          const [now, owner] = await Promise.all([g.verdict(vault).then((v) => v.verdict, () => null), g.summary().then((x) => x.owner, () => null)]);
+          if (owner === null) throw new StageError(WATCH_FAILED_EXIT_CODE, `exit refused: could not read the gate's owner at ${at}; try again, or pass --as-owner`);
+          const signerIsOwner = owner.toLowerCase() === wallet.account.address.toLowerCase();
+          if (signerIsOwner && now === null) throw new StageError(WATCH_FAILED_EXIT_CODE, `exit refused: could not read the vault's verdict; you are the gate's owner and may exit it anyway with --as-owner`);
+          if (signerIsOwner && now !== null && !exitAllowed(now)) {
             throw new StageError(WATCH_FAILED_EXIT_CODE, `exit refused: the vault is ${now}; you are the gate's owner and may exit it anyway with --as-owner`);
           }
         }
@@ -280,23 +295,30 @@ export function registerWatchDemoGate(demo: Command): void {
         const g = new AllocationGateClient(at, net.clients.publicClient, wallet);
         const chainId = net.clients.chain.id;
         printLine(ctx, stage('gate', `keeping ${pc.bold(at)} on ${net.name} ${chainId} as ${wallet.account.address}${opts.once ? '' : `, every ${opts.poll} s`}`));
+        const keeper = new GateKeeper(g);
         for (;;) {
           let sendFailures = 0;
           try {
-            const results = await exitDueVaults(g);
+            const results = await keeper.pass();
             for (const r of results) {
-              if (r.outcome) {
+              if (r.kind === 'exited') {
                 printOutcome(ctx, r.outcome);
                 emitEvent(ctx, outcomeEvent(chainId, at, r.outcome));
-              } else if (r.error) {
+              } else if (r.kind === 'backoff') {
+                // Logged once per step: the vault is left alone until `until`.
+                if (r.outcome) emitEvent(ctx, outcomeEvent(chainId, at, r.outcome));
+                printLine(ctx, stage('gate', `${pc.yellow('backing off')} ${pc.bold(r.vault)}: its exit ${r.outcome ? 'moved nothing (ExitFailed)' : 'would move nothing, not sent'}; next try in ${Math.round(r.delayMs / 60_000)} min`));
+                emitEvent(ctx, { type: 'watch-demo-gate-backoff', chainId, gate: at, vault: r.vault, verdict: r.verdict, delaySec: r.delayMs / 1000, until: new Date(r.until).toISOString(), mined: Boolean(r.outcome) });
+              } else if (r.kind === 'error') {
                 sendFailures++;
-                printLine(ctx, stage('gate', `${pc.red('exit not sent')} ${pc.bold(r.state.vault)}: ${r.error.message}`));
-                emitEvent(ctx, { type: 'watch-demo-gate-exit-error', chainId, gate: at, vault: r.state.vault, verdict: r.state.verdict, error: r.error.errorName ?? null, message: r.error.message });
+                printLine(ctx, stage('gate', `${pc.red('exit not sent')} ${pc.bold(r.vault)}: ${r.error.message}`));
+                emitEvent(ctx, { type: 'watch-demo-gate-exit-error', chainId, gate: at, vault: r.vault, error: r.error.errorName ?? null, message: r.error.message });
               }
             }
-            const due = results.filter((r) => r.state.canExit).length;
-            emitEvent(ctx, { type: 'watch-demo-gate-pass', chainId, gate: at, vaults: results.length, due, exited: results.filter((r) => r.outcome?.exited).length });
-            if (!ctx.json && due === 0) printLine(ctx, cont(pc.dim(`${new Date().toISOString()}  ${results.length} vaults, none to exit`)));
+            const count = (k: string) => results.filter((r) => r.kind === k).length;
+            const due = count('exited') + count('backoff') + count('error');
+            emitEvent(ctx, { type: 'watch-demo-gate-pass', chainId, gate: at, vaults: results.length, due, exited: count('exited'), waiting: count('waiting') });
+            if (!ctx.json && due === 0) printLine(ctx, cont(pc.dim(`${new Date().toISOString()}  ${results.length} vaults, none to exit${count('waiting') ? `, ${count('waiting')} backing off` : ''}`)));
           } catch (err) {
             if (opts.once) failed(err);
             printLine(ctx, stage('gate', `${pc.red('pass failed')}: ${errorText(err)}`));
@@ -307,6 +329,27 @@ export function registerWatchDemoGate(demo: Command): void {
             return;
           }
           await new Promise((r) => setTimeout(r, Number(opts.poll) * 1000));
+        }
+      });
+    });
+
+  gate
+    .command('resync <vault>')
+    .description("Owner: set the gate's books of <vault> to the vault's balanceOf(gate) now, after an exit the vault misreported.")
+    .action(async (vaultArg: string, _opts: unknown, command: Command) => {
+      const ctx = contextFrom(command);
+      await runStage(ctx, 'watch demo gate resync', WATCH_FAILED_EXIT_CODE, async () => {
+        const vault = address(vaultArg, '<vault>');
+        const net = network(command);
+        const at = gateAddress(net, command);
+        const wallet = net.clients.wallet(resolveKey(net, DEPLOYER_KEY_ENV));
+        const g = new AllocationGateClient(at, net.clients.publicClient, wallet);
+        try {
+          const out = await g.resync(vault);
+          printLine(ctx, stage('gate', `books of ${pc.bold(vault)}: ${formatEther(out.fromShares)} to ${formatEther(out.toShares)} shares  ${pc.dim(`tx ${out.hash}`)}`));
+          emitEvent(ctx, { type: 'watch-demo-gate-resynced', chainId: net.clients.chain.id, gate: at, vault, fromShares: out.fromShares, toShares: out.toShares, txHash: out.hash });
+        } catch (err) {
+          failed(err);
         }
       });
     });
@@ -327,6 +370,7 @@ export function registerWatchDemoGate(demo: Command): void {
           const now = (await client.getBlock({ blockTag: 'latest' })).timestamp;
           printLine(ctx, stage('gate', `AllocationGate ${pc.bold(at)}  ${pc.dim(`${net.name} ${net.clients.chain.id}`)}`));
           printLine(ctx, cont(`registry ${s.registry}, asset ${s.asset}, owner ${s.owner}, ${s.suiteHash === ZERO_HASH ? 'any suite' : `suite ${s.suiteHash}`}, attestations fresh for ${s.maxAttestationAge} s`));
+          printLine(ctx, cont(`exit stipends ${s.vaultCallGas} gas per vault call, ${s.vaultViewGas} per read`));
           printLine(ctx, cont(`idle ${formatEther(s.idle)}, ${s.vaults.length} vault${s.vaults.length === 1 ? '' : 's'}`));
           const vaults: Array<Record<string, unknown>> = [];
           for (const vault of s.vaults) {
@@ -346,7 +390,7 @@ export function registerWatchDemoGate(demo: Command): void {
               attestation: a ? { id: latest!.id, status: ATTESTATION_STATUS[a.status] ?? a.status, passCount: a.passCount, failCount: a.failCount, inconclusiveCount: a.inconclusiveCount, notApplicableCount: a.notApplicableCount, issuer: a.issuer, issuerAllowed: isIssuer, issuedAt: a.issuedAt, blockNumber: a.blockNumber } : null,
             });
           }
-          emitEvent(ctx, { type: 'watch-demo-gate-status', chainId: net.clients.chain.id, gate: at, registry: s.registry, asset: s.asset, owner: s.owner, suiteHash: s.suiteHash, maxAttestationAge: s.maxAttestationAge, idle: s.idle, now, vaults });
+          emitEvent(ctx, { type: 'watch-demo-gate-status', chainId: net.clients.chain.id, gate: at, registry: s.registry, asset: s.asset, owner: s.owner, suiteHash: s.suiteHash, vaultCallGas: s.vaultCallGas, vaultViewGas: s.vaultViewGas, maxAttestationAge: s.maxAttestationAge, idle: s.idle, now, vaults });
         } catch (err) {
           failed(err);
         }

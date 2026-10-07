@@ -42,6 +42,7 @@ export type GateEventJson = { blockNumber: string; txHash: string; logIndex: num
   | { kind: 'Exited'; vault: string; attestationId: string; caller: string; verdict: GateVerdict; path: GateExitPath; shares: string; assets: string }
   | { kind: 'ExitFailed'; vault: string; attestationId: string; caller: string; verdict: GateVerdict; shares: string; redeemError: string; withdrawError: string }
   | { kind: 'IdleWithdrawn'; to: string; amount: string }
+  | { kind: 'Resynced'; vault: string; fromShares: string; toShares: string }
 );
 
 export interface GateViewJson {
@@ -56,6 +57,9 @@ export interface GateViewJson {
   standardId: string;
   /** The suite the gate pins; all zeros accepts any. */
   suiteHash: string;
+  /** Gas each vault call and each vault read of an exit gets. */
+  vaultCallGas: string;
+  vaultViewGas: string;
   maxAttestationAge: string;
   idle: string;
   /** Head block and its timestamp (unix seconds) when the page was read. */

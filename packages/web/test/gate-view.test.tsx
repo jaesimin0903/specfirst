@@ -23,7 +23,7 @@ const HEAD = 5_000n;
 const NOW = 1_790_000_000n;
 
 let logIndex = 0;
-function log(eventName: 'Allocated' | 'Exited' | 'ExitFailed' | 'IdleWithdrawn', args: Record<string, unknown>, block: bigint, address: `0x${string}` = GATE): Log {
+function log(eventName: 'Allocated' | 'Exited' | 'ExitFailed' | 'IdleWithdrawn' | 'Resynced', args: Record<string, unknown>, block: bigint, address: `0x${string}` = GATE): Log {
   const event = allocationGateAbi.find((x) => x.type === 'event' && x.name === eventName)! as { inputs: readonly { name: string; type: string; indexed?: boolean }[] };
   const topics = encodeEventTopics({ abi: allocationGateAbi, eventName, args } as never);
   const data = encodeAbiParameters(
@@ -40,12 +40,13 @@ function attestation(id: bigint, over: Record<string, unknown> = {}) {
 const allocatedOld = log('Allocated', { vault: BROKEN, attestationId: 4n, assets: 20n * E18, shares: 20n * E18 }, 1_200n);
 const exited = log('Exited', { vault: BROKEN, attestationId: 7n, caller: KEEPER, verdict: 3, path: 0, shares: 20n * E18, assets: 21n * E18 }, 4_950n);
 const allocatedNew = log('Allocated', { vault: OK, attestationId: 6n, assets: 10n * E18, shares: 10n * E18 }, 4_990n);
+const resynced = log('Resynced', { vault: NEW, fromShares: 0n, toShares: 5n * E18 }, 4_996n);
 const foreign = log('Allocated', { vault: OK, attestationId: 6n, assets: 1n, shares: 1n }, 4_991n, '0x00000000000000000000000000000000000000ff');
 
 function chain(over: { failLatestOf?: string; logsFail?: boolean } = {}) {
   const getLogs = vi.fn(async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => {
     if (over.logsFail && fromBlock !== toBlock) throw new Error('block range too large');
-    return [allocatedOld, exited, allocatedNew, foreign].filter((l) => l.blockNumber! >= fromBlock && l.blockNumber! <= toBlock);
+    return [allocatedOld, exited, allocatedNew, resynced, foreign].filter((l) => l.blockNumber! >= fromBlock && l.blockNumber! <= toBlock);
   });
   const reader: GateChainReader & { getLogs: typeof getLogs } = {
     getBlock: async () => ({ number: HEAD, timestamp: NOW }),
@@ -53,7 +54,7 @@ function chain(over: { failLatestOf?: string; logsFail?: boolean } = {}) {
     readContract: async ({ address, functionName, args }) => {
       const v = (args?.[1] ?? args?.[0]) as string | undefined;
       if (address === GATE) {
-        const answers: Record<string, unknown> = { registry: REGISTRY, subjectChainId: 10143n, standardId: STD, suiteHash: `0x${'00'.repeat(32)}`, asset: TOKEN, owner: OWNER, maxAttestationAge: 86_400n, idle: 91n * E18, vaults: [BROKEN, OK, NEW] };
+        const answers: Record<string, unknown> = { registry: REGISTRY, subjectChainId: 10143n, standardId: STD, suiteHash: `0x${'00'.repeat(32)}`, vaultCallGas: 2_000_000n, vaultViewGas: 300_000n, asset: TOKEN, owner: OWNER, maxAttestationAge: 86_400n, idle: 91n * E18, vaults: [BROKEN, OK, NEW] };
         if (functionName in answers) return answers[functionName];
         if (functionName === 'positionOf') {
           if (v === BROKEN) return { shares: 0n, assetsIn: 20n * E18, assetsOut: 21n * E18, lastAllocatedBlock: 1_200n, lastExitBlock: 4_950n };
@@ -99,11 +100,12 @@ describe('gate reads', () => {
       [1_200n, 1_200n],
     ]);
     expect(view.events.map((e) => [e.kind, e.blockNumber])).toEqual([
+      ['Resynced', '4996'],
       ['Allocated', '4990'],
       ['Exited', '4950'],
       ['Allocated', '1200'],
     ]);
-    expect(view.events[1]).toMatchObject({ kind: 'Exited', vault: BROKEN, caller: KEEPER, verdict: 'NotCompliant', path: 'Redeem', assets: (21n * E18).toString() });
+    expect(view.events[2]).toMatchObject({ kind: 'Exited', vault: BROKEN, caller: KEEPER, verdict: 'NotCompliant', path: 'Redeem', assets: (21n * E18).toString() });
   });
 
   it('a failed read is listed, never a guess; NoAttestation is not an error', async () => {
@@ -153,6 +155,8 @@ describe('GateView', () => {
     expect(screen.getByText(/not the owner/)).toBeInTheDocument();
     expect(screen.getByText('91 sfTKN')).toBeInTheDocument();
     expect(screen.getByText('any suite')).toBeInTheDocument();
+    expect(screen.getByText('2,000,000 per vault call, 300,000 per read')).toBeInTheDocument();
+    expect(screen.getByText(/the owner set the books from 0 to 5 shares, the vault's own balance/)).toBeInTheDocument();
   });
 
   it('names the verdicts added for a future block and a pinned suite, and an owner exit', async () => {

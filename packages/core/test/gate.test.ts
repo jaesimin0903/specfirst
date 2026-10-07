@@ -2,8 +2,11 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Address } from 'viem';
 import { describe, expect, it } from 'vitest';
+import { GATE_BACKOFF_MAX_MS, GATE_BACKOFF_MIN_MS, GateError, GateKeeper, type GateExitOutcome, type GateKeeperTarget, type GatePosition } from '../src/gate/client.js';
 import {
+  type GateVerdict,
   allocationAllowed,
   allocationGateAbi,
   allocationGateBytecode,
@@ -59,4 +62,102 @@ describe('bundled AllocationGate artifact', () => {
     expect(allocationGateAbi).toEqual(art.abi);
     expect(allocationGateBytecode).toBe(art.bytecode.object);
   }, 300_000);
+});
+
+describe('GateKeeper', () => {
+  const STUCK = '0x00000000000000000000000000000000000000a1' as Address;
+  const PAYS = '0x00000000000000000000000000000000000000a2' as Address;
+  const EMPTY = '0x00000000000000000000000000000000000000a3' as Address;
+  const HEALTHY = '0x00000000000000000000000000000000000000a4' as Address;
+
+  function fake() {
+    let clock = 1_000_000;
+    const calls: string[] = [];
+    const shares = new Map<string, bigint>([[STUCK, 10n], [PAYS, 10n], [EMPTY, 0n], [HEALTHY, 10n]]);
+    const verdicts = new Map<string, GateVerdict>([[STUCK, 'NotCompliant'], [PAYS, 'NotCompliant'], [EMPTY, 'NotCompliant'], [HEALTHY, 'Compliant']]);
+    let stuckPays = false;
+    let rpcDown = false;
+    const tx = { hash: `0x${'11'.repeat(32)}`, blockNumber: 1n, gasUsed: 1n, effectiveGasPrice: 1n, gasCostWei: 1n } as const;
+    const target: GateKeeperTarget = {
+      summary: async () => ({ vaults: [STUCK, PAYS, EMPTY, HEALTHY] }),
+      position: async (v) => {
+        calls.push(`position ${v}`);
+        return { shares: shares.get(v)!, assetsIn: 0n, assetsOut: 0n, lastAllocatedBlock: 1n, lastExitBlock: 0n } satisfies GatePosition;
+      },
+      verdict: async (v) => {
+        calls.push(`verdict ${v}`);
+        if (rpcDown) throw new GateError('HTTP request failed');
+        return { verdict: verdicts.get(v)!, attestationId: 1n };
+      },
+      simulateExit: async (v) => {
+        calls.push(`simulate ${v}`);
+        return v === PAYS || (v === STUCK && stuckPays);
+      },
+      exit: async (v) => {
+        calls.push(`exit ${v}`);
+        shares.set(v, 0n);
+        return { ...tx, vault: v, verdict: 'NotCompliant', attestationId: 1n, exited: true, path: 'Redeem', shares: 10n, assets: 10n } satisfies GateExitOutcome;
+      },
+    };
+    return {
+      target,
+      calls,
+      now: () => clock,
+      advance: (ms: number) => (clock += ms),
+      payStuck: () => (stuckPays = true),
+      setRpcDown: (down: boolean) => (rpcDown = down),
+    };
+  }
+
+  it('exits what pays, never reads past an empty position, leaves closed vaults alone and does not send an exit that would move nothing', async () => {
+    const f = fake();
+    const k = new GateKeeper(f.target, f.now);
+    const r = await k.pass();
+    expect(r.map((x) => [x.vault, x.kind])).toEqual([
+      [STUCK, 'backoff'],
+      [PAYS, 'exited'],
+      [EMPTY, 'empty'],
+      [HEALTHY, 'closed'],
+    ]);
+    expect(r[0]).toMatchObject({ delayMs: GATE_BACKOFF_MIN_MS, until: f.now() + GATE_BACKOFF_MIN_MS, verdict: 'NotCompliant' });
+    expect(f.calls).not.toContain(`verdict ${EMPTY}`);
+    expect(f.calls).not.toContain(`exit ${STUCK}`);
+    expect(f.calls.filter((c) => c.startsWith('exit '))).toEqual([`exit ${PAYS}`]);
+  });
+
+  it('backs off a vault that moves nothing from a minute, doubling to an hour, reporting each step once, until it pays', async () => {
+    const f = fake();
+    const k = new GateKeeper(f.target, f.now);
+    const steps: number[] = [];
+    let waited = 0;
+    for (let i = 0; i < 600; i++) {
+      for (const x of await k.pass()) {
+        if (x.vault !== STUCK) continue;
+        if (x.kind === 'backoff') steps.push(x.delayMs);
+        if (x.kind === 'waiting') waited++;
+      }
+      f.advance(15_000); // the keeper's poll
+    }
+    expect(steps.slice(0, 7)).toEqual([60_000, 120_000, 240_000, 480_000, 960_000, 1_920_000, 3_600_000]);
+    expect(steps.every((d) => d <= GATE_BACKOFF_MAX_MS)).toBe(true);
+    expect(steps).toHaveLength(8); // 600 passes of 15 s, 2.5 h: 1 + 2 + 4 + 8 + 16 + 32 min, then 60 min twice
+    expect(waited).toBe(600 - steps.length);
+    expect(f.calls.filter((c) => c === `simulate ${STUCK}`)).toHaveLength(steps.length);
+
+    f.payStuck();
+    f.advance(GATE_BACKOFF_MAX_MS);
+    const r = await k.pass();
+    expect(r[0]).toMatchObject({ vault: STUCK, kind: 'exited' });
+    expect((await k.pass())[0]).toMatchObject({ vault: STUCK, kind: 'empty' });
+  });
+
+  it('an RPC failure is reported and starts no wait', async () => {
+    const f = fake();
+    const k = new GateKeeper(f.target, f.now);
+    f.setRpcDown(true);
+    const r = await k.pass();
+    expect(r.find((x) => x.vault === PAYS)).toMatchObject({ kind: 'error' });
+    f.setRpcDown(false);
+    expect((await k.pass()).find((x) => x.vault === PAYS)).toMatchObject({ kind: 'exited' });
+  });
 });

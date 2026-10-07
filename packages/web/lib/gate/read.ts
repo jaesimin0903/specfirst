@@ -29,7 +29,7 @@ const extraAbi = parseAbi([
 ]);
 
 const STATUS = ['None', 'Valid', 'Superseded', 'Revoked'] as const;
-const SUMMARY = ['registry', 'subjectChainId', 'standardId', 'suiteHash', 'asset', 'owner', 'maxAttestationAge', 'idle', 'vaults'] as const;
+const SUMMARY = ['registry', 'subjectChainId', 'standardId', 'suiteHash', 'vaultCallGas', 'vaultViewGas', 'asset', 'owner', 'maxAttestationAge', 'idle', 'vaults'] as const;
 
 interface RawPosition {
   shares: bigint;
@@ -100,6 +100,8 @@ export function gateEventsOf(gate: `0x${string}`, logs: readonly Log[]): GateEve
         };
       case 'IdleWithdrawn':
         return { ...at, kind: 'IdleWithdrawn', to: l.args.to, amount: l.args.amount.toString() };
+      case 'Resynced':
+        return { ...at, kind: 'Resynced', vault: l.args.vault, fromShares: l.args.fromShares.toString(), toShares: l.args.toShares.toString() };
     }
   });
 }
@@ -125,11 +127,13 @@ export async function readGateView(reader: GateChainReader, gate: `0x${string}`)
   const read = (functionName: string, args: readonly unknown[] = [], address: `0x${string}` = gate, abi: readonly unknown[] = allocationGateAbi) =>
     reader.readContract({ address, abi, functionName, args });
   const [summary, block] = await Promise.all([Promise.all(SUMMARY.map((f) => read(f))), reader.getBlock()]);
-  const [registry, subjectChainId, standardId, suiteHash, asset, owner, maxAttestationAge, idle, vaultList] = summary as [
+  const [registry, subjectChainId, standardId, suiteHash, vaultCallGas, vaultViewGas, asset, owner, maxAttestationAge, idle, vaultList] = summary as [
     `0x${string}`,
     bigint,
     `0x${string}`,
     `0x${string}`,
+    bigint,
+    bigint,
     `0x${string}`,
     `0x${string}`,
     bigint,
@@ -230,6 +234,8 @@ export async function readGateView(reader: GateChainReader, gate: `0x${string}`)
     subjectChainId: subjectChainId.toString(),
     standardId,
     suiteHash,
+    vaultCallGas: vaultCallGas.toString(),
+    vaultViewGas: vaultViewGas.toString(),
     maxAttestationAge: maxAttestationAge.toString(),
     idle: idle.toString(),
     head: head.toString(),
