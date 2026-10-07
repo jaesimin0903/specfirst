@@ -145,14 +145,22 @@ async function resultOf(r: DeskRequest, worker: WorkerSnapshot, reader: Contract
   const attestation = await memo(`att-id:${registry}:${r.attestationId}`, 60_000, () => readAttestationById(reader, registry, r.attestationId, txs)).catch(() => null);
   const reports = await vaultReports(r.subjectChainId, r.subject);
   let candidate = attestation ? reports.find((c) => c.reportHash.toLowerCase() === attestation.reportHash.toLowerCase()) : undefined;
+  // Named by the registry's attestation, or by the desk worker when no attestation says otherwise; the latest report
+  // is a fallback.
+  let named = candidate !== undefined;
   const w = worker.requests.get(r.id.toString());
-  if (!candidate && w?.reportPath) candidate = (await reportAtPath(w.reportPath, repoRoot())) ?? undefined;
+  if (!candidate && w?.reportPath) {
+    const own = await reportAtPath(w.reportPath, repoRoot());
+    if (own && own.report.chainId === r.subjectChainId && own.report.address.toLowerCase() === r.subject.toLowerCase()) {
+      candidate = own;
+      named = !attestation || own.reportHash.toLowerCase() === attestation.reportHash.toLowerCase();
+    }
+  }
   const built = loadVaultDetail(String(r.subjectChainId), r.subject.toLowerCase());
   if (!candidate && built && attestation && built.reportHash.toLowerCase() === attestation.reportHash.toLowerCase()) {
     candidate = { report: built.report, file: built.row.reportPath.replace(/^\/reports\//, ''), reportHash: built.reportHash, suiteHash: built.suiteHash };
+    named = true;
   }
-  // Named by the registry's attestation or the desk worker; the latest report is a fallback.
-  const named = candidate !== undefined;
   candidate ??= reports[0];
   if (!candidate) return null;
 
@@ -179,7 +187,7 @@ async function resultOf(r: DeskRequest, worker: WorkerSnapshot, reader: Contract
     split,
     failed: failures.map((x, i) => {
       const c = classes?.[i];
-      const f = describeFailure(x.reason, c ? x : undefined);
+      const f = describeFailure(x.reason, c ? { id: x.id, reason: x.reason, counterexample: x.counterexample } : undefined);
       return { id: x.id, finding: f.finding, rule: f.rule, ...(c?.topic ? { topic: c.topic } : {}), ...(c?.delta ? { delta: c.delta, amount: c.amount } : {}) };
     }),
     blockNumber: detail.report.blockNumber,
