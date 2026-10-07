@@ -14,7 +14,7 @@ import {
 import { addressUrl, txUrl } from '../../lib/board/attestations';
 import { shortAddress, shortHash } from '../../lib/format';
 import { LevelTag, PropertyChip, VaultChip } from './StatusChip';
-import { failureLevelOf, propertyLevel } from '../../lib/board/levels';
+import { classifyFailure, failureLevelOf, propertyLevel } from '../../lib/board/levels';
 import { Glyph } from './Glyph';
 import { CopyButton } from './CopyButton';
 import { chainName, reproduceCommandMultiline } from '../../lib/board/reproduce';
@@ -190,7 +190,7 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
   const split = report.results.filter((r) => !r.id.startsWith('sf-')).length;
   const skip = effectiveSkipReason(report);
   const failed = report.results.filter((r) => r.status === 'fail');
-  const failure = failureLevelOf(failed.map((r) => r.id));
+  const failure = failureLevelOf(failed);
   const upstream = report.results.slice(0, split);
   const upstreamShould = upstream.filter((r) => propertyLevel(r.id) === 'should').length;
   const traits: VaultTraitView[] = report.traits ?? [];
@@ -218,7 +218,7 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
           <span className="mono break">{row.address}</span>
           <span>{chainName(row.chainId)}</span>
         </p>
-        <p className="sb-verdict">{verdictSentence(row.status, report.summary, report.blockNumber, failed.map((r) => r.id))}</p>
+        <p className="sb-verdict">{verdictSentence(row.status, report.summary, report.blockNumber, failed)}</p>
         {traits.map((t) => (
           <p key={t.id} className="sb-trait" title={traitBasis(t)}>
             {traitLabel(t)}
@@ -262,9 +262,9 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
                       <a href={`#p-${r.id}`} className="sb-finding-prop">
                         {r.id}
                       </a>
-                      <LevelTag id={r.id} />
-                      <p>{describeFailure(r.reason, r.id).finding}</p>
-                      {describeFailure(r.reason, r.id).rule && <p className="sb-rule">{describeFailure(r.reason, r.id).rule}</p>}
+                      <LevelTag level={classifyFailure(r).level} />
+                      <p>{describeFailure(r.reason, r).finding}</p>
+                      {describeFailure(r.reason, r).rule && <p className="sb-rule">{describeFailure(r.reason, r).rule}</p>}
                       {asyncFailureNote(r, traits) && <p className="sb-rule">{asyncFailureNote(r, traits)}</p>}
                       {r.counterexample && r.counterexample.calls.length > 0 && (
                         <p className="soft" style={{ fontSize: 13, marginTop: 6 }}>
@@ -277,10 +277,10 @@ export function VaultView({ detail, source = 'board', watch = null, subscribe = 
               </ul>
               <p className="sb-note">
                 {failure === 'must'
-                  ? `A spec mismatch is a disagreement with an EIP-4626 MUST sentence, shown by a concrete call.${failed.some((r) => propertyLevel(r.id) === 'should') ? ' Properties marked SHOULD go against guidance the standard recommends rather than requires.' : ''} It is not a claim that funds are at risk.`
+                  ? `A spec mismatch is a disagreement with an EIP-4626 MUST sentence, shown by a concrete call.${failed.some((r) => classifyFailure(r).level === 'should') ? ' Failures marked SHOULD go against guidance the standard recommends rather than requires.' : ''} It is not a claim that funds are at risk.`
                   : failure === 'rounding'
                     ? "Each round trip shown went in the caller's favor by the amount in its counterexample, against EIP-4626's guidance that rounding should favor the vault. That guidance is a SHOULD; no MUST sentence failed, and it is not a claim that funds are at risk."
-                    : 'These properties go against EIP-4626 SHOULD sentences, shown by a concrete call; no MUST sentence failed.'}
+                    : 'These failures go against EIP-4626 SHOULD sentences, shown by a concrete call; no MUST sentence failed. A round trip off by more than a rounding difference points at a conversion that is wrong, not just rounded.'}
               </p>
             </section>
           )}
@@ -462,7 +462,7 @@ function FragmentRow({ r, i, divider, traits }: { r: ReportResultView; i: number
         <td className="sb-prop-id">
           <code>{r.id}</code>
           <small>{r.test}</small>
-          <LevelTag id={r.id} />
+          <LevelTag level={r.status === 'fail' ? classifyFailure(r).level : propertyLevel(r.id)} />
         </td>
         <td className="nowrap">
           <PropertyChip status={r.status} />

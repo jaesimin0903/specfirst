@@ -1,15 +1,20 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { ERC4626_CHECK_PROPERTIES, ERC4626_PROPERTY_LEVELS } from '@specfirst/core';
-import { failureLevelOf, idsOfBitmap, PROPERTY_IDS, propertyLevel, SHOULD_PROPERTIES } from '../lib/board/levels';
-import { describeFailure, verdictSentence, vaultLabel } from '../lib/board/reasons';
+import { classifyFailure, failureLevelOf, idsOfBitmap, isRoundingSized, PROPERTY_IDS, propertyLevel, roundTripDifference, SHOULD_PROPERTIES } from '../lib/board/levels';
+import { describeFailure, percentOf, verdictSentence, vaultLabel } from '../lib/board/reasons';
 import { checkBadgeOf } from '../lib/desk/checkBadge';
 import type { AttestationRecord } from '../lib/board/types';
 
-/* EIP-4626 levels on the board: the copy of core's table, the verdict sentence, the chip label and the badge. */
+/* EIP-4626 levels on the board: the copy of core's table, each failure's class, the verdict, the label and the badge. */
 
 const SUMMARY = (fail: number) => ({ pass: 30 - fail, fail, inconclusive: 0, notApplicable: 0 });
-const TY_YIELD = ['RT-redeem-deposit', 'RT-redeem-mint', 'RT-withdraw-deposit'];
+const rt = (id: string, a: number, b: number, delta: number) => ({
+  id,
+  reason: 'Error: a <=~ b not satisfied [uint]',
+  counterexample: { logs: ['Error: a <=~ b not satisfied [uint]', `   Value a: ${a}`, `   Value b: ${b}`, ' Max Delta: 0', `     Delta: ${delta}`] },
+});
+const TY_YIELD = [rt('RT-redeem-deposit', 1000001, 1000000, 1), rt('RT-redeem-mint', 999999, 1000000, 1), rt('RT-withdraw-deposit', 1000001, 1000000, 1)];
 
 describe('the level table', () => {
   it("is core's: the same SHOULD properties and the same bit order", () => {
@@ -20,26 +25,56 @@ describe('the level table', () => {
     expect(Object.keys(SHOULD_PROPERTIES).sort()).toEqual(coreShould);
     expect(PROPERTY_IDS).toEqual(ERC4626_CHECK_PROPERTIES.map((p) => p.id));
     for (const id of PROPERTY_IDS) expect(propertyLevel(id), id).toBe(ERC4626_PROPERTY_LEVELS[id]!.level);
-    // Round trips are rounding; the two SHOULDs that are not are the allowance checks.
     for (const [id, topic] of Object.entries(SHOULD_PROPERTIES)) expect(topic, id).toBe(id.startsWith('RT-') ? 'rounding' : 'allowance');
   });
 
   it('an unknown id counts as a MUST, so nothing is softened by mistake', () => {
     expect(propertyLevel('test_new_thing')).toBe('must');
-    expect(failureLevelOf(['RT-redeem-mint', 'test_new_thing'])).toBe('must');
+    expect(failureLevelOf([...TY_YIELD, { id: 'test_new_thing' }])).toBe('must');
+  });
+});
+
+describe('the class of one failure', () => {
+  it("withdraw and redeem: an allowance or access-control assertion is a SHOULD, any other assertion a MUST", () => {
+    expect(classifyFailure({ id: 'withdraw', reason: 'access control' })).toEqual({ level: 'should', topic: 'allowance' });
+    expect(classifyFailure({ id: 'redeem', reason: 'allowance: 5000 !~= 0 (max delta: 0, real delta: 5000)' })).toEqual({ level: 'should', topic: 'allowance' });
+    expect(classifyFailure({ id: 'withdraw', reason: 'share: 7000 !~= 6000 (max delta: 0, real delta: 1000)' })).toEqual({ level: 'must', topic: 'must' });
+    expect(classifyFailure({ id: 'redeem', reason: 'asset: 1 !~= 2 (max delta: 0, real delta: 1)' })).toEqual({ level: 'must', topic: 'must' });
+    expect(classifyFailure({ id: 'withdraw' })).toEqual({ level: 'must', topic: 'must' });
+    // The label only counts for withdraw and redeem.
+    expect(classifyFailure({ id: 'deposit', reason: 'access control' })).toEqual({ level: 'must', topic: 'must' });
+    expect(classifyFailure({ id: 'withdraw-zero-allowance', reason: 'assertion failed' })).toEqual({ level: 'should', topic: 'allowance' });
   });
 
-  it('classifies failures: any MUST, only round trips, only SHOULDs, nothing', () => {
+  it('a round trip is rounding up to max(2 base units, 1 bp of the amount), more is a round trip off by more, no size is unknown', () => {
+    expect(classifyFailure(rt('RT-redeem-mint', 999999, 1000000, 1))).toEqual({ level: 'should', topic: 'rounding', delta: '1', amount: '1000000' });
+    expect(classifyFailure(rt('RT-redeem-mint', 98, 100, 2)).topic).toBe('rounding');
+    expect(classifyFailure(rt('RT-redeem-mint', 97, 100, 3)).topic).toBe('round-trip');
+    expect(classifyFailure(rt('RT-deposit-redeem', 1_000_100, 1_000_000, 100)).topic).toBe('rounding'); // exactly 1 bp
+    expect(classifyFailure(rt('RT-deposit-redeem', 1_000_101, 1_000_000, 101)).topic).toBe('round-trip'); // 1 bp of 1,000,101 is 100.01
+    expect(classifyFailure(rt('RT-deposit-redeem', 1_050_000, 1_000_000, 50_000))).toEqual({ level: 'should', topic: 'round-trip', delta: '50000', amount: '1050000' });
+    expect(classifyFailure({ id: 'RT-mint-redeem', reason: 'Error: a <=~ b not satisfied [uint]', counterexample: { logs: ['Error: a <=~ b not satisfied [uint]'] } })).toEqual({ level: 'should', topic: 'round-trip' });
+    expect(roundTripDifference(undefined)).toBeNull();
+    expect(isRoundingSized({ a: 3n, b: 0n, delta: 3n })).toBe(false);
+  });
+
+  it('a class computed at build is taken as it is', () => {
+    expect(classifyFailure({ id: 'RT-redeem-mint', topic: 'rounding', delta: '1', amount: '1000000' })).toEqual({ level: 'should', topic: 'rounding', delta: '1', amount: '1000000' });
+    expect(failureLevelOf([{ id: 'withdraw', topic: 'allowance' }])).toBe('should');
+  });
+
+  it('classifies a vault: any MUST, only rounding, only SHOULDs, nothing', () => {
     expect(failureLevelOf(TY_YIELD)).toBe('rounding');
-    expect(failureLevelOf(['previewDeposit', 'RT-deposit-redeem'])).toBe('must');
-    expect(failureLevelOf(['sf-maxWithdraw-honored'])).toBe('must');
-    expect(failureLevelOf(['withdraw-zero-allowance', 'RT-redeem-mint'])).toBe('should');
+    expect(failureLevelOf([{ id: 'previewDeposit' }, ...TY_YIELD])).toBe('must');
+    expect(failureLevelOf([rt('RT-deposit-redeem', 1_050_000, 1_000_000, 50_000)])).toBe('should');
+    expect(failureLevelOf([{ id: 'RT-redeem-mint' }])).toBe('should'); // no size: not shown as rounding
+    expect(failureLevelOf([{ id: 'withdraw', reason: 'access control' }])).toBe('should');
     expect(failureLevelOf([])).toBeNull();
   });
 
   it('reads the ids of a failedBitmap in report order', () => {
-    const bits = TY_YIELD.reduce((m, id) => m | (1n << BigInt(PROPERTY_IDS.indexOf(id))), 0n);
-    expect(idsOfBitmap(bits)).toEqual(TY_YIELD);
+    const bits = TY_YIELD.reduce((m, f) => m | (1n << BigInt(PROPERTY_IDS.indexOf(f.id))), 0n);
+    expect(idsOfBitmap(bits)).toEqual(TY_YIELD.map((f) => f.id));
     expect(idsOfBitmap(0n)).toEqual([]);
     expect(idsOfBitmap(1n << 40n)).toBeNull();
   });
@@ -47,31 +82,41 @@ describe('the level table', () => {
 
 describe('verdict and labels', () => {
   it('a MUST failure keeps the spec mismatch sentence', () => {
-    expect(verdictSentence('mismatch', SUMMARY(2), '109195820', ['sf-maxWithdraw-honored', 'sf-maxRedeem-honored'])).toBe(
+    expect(verdictSentence('mismatch', SUMMARY(2), '109195820', [{ id: 'sf-maxWithdraw-honored' }, { id: 'sf-maxRedeem-honored' }])).toBe(
       "2 of 30 properties failed at block 109,195,820. The vault's behavior contradicts an EIP-4626 MUST sentence.",
     );
-    expect(verdictSentence('mismatch', SUMMARY(2), '109195820', ['previewDeposit', 'RT-deposit-redeem'])).toMatch(/contradicts an EIP-4626 MUST sentence/);
-    // Without the ids nothing is known about the levels: the MUST sentence, as before.
+    expect(verdictSentence('mismatch', SUMMARY(1), '1', [{ id: 'withdraw', reason: 'share: 7000 !~= 6000 (max delta: 0, real delta: 1000)' }])).toMatch(/contradicts an EIP-4626 MUST sentence/);
     expect(verdictSentence('mismatch', SUMMARY(3), '1')).toMatch(/contradicts an EIP-4626 MUST sentence/);
     expect(vaultLabel('mismatch', 'must')).toBe('Spec mismatch');
   });
 
-  it('only round trips: rounding favors the caller, no MUST sentence failed', () => {
+  it('round trips off by a rounding difference: rounding favors the caller, with the size', () => {
     expect(verdictSentence('mismatch', SUMMARY(3), '110000000', TY_YIELD)).toBe(
-      "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 110,000,000; no MUST sentence failed.",
+      "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 110,000,000, by at most 1 base unit; no MUST sentence failed.",
     );
     expect(vaultLabel('mismatch', 'rounding')).toBe('Rounding favors caller');
-    expect(vaultLabel('complete', null)).toBe('All passed');
-    expect(describeFailure('assertion failed: 1000001 > 1000000', 'RT-redeem-deposit').rule).toMatch(/rounding should favor the Vault over its users\. That is a SHOULD, not a MUST/);
+    expect(describeFailure(TY_YIELD[0]!.reason, TY_YIELD[0]).finding).toBe("Forge found a counterexample: the round trip ended 1 base unit in the caller's favor (1,000,001 against 1,000,000).");
+    expect(describeFailure(TY_YIELD[0]!.reason, TY_YIELD[0]).rule).toMatch(/rounding should favor the Vault over its users\. That is a SHOULD, not a MUST/);
   });
 
-  it('an allowance SHOULD names what went through and keeps the spec mismatch chip', () => {
-    expect(verdictSentence('mismatch', SUMMARY(2), '5', ['withdraw-zero-allowance', 'RT-redeem-mint'])).toBe(
-      '2 of 30 properties failed at block 5, all of them EIP-4626 SHOULD sentences: 1 withdraw or redeem on behalf of an owner went through without allowance, which the vault SHOULD check, and 1 round trip favors the caller against the SHOULD rounding guidance. No MUST sentence failed.',
+  it('a round trip off by more keeps the mismatch chip and says by how much', () => {
+    const big = rt('RT-deposit-redeem', 1_050_000, 1_000_000, 50_000);
+    expect(verdictSentence('mismatch', SUMMARY(1), '7', [big])).toBe(
+      '1 of 30 properties failed at block 7, all of them EIP-4626 SHOULD sentences: a round trip favors the caller by 50,000 base units, 4.76% of the amount, more than rounding. No MUST sentence failed.',
     );
     expect(vaultLabel('mismatch', 'should')).toBe('Spec mismatch');
-    expect(describeFailure(undefined, 'redeem-zero-allowance').rule).toMatch(/SHOULD check that the caller may spend the owner's shares/);
-    expect(describeFailure(undefined, 'previewDeposit').rule).toBeNull();
+    expect(describeFailure(big.reason, big).rule).toBe("EIP-4626's rounding guidance is a SHOULD, but a difference of 50,000 base units, 4.76% of the amount, is more than rounding.");
+    expect(verdictSentence('mismatch', SUMMARY(1), '7', [{ id: 'RT-mint-redeem' }])).toMatch(/a round trip favors the caller by an amount the report does not give\. No MUST sentence failed\./);
+    expect(percentOf('1', '1000000')).toBe('<0.01%');
+    expect(percentOf('5', '100')).toBe('5%');
+  });
+
+  it('an allowance SHOULD says what went through, whether in the zero-allowance property or inside withdraw', () => {
+    expect(verdictSentence('mismatch', SUMMARY(2), '5', [{ id: 'withdraw', reason: 'access control' }, TY_YIELD[0]!])).toBe(
+      "2 of 30 properties failed at block 5, all of them EIP-4626 SHOULD sentences: 1 withdraw or redeem for an owner went through without the owner's allowance or without spending it, which the vault SHOULD check; a round trip favors the caller by a rounding difference. No MUST sentence failed.",
+    );
+    expect(describeFailure('access control', { id: 'withdraw', reason: 'access control' }).rule).toMatch(/SHOULD check that the caller may spend the owner's shares/);
+    expect(describeFailure(undefined, { id: 'previewDeposit' }).rule).toBeNull();
   });
 });
 
@@ -94,14 +139,18 @@ describe('check badge', () => {
   });
   const bits = (ids: string[]) => `0x${ids.reduce((m, id) => m | (1n << BigInt(PROPERTY_IDS.indexOf(id))), 0n).toString(16)}`;
 
-  it('only round trips in the failedBitmap: its own text and state', () => {
-    expect(checkBadgeOf({ kind: 'attested', record: record(3, bits(TY_YIELD)) })).toEqual({ state: 'rounding', text: 'rounding favors caller, 3 of 30 fail', attestationId: '7' });
-  });
-
-  it('a MUST in the bitmap, or no bitmap at all, is a mismatch as before', () => {
-    expect(checkBadgeOf({ kind: 'attested', record: record(2, bits(['previewDeposit', 'RT-deposit-redeem'])) })).toMatchObject({ state: 'mismatch', text: 'mismatch, 2 of 30 fail' });
-    expect(checkBadgeOf({ kind: 'attested', record: record(3) })).toMatchObject({ state: 'mismatch' });
-    // A bitmap that does not match the fail count is not trusted to soften anything.
-    expect(checkBadgeOf({ kind: 'attested', record: record(4, bits(TY_YIELD)) })).toMatchObject({ state: 'mismatch' });
+  it('the state stays mismatch for any failure; level says SHOULD only when every failed bit is a SHOULD property', () => {
+    expect(checkBadgeOf({ kind: 'attested', record: record(3, bits(TY_YIELD.map((f) => f.id))) })).toEqual({
+      state: 'mismatch',
+      text: 'mismatch, 3 of 30 fail, SHOULD only',
+      attestationId: '7',
+      level: 'should',
+    });
+    expect(checkBadgeOf({ kind: 'attested', record: record(2, bits(['previewDeposit', 'RT-deposit-redeem'])) })).toEqual({ state: 'mismatch', text: 'mismatch, 2 of 30 fail', attestationId: '7', level: 'must' });
+    // No bitmap, or one that does not match the count: a MUST, as before.
+    expect(checkBadgeOf({ kind: 'attested', record: record(3) })).toMatchObject({ state: 'mismatch', level: 'must' });
+    expect(checkBadgeOf({ kind: 'attested', record: record(4, bits(TY_YIELD.map((f) => f.id))) })).toMatchObject({ state: 'mismatch', level: 'must' });
+    // withdraw's bit cannot say which assertion failed: a MUST.
+    expect(checkBadgeOf({ kind: 'attested', record: record(1, bits(['withdraw'])) })).toMatchObject({ level: 'must' });
   });
 });

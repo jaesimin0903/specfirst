@@ -79,14 +79,17 @@
       "description": "deposit mints at least the shares previewDeposit quoted",
       "status": "fail",
       "runs": 16,
-      "reason": "assertion failed: 1009999 < 1010000",
+      "reason": "Error: a >=~ b not satisfied [uint]",
       "counterexample": {
         "calls": [
           "test_previewDeposit(Init({ user: [0x0000000000000000000000000000000000010000] }), 1000000)"
         ],
         "logs": [
-          "Error: a <=~ b not satisfied [uint]",
-          "assertion failed: 1009999 < 1010000"
+          "Error: a >=~ b not satisfied [uint]",
+          "   Value a: 1009999",
+          "   Value b: 1010000",
+          " Max Delta: 0",
+          "     Delta: 1"
         ]
       }
     },
@@ -180,14 +183,17 @@
       "description": "redeem(deposit(a)) returns no more than a",
       "status": "fail",
       "runs": 16,
-      "reason": "assertion failed: 1000001 > 1000000",
+      "reason": "Error: a <=~ b not satisfied [uint]",
       "counterexample": {
         "calls": [
           "test_RT_deposit_redeem(Init({ user: [0x0000000000000000000000000000000000010000] }), 1000000)"
         ],
         "logs": [
           "Error: a <=~ b not satisfied [uint]",
-          "assertion failed: 1000001 > 1000000"
+          "   Value a: 1000001",
+          "   Value b: 1000000",
+          " Max Delta: 0",
+          "     Delta: 1"
         ]
       }
     },

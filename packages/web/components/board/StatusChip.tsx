@@ -1,5 +1,5 @@
 import type { AttestationLite, PropertyStatus, VaultStatus } from '../../lib/board/types';
-import { LEVEL_LABEL, propertyLevel, type FailureLevel } from '../../lib/board/levels';
+import { LEVEL_LABEL, type FailureLevel, type PropertyLevel } from '../../lib/board/levels';
 import { PROPERTY_STATUS_LABEL, vaultLabel } from '../../lib/board/reasons';
 import { Glyph } from './Glyph';
 
@@ -23,9 +23,8 @@ export function VaultChip({ status, failure = null }: { status: VaultStatus; fai
   );
 }
 
-/** "EIP-4626 MUST" or "EIP-4626 SHOULD" next to a property. */
-export function LevelTag({ id }: { id: string }) {
-  const level = propertyLevel(id);
+/** "EIP-4626 MUST" or "EIP-4626 SHOULD" next to a property or a failure. */
+export function LevelTag({ level }: { level: PropertyLevel }) {
   return (
     <small className="sb-level" data-level={level}>
       {LEVEL_LABEL[level]}

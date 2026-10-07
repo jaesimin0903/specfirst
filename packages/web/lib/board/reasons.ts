@@ -1,4 +1,4 @@
-import { failureLevelOf, SHOULD_PROPERTIES, type FailureLevel } from './levels.ts';
+import { classifyFailure, failureLevelOf, roundTripDifference, type FailureClass, type FailureLevel, type FailureLike } from './levels.ts';
 import type { PropertyStatus, ReasonCategory, ReportResultView, SkipReason, StatusCounts, VaultStatus, VaultTraitView } from './types';
 
 /*
@@ -74,11 +74,26 @@ export function vaultLabel(status: VaultStatus, failure: FailureLevel | null = n
   return status === 'mismatch' && failure === 'rounding' ? ROUNDING_LABEL : VAULT_STATUS_LABEL[status];
 }
 
-/** The rule a failed SHOULD property goes against; null for a MUST property (its rule comes from the failure). */
-export function shouldRule(id: string | undefined): string | null {
-  switch (id ? SHOULD_PROPERTIES[id] : undefined) {
+/** "0.05%", or "<0.01%" for less: delta as a share of amount. */
+export function percentOf(delta: string, amount: string): string {
+  const a = BigInt(amount);
+  if (a === 0n) return 'all';
+  const hundredths = (BigInt(delta) * 10_000n) / a;
+  if (hundredths === 0n) return '<0.01%';
+  const whole = hundredths / 100n;
+  const frac = (hundredths % 100n).toString().padStart(2, '0').replace(/0+$/, '');
+  return `${whole}${frac ? `.${frac}` : ''}%`;
+}
+
+/** The rule a failed SHOULD goes against, by its class; null for a MUST (its rule comes from the failure itself). */
+export function shouldRule(c: FailureClass): string | null {
+  switch (c.topic) {
     case 'rounding':
-      return "EIP-4626, Security Considerations: rounding should favor the Vault over its users. That is a SHOULD, not a MUST.";
+      return 'EIP-4626, Security Considerations: rounding should favor the Vault over its users. That is a SHOULD, not a MUST.';
+    case 'round-trip':
+      return c.delta && c.amount
+        ? `EIP-4626's rounding guidance is a SHOULD, but a difference of ${groupDigits(c.delta)} base units, ${percentOf(c.delta, c.amount)} of the amount, is more than rounding.`
+        : "EIP-4626's rounding guidance is a SHOULD; the report does not give the size of the difference, so it is not shown as rounding.";
     case 'allowance':
       return "EIP-4626: withdraw and redeem SHOULD check that the caller may spend the owner's shares.";
     default:
@@ -160,19 +175,29 @@ export function eipSentence(maxName: string): string {
   }
 }
 
-/** What a failed property found, and the EIP-4626 rule it breaks when that is known (`id` names SHOULD rules). */
-export function describeFailure(reason: string | undefined, id?: string): { finding: string; rule: string | null } {
+/**
+ * What a failed property found, and the EIP-4626 rule it breaks when that is known. `failure` (its id, and the
+ * report's logs or a class computed at build) names SHOULD rules and the size of a round trip's difference.
+ */
+export function describeFailure(reason: string | undefined, failure?: FailureLike): { finding: string; rule: string | null } {
   const f = parseMaxHonoredFailure(reason);
   if (f) {
     const how = f.selector ? `with ${describeSelector(f.selector)}` : `with ${reason?.includes('short revert data') ? 'short revert data' : 'no revert data'}`;
     return { finding: `${f.maxName} was ${groupDigits(f.max)}, but ${f.action}(${groupDigits(f.amount)}) reverted ${how}.`, rule: eipSentence(f.maxName) || null };
   }
-  return { finding: reason ? `Forge found a counterexample: ${reason}` : 'Forge found a counterexample.', rule: shouldRule(id) };
+  const c = failure ? classifyFailure({ ...failure, reason: failure.reason ?? reason }) : null;
+  const d = roundTripDifference(failure?.counterexample?.logs);
+  const finding = d
+    ? `Forge found a counterexample: the round trip ended ${groupDigits(d.delta.toString())} base ${d.delta === 1n ? 'unit' : 'units'} in the caller's favor (${groupDigits(d.a.toString())} against ${groupDigits(d.b.toString())}).`
+    : reason
+      ? `Forge found a counterexample: ${reason}`
+      : 'Forge found a counterexample.';
+  return { finding, rule: c ? shouldRule(c) : null };
 }
 
 /** One or two sentences on what a failed property found. */
-export function explainFailure(reason: string | undefined, id?: string): string {
-  const { finding, rule } = describeFailure(reason, id);
+export function explainFailure(reason: string | undefined, failure?: FailureLike): string {
+  const { finding, rule } = describeFailure(reason, failure);
   return rule ? `${finding} ${rule}` : finding;
 }
 
@@ -207,13 +232,13 @@ function withCounted(sentence: string, reason: string | undefined): string {
 }
 
 /** A sentence for one property result, whatever its status. */
-export function explainResult(result: Pick<ReportResultView, 'status' | 'reason' | 'runs'> & { id?: string }): string {
+export function explainResult(result: Pick<ReportResultView, 'status' | 'reason' | 'runs'> & Partial<Pick<ReportResultView, 'id' | 'counterexample'>>): string {
   const reason = result.reason ?? '';
   switch (result.status) {
     case 'pass':
       return withCounted(result.runs ? `No counterexample in ${result.runs} fuzz runs at this block.` : 'No counterexample at this block.', result.reason);
     case 'fail':
-      return withCounted(explainFailure(result.reason, result.id), result.reason);
+      return withCounted(explainFailure(result.reason, result.id ? { id: result.id, reason: result.reason, ...(result.counterexample ? { counterexample: result.counterexample } : {}) } : undefined), result.reason);
     default:
       break;
   }
@@ -339,28 +364,50 @@ function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+function maxDelta(classes: ReadonlyArray<FailureClass>): FailureClass | null {
+  let best: FailureClass | null = null;
+  for (const c of classes) if (c.delta && (!best || BigInt(c.delta) > BigInt(best.delta!))) best = c;
+  return best;
+}
+
+function units(delta: string): string {
+  return `${groupDigits(delta)} base ${delta === '1' ? 'unit' : 'units'}`;
+}
+
 /**
- * The one-line verdict at the top of a vault page. A mismatch follows the levels of the failed properties
- * (`failedIds`): any MUST keeps "contradicts an EIP-4626 MUST sentence"; only SHOULD failures say so instead.
- * Without ids it reads as a MUST, so nothing is softened by mistake.
+ * The one-line verdict at the top of a vault page. A mismatch follows the classes of its failures (`failures`, with
+ * their reasons and logs when known): any MUST keeps "contradicts an EIP-4626 MUST sentence"; round trips off by a
+ * rounding-sized amount read as rounding; other SHOULD failures say what went through and by how much. Without
+ * failures it reads as a MUST, so nothing is softened by mistake.
  */
-export function verdictSentence(status: VaultStatus, summary: StatusCounts, blockNumber: string, failedIds: ReadonlyArray<string> = []): string {
+export function verdictSentence(status: VaultStatus, summary: StatusCounts, blockNumber: string, failures: ReadonlyArray<FailureLike> = []): string {
   const total = summary.pass + summary.fail + summary.inconclusive + summary.notApplicable;
   const block = formatBlock(blockNumber);
   switch (status) {
     case 'mismatch': {
-      const level = failureLevelOf(failedIds);
-      const rounding = failedIds.filter((id) => SHOULD_PROPERTIES[id] === 'rounding').length;
+      const level = failureLevelOf(failures);
+      const classes = failures.map(classifyFailure);
+      const of = (t: FailureClass['topic']) => classes.filter((c) => c.topic === t);
       if (level === 'rounding') {
-        return `Rounding favors the caller: ${plural(rounding, 'round-trip property fails', 'round-trip properties fail')} EIP-4626's SHOULD guidance (Security Considerations) at block ${block}; no MUST sentence failed.`;
+        const top = maxDelta(classes);
+        return `Rounding favors the caller: ${plural(classes.length, 'round-trip property fails', 'round-trip properties fail')} EIP-4626's SHOULD guidance (Security Considerations) at block ${block}${top ? `, by at most ${units(top.delta!)}` : ''}; no MUST sentence failed.`;
       }
       if (level === 'should') {
-        const allowance = failedIds.length - rounding;
-        const parts = [
-          `${plural(allowance, 'withdraw or redeem', 'withdraws or redeems')} on behalf of an owner went through without allowance, which the vault SHOULD check`,
-          ...(rounding > 0 ? [`${plural(rounding, 'round trip favors', 'round trips favor')} the caller against the SHOULD rounding guidance`] : []),
-        ];
-        return `${summary.fail} of ${total} properties failed at block ${block}, all of them EIP-4626 SHOULD sentences: ${parts.join(', and ')}. No MUST sentence failed.`;
+        const parts: string[] = [];
+        const allowance = of('allowance');
+        if (allowance.length > 0) {
+          parts.push(`${plural(allowance.length, 'withdraw or redeem', 'withdraws or redeems')} for an owner went through without the owner's allowance or without spending it, which the vault SHOULD check`);
+        }
+        const large = of('round-trip').filter((c) => c.delta);
+        if (large.length > 0) {
+          const top = maxDelta(large)!;
+          parts.push(`${large.length === 1 ? 'a round trip favors' : `${large.length} round trips favor`} the caller by ${large.length === 1 ? '' : 'up to '}${units(top.delta!)}, ${percentOf(top.delta!, top.amount!)} of the amount, more than rounding`);
+        }
+        const unknown = of('round-trip').filter((c) => !c.delta);
+        if (unknown.length > 0) parts.push(`${unknown.length === 1 ? 'a round trip favors' : `${unknown.length} round trips favor`} the caller by an amount the report does not give`);
+        const small = of('rounding');
+        if (small.length > 0) parts.push(`${small.length === 1 ? 'a round trip favors' : `${small.length} round trips favor`} the caller by a rounding difference`);
+        return `${summary.fail} of ${total} properties failed at block ${block}, all of them EIP-4626 SHOULD sentences: ${parts.join('; ')}. No MUST sentence failed.`;
       }
       return `${summary.fail} of ${total} properties failed at block ${block}. The vault's behavior contradicts an EIP-4626 MUST sentence.`;
     }

@@ -4,11 +4,11 @@ import { shortAddress } from '../../lib/format';
 import { Glyph } from './Glyph';
 import { FilterLink } from './FilterLink';
 import { LevelTag } from './StatusChip';
-import { failureLevelOf } from '../../lib/board/levels';
+import { classifyFailure, failureLevelOf } from '../../lib/board/levels';
 
 /** Vaults whose only failures are round trips: no MUST sentence failed, rounding favors the caller. */
 function roundingOnly(rows: ReadonlyArray<Pick<VaultRow, 'status' | 'failed'>>): number {
-  return rows.filter((r) => r.status === 'mismatch' && failureLevelOf(r.failed.map((f) => f.id)) === 'rounding').length;
+  return rows.filter((r) => r.status === 'mismatch' && failureLevelOf(r.failed) === 'rounding').length;
 }
 
 function plural(n: number, one: string, many = `${one}s`): string {
@@ -169,13 +169,13 @@ export function Findings({ board }: { board: BoardData }) {
                 </div>
                 <ul className="sb-finding-lines">
                   {r.failed.map((f) => {
-                    const { finding, rule } = describeFailure(f.reason, f.id);
+                    const { finding, rule } = describeFailure(f.reason, f);
                     return (
                       <li key={f.id}>
                         <Glyph kind="fail" />
                         <div>
                           <span className="sb-finding-prop">{f.id}</span>
-                          <LevelTag id={f.id} />
+                          <LevelTag level={classifyFailure(f).level} />
                           <p>{finding}</p>
                           {rule && <p className="sb-rule">{rule}</p>}
                         </div>

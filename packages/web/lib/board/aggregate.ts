@@ -16,6 +16,7 @@ import type {
   VaultStatusCounts,
 } from './types';
 import { classifyReason, effectiveSkipReason } from './reasons.ts';
+import { classifyFailure } from './levels.ts';
 
 /*
  * Pure functions that turn validated check reports into board rows, groups and totals. No I/O: the build
@@ -136,7 +137,12 @@ export function buildRow({ candidate, meta, attestation, reportPath }: BuildRowI
     proxyKind: identity.proxy?.kind ?? null,
     implementationAddress: identity.implementation?.address ?? null,
     groupSize: 1,
-    failed: r.results.filter((x) => x.status === 'fail').map((x) => ({ id: x.id, reason: x.reason ?? '' })),
+    failed: r.results
+      .filter((x) => x.status === 'fail')
+      .map((x) => {
+        const c = classifyFailure(x);
+        return { id: x.id, reason: x.reason ?? '', topic: c.topic, ...(c.delta ? { delta: c.delta, amount: c.amount } : {}) };
+      }),
     reasonCategories: [...reasonCountsOf(r.results).keys()],
     traits: r.traits ? r.traits.map((t) => ({ id: t.id, evidence: { ...t.evidence, requestFunctions: [...t.evidence.requestFunctions] } })) : [],
     attestation,

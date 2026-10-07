@@ -184,14 +184,17 @@
       "description": "deposit(redeem(s)) mints no more than s",
       "status": "fail",
       "runs": 16,
-      "reason": "assertion failed: 1000001 > 1000000",
+      "reason": "Error: a <=~ b not satisfied [uint]",
       "counterexample": {
         "calls": [
           "test_RT_redeem_deposit(Init({ user: [0x0000000000000000000000000000000000010000] }), 1000000)"
         ],
         "logs": [
           "Error: a <=~ b not satisfied [uint]",
-          "assertion failed: 1000001 > 1000000"
+          "   Value a: 1000001",
+          "   Value b: 1000000",
+          " Max Delta: 0",
+          "     Delta: 1"
         ]
       }
     },
@@ -201,14 +204,17 @@
       "description": "mint(s) costs at least the assets redeem(s) paid",
       "status": "fail",
       "runs": 16,
-      "reason": "assertion failed: 999999 < 1000000",
+      "reason": "Error: a >=~ b not satisfied [uint]",
       "counterexample": {
         "calls": [
           "test_RT_redeem_mint(Init({ user: [0x0000000000000000000000000000000000010000] }), 1000000)"
         ],
         "logs": [
-          "Error: a <=~ b not satisfied [uint]",
-          "assertion failed: 999999 < 1000000"
+          "Error: a >=~ b not satisfied [uint]",
+          "   Value a: 999999",
+          "   Value b: 1000000",
+          " Max Delta: 0",
+          "     Delta: 1"
         ]
       }
     },
@@ -239,14 +245,17 @@
       "description": "deposit(a) mints no more than the shares withdraw(a) burned",
       "status": "fail",
       "runs": 16,
-      "reason": "assertion failed: 1000001 > 1000000",
+      "reason": "Error: a <=~ b not satisfied [uint]",
       "counterexample": {
         "calls": [
           "test_RT_withdraw_deposit(Init({ user: [0x0000000000000000000000000000000000010000] }), 1000000)"
         ],
         "logs": [
           "Error: a <=~ b not satisfied [uint]",
-          "assertion failed: 1000001 > 1000000"
+          "   Value a: 1000001",
+          "   Value b: 1000000",
+          " Max Delta: 0",
+          "     Delta: 1"
         ]
       }
     },

@@ -71,16 +71,92 @@ export function propertyLevel(id: string): PropertyLevel {
 export const LEVEL_LABEL: Readonly<Record<PropertyLevel, string>> = { must: 'EIP-4626 MUST', should: 'EIP-4626 SHOULD' };
 
 /**
- * What a vault's failures amount to. must: a MUST property failed (a spec mismatch). rounding: only round trips
- * failed, so rounding favors the caller against EIP-4626's SHOULD guidance and no MUST sentence failed. should:
- * only SHOULD properties failed, and not only round trips (an allowance check). null: nothing failed.
+ * What one failure is about, which can be more than its property id says.
+ * must: a MUST sentence failed.
+ * allowance: a SHOULD about allowance: the zero-allowance properties, and the "allowance" and "access control"
+ * assertions inside upstream prop_withdraw and prop_redeem, which test_withdraw and test_redeem reach with a fuzzed
+ * allowance (a vault that skips the check fails them).
+ * rounding: a round trip off by at most max(2 base units, 1 bp of the amount): rounding in the caller's favor.
+ * round-trip: a round trip off by more than that, or by an amount the report does not give; a SHOULD, but not
+ * shown as rounding, since a large difference is a broken conversion rather than rounding.
+ */
+export type FailureTopic = 'must' | 'allowance' | 'rounding' | 'round-trip';
+
+export interface FailureClass {
+  level: PropertyLevel;
+  topic: FailureTopic;
+  /** For a round trip whose difference the report carries: base units in the caller's favor, and the amount compared. */
+  delta?: string;
+  amount?: string;
+}
+
+/** What a failure carries: its id, and when known the reason and forge's logs, or a class computed before. */
+export interface FailureLike {
+  id: string;
+  reason?: string;
+  counterexample?: { logs: ReadonlyArray<string> };
+  topic?: FailureTopic;
+  delta?: string;
+  amount?: string;
+}
+
+/** forge-std's message for prop_withdraw and prop_redeem's allowance checks: "allowance: 5 !~= 3 (...)", "access control". */
+const ALLOWANCE_ASSERTION = /^(?:allowance: |access control(?:$|;))/;
+const ROUND_TRIP_ERROR = /^Error: a [<>]=~ b not satisfied/;
+const LOG_VALUE = /^\s*(Value a|Value b|Delta):\s*(\d+)\s*$/;
+
+/**
+ * The difference of a failed round trip from upstream's assertApproxLeAbs / assertApproxGeAbs log lines ("Value a",
+ * "Value b", "Delta"); null when the logs do not carry them.
+ */
+export function roundTripDifference(logs: ReadonlyArray<string> | undefined): { a: bigint; b: bigint; delta: bigint } | null {
+  if (!logs || !logs.some((l) => ROUND_TRIP_ERROR.test(l))) return null;
+  const v: Record<string, bigint> = {};
+  for (const l of logs) {
+    const m = LOG_VALUE.exec(l);
+    if (m && v[m[1]!] === undefined) v[m[1]!] = BigInt(m[2]!);
+  }
+  if (v['Value a'] === undefined || v['Value b'] === undefined) return null;
+  const a = v['Value a'];
+  const b = v['Value b'];
+  return { a, b, delta: v.Delta ?? (a > b ? a - b : b - a) };
+}
+
+/** At most max(2 base units, 1 bp of the larger amount). */
+export function isRoundingSized(d: { a: bigint; b: bigint; delta: bigint }): boolean {
+  const amount = d.a > d.b ? d.a : d.b;
+  const bp = amount / 10_000n;
+  return d.delta <= (bp > 2n ? bp : 2n);
+}
+
+/** The class of one failed property, from its id, its reason and forge's logs. */
+export function classifyFailure(f: FailureLike): FailureClass {
+  if (f.topic) return { level: f.topic === 'must' ? 'must' : 'should', topic: f.topic, ...(f.delta ? { delta: f.delta } : {}), ...(f.amount ? { amount: f.amount } : {}) };
+  const should = SHOULD_PROPERTIES[f.id];
+  if (should === 'allowance') return { level: 'should', topic: 'allowance' };
+  if (should === 'rounding') {
+    const d = roundTripDifference(f.counterexample?.logs);
+    if (!d) return { level: 'should', topic: 'round-trip' };
+    const amount = (d.a > d.b ? d.a : d.b).toString();
+    return { level: 'should', topic: isRoundingSized(d) ? 'rounding' : 'round-trip', delta: d.delta.toString(), amount };
+  }
+  if ((f.id === 'withdraw' || f.id === 'redeem') && ALLOWANCE_ASSERTION.test(f.reason ?? '')) return { level: 'should', topic: 'allowance' };
+  return { level: 'must', topic: 'must' };
+}
+
+/**
+ * What a vault's failures amount to. must: a MUST sentence failed (a spec mismatch). rounding: only round trips
+ * failed, each by a rounding-sized difference, so rounding favors the caller against EIP-4626's SHOULD guidance and
+ * no MUST sentence failed. should: only SHOULD sentences failed, and not all of them rounding (an allowance check, a
+ * round trip off by more, or by an amount not known). null: nothing failed.
  */
 export type FailureLevel = 'must' | 'rounding' | 'should';
 
-export function failureLevelOf(failedIds: ReadonlyArray<string>): FailureLevel | null {
-  if (failedIds.length === 0) return null;
-  if (failedIds.some((id) => propertyLevel(id) === 'must')) return 'must';
-  return failedIds.every((id) => SHOULD_PROPERTIES[id] === 'rounding') ? 'rounding' : 'should';
+export function failureLevelOf(failures: ReadonlyArray<FailureLike | FailureClass>): FailureLevel | null {
+  if (failures.length === 0) return null;
+  const classes = failures.map((f) => ('id' in f ? classifyFailure(f) : f));
+  if (classes.some((c) => c.level === 'must')) return 'must';
+  return classes.every((c) => c.topic === 'rounding') ? 'rounding' : 'should';
 }
 
 /** The ids whose bits are set in a registry failedBitmap; null when a bit lies outside the table. */

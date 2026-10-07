@@ -8,16 +8,19 @@ import type { BoardData, RegistryRead, VaultDetail } from '../lib/board/types';
 import { VaultView } from '../components/board/VaultView';
 import { BoardExplorer } from '../components/board/BoardExplorer';
 import { Figures, Findings } from '../components/board/BoardSections';
+import { buildVaultApi } from '../lib/desk/vaultApi';
 
-/*
- * The board on two fixture reports (test/fixtures/levels): tyYIELD fails only three round trips, a SHOULD; the other
- * vault fails previewDeposit, a MUST, next to a round trip.
- */
+/* The board on the fixture reports of test/fixtures/levels (see its README.txt), one per case. */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE = path.join(here, 'fixtures/levels');
 const TY_YIELD = '0xb4641064f64e2f3aaffc1b4b4a66be75c1c81408';
-const MUST = '0x9999999999999999999999999999999999999999';
+const MUST_AND_RT = '0x9999999999999999999999999999999999999999';
+const WITHDRAW_ACCESS = '0x1000000000000000000000000000000000000001';
+const REDEEM_ALLOWANCE = '0x1000000000000000000000000000000000000002';
+const WITHDRAW_SHARE = '0x1000000000000000000000000000000000000003';
+const RT_LARGE = '0x1000000000000000000000000000000000000004';
+const RT_UNKNOWN = '0x1000000000000000000000000000000000000005';
 
 let board: BoardData;
 let details: VaultDetail[];
@@ -35,55 +38,79 @@ afterEach(() => {
 });
 
 const detailOf = (address: string) => details.find((d) => d.row.id === `143/${address}`)!;
+const head = () => screen.getByRole('banner');
+const failedRegion = () => screen.getByRole('region', { name: 'What failed' });
 
-describe('a vault that fails only round trips', () => {
-  it('reads "Rounding favors the caller", not a MUST mismatch, and names each level', () => {
-    const d = detailOf(TY_YIELD);
-    expect(d.row.status).toBe('mismatch');
-    render(<VaultView detail={d} />);
-    const head = screen.getByRole('banner');
-    expect(within(head).getByText('Rounding favors caller')).toBeInTheDocument();
+describe('vault pages, one per case', () => {
+  it('tyYIELD, round trips off by 1 base unit: "Rounding favors the caller", the size, SHOULD on each failure', () => {
+    render(<VaultView detail={detailOf(TY_YIELD)} />);
+    expect(within(head()).getByText('Rounding favors caller')).toBeInTheDocument();
     expect(
-      within(head).getByText(
-        "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 109,195,820; no MUST sentence failed.",
+      within(head()).getByText(
+        "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 109,195,820, by at most 1 base unit; no MUST sentence failed.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/contradicts an EIP-4626 MUST sentence/)).toBeNull();
-    const failed = screen.getByRole('region', { name: 'What failed' });
-    expect(within(failed).getAllByText('EIP-4626 SHOULD')).toHaveLength(3);
-    expect(within(failed).getAllByText(/rounding should favor the Vault over its users/)).toHaveLength(3);
-    expect(within(failed).getByText(/That guidance is a SHOULD; no MUST sentence failed/)).toBeInTheDocument();
+    expect(within(failedRegion()).getAllByText('EIP-4626 SHOULD')).toHaveLength(3);
+    expect(within(failedRegion()).getAllByText(/the round trip ended 1 base unit in the caller's favor/)).toHaveLength(3);
     const table = screen.getByRole('region', { name: 'All 30 properties' });
     expect(within(table).getByText(/26 properties: 16 on EIP-4626 MUST sentences, 10 on SHOULD guidance/)).toBeInTheDocument();
-    expect(within(table).getAllByText('EIP-4626 SHOULD')).toHaveLength(10);
-    expect(within(table).getAllByText('EIP-4626 MUST')).toHaveLength(20);
+  });
+
+  it('a MUST next to a round trip: the spec mismatch sentence, each failure with its level', () => {
+    render(<VaultView detail={detailOf(MUST_AND_RT)} />);
+    expect(within(head()).getByText('Spec mismatch')).toBeInTheDocument();
+    expect(within(head()).getByText("2 of 30 properties failed at block 109,195,820. The vault's behavior contradicts an EIP-4626 MUST sentence.")).toBeInTheDocument();
+    expect(within(failedRegion()).getByText('EIP-4626 MUST')).toBeInTheDocument();
+    expect(within(failedRegion()).getByText('EIP-4626 SHOULD')).toBeInTheDocument();
+  });
+
+  it('withdraw failing its "access control" assertion is a SHOULD, not a MUST', () => {
+    render(<VaultView detail={detailOf(WITHDRAW_ACCESS)} />);
+    expect(within(head()).getByText('Spec mismatch')).toBeInTheDocument();
+    expect(within(head()).getByText(/all of them EIP-4626 SHOULD sentences: 1 withdraw or redeem for an owner went through without the owner's allowance or without spending it, which the vault SHOULD check\. No MUST sentence failed\./)).toBeInTheDocument();
+    expect(within(failedRegion()).getByText('EIP-4626 SHOULD')).toBeInTheDocument();
+    expect(within(failedRegion()).getByText(/withdraw and redeem SHOULD check that the caller may spend the owner's shares/)).toBeInTheDocument();
+    const row = document.getElementById('p-withdraw')!;
+    expect(within(row).getByText('EIP-4626 SHOULD')).toBeInTheDocument();
+  });
+
+  it('redeem failing its "allowance" assertion is a SHOULD too', () => {
+    render(<VaultView detail={detailOf(REDEEM_ALLOWANCE)} />);
+    expect(within(head()).getByText(/No MUST sentence failed\./)).toBeInTheDocument();
+    expect(within(failedRegion()).getByText('EIP-4626 SHOULD')).toBeInTheDocument();
+  });
+
+  it('withdraw failing its "share" assertion stays a MUST', () => {
+    render(<VaultView detail={detailOf(WITHDRAW_SHARE)} />);
+    expect(within(head()).getByText("1 of 30 properties failed at block 109,195,820. The vault's behavior contradicts an EIP-4626 MUST sentence.")).toBeInTheDocument();
+    expect(within(failedRegion()).getByText('EIP-4626 MUST')).toBeInTheDocument();
+    expect(within(document.getElementById('p-withdraw')!).getByText('EIP-4626 MUST')).toBeInTheDocument();
+  });
+
+  it('a round trip off by 5%: the mismatch chip and "favors the caller by" the size, more than rounding', () => {
+    render(<VaultView detail={detailOf(RT_LARGE)} />);
+    expect(within(head()).getByText('Spec mismatch')).toBeInTheDocument();
+    expect(within(head()).getByText(/a round trip favors the caller by 50,000 base units, 4\.76% of the amount, more than rounding\. No MUST sentence failed\./)).toBeInTheDocument();
+    expect(within(failedRegion()).getByText(/a difference of 50,000 base units, 4\.76% of the amount, is more than rounding/)).toBeInTheDocument();
+  });
+
+  it('a round trip whose size the report does not give: the mismatch chip, not rounding', () => {
+    render(<VaultView detail={detailOf(RT_UNKNOWN)} />);
+    expect(within(head()).getByText('Spec mismatch')).toBeInTheDocument();
+    expect(within(head()).getByText(/a round trip favors the caller by an amount the report does not give/)).toBeInTheDocument();
   });
 });
 
-describe('a vault with a MUST failure next to a round trip', () => {
-  it('keeps the spec mismatch verdict and still names the round trip a SHOULD', () => {
-    render(<VaultView detail={detailOf(MUST)} />);
-    const head = screen.getByRole('banner');
-    expect(within(head).getByText('Spec mismatch')).toBeInTheDocument();
-    expect(within(head).getByText("2 of 30 properties failed at block 109,195,820. The vault's behavior contradicts an EIP-4626 MUST sentence.")).toBeInTheDocument();
-    const failed = screen.getByRole('region', { name: 'What failed' });
-    expect(within(failed).getByText('EIP-4626 MUST')).toBeInTheDocument();
-    expect(within(failed).getByText('EIP-4626 SHOULD')).toBeInTheDocument();
-    expect(within(failed).getByText(/A spec mismatch is a disagreement with an EIP-4626 MUST sentence, shown by a concrete call\. Properties marked SHOULD/)).toBeInTheDocument();
-  });
-});
-
-describe('the board', () => {
-  it('the table shows the rounding chip and counts it inside the mismatches; the status filter is unchanged', () => {
+describe('the board and the API', () => {
+  it('the table shows the rounding chip only for tyYIELD and counts it inside the mismatches; the status filter is unchanged', () => {
     render(<BoardExplorer rows={board.vaults.map(toExplorerRow)} protocols={[]} split={26} />);
     const rows = screen.getAllByRole('row');
-    expect(rows.find((r) => within(r).queryByText('Rounding favors caller'))).toBeTruthy();
-    expect(rows.find((r) => within(r).queryByText('Spec mismatch'))).toBeTruthy();
-    const mismatch = screen.getByRole('button', { name: /Spec mismatch/ });
-    expect(mismatch).toHaveTextContent('Spec mismatch 2 (1 only rounding)');
+    expect(rows.filter((r) => within(r).queryByText('Rounding favors caller'))).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Spec mismatch/ })).toHaveTextContent('Spec mismatch 7 (1 only rounding)');
   });
 
-  it('the figures and the findings say how many mismatches are only round trips, and name each level', () => {
+  it('the figures and the findings count and label the same way', () => {
     render(
       <>
         <Figures board={board} />
@@ -92,7 +119,17 @@ describe('the board', () => {
     );
     expect(screen.getByText(/1 of them only round trips, a SHOULD/)).toBeInTheDocument();
     const findings = screen.getByRole('region', { name: 'Where vaults disagree with EIP-4626' });
-    expect(within(findings).getAllByText('EIP-4626 SHOULD')).toHaveLength(4);
-    expect(within(findings).getAllByText('EIP-4626 MUST')).toHaveLength(1);
+    // 3 + 1 round trips (tyYIELD, MUST_AND_RT), access control, allowance, the two other round trips: 8 SHOULD; previewDeposit and share: 2 MUST.
+    expect(within(findings).getAllByText('EIP-4626 SHOULD')).toHaveLength(8);
+    expect(within(findings).getAllByText('EIP-4626 MUST')).toHaveLength(2);
+  });
+
+  it('the vault API keeps badge.state and adds the levels', () => {
+    const live = { kind: 'none' as const };
+    const api = buildVaultApi({ resolved: { chainId: 143, address: WITHDRAW_ACCESS, detail: detailOf(WITHDRAW_ACCESS), source: 'board' } as never, live, origin: 'https://x' });
+    expect(api.report?.failed).toEqual([expect.objectContaining({ id: 'withdraw', level: 'should' })]);
+    expect(api.badge).toMatchObject({ state: 'not-attested', level: null });
+    const must = buildVaultApi({ resolved: { chainId: 143, address: WITHDRAW_SHARE, detail: detailOf(WITHDRAW_SHARE), source: 'board' } as never, live, origin: 'https://x' });
+    expect(must.report?.failed).toEqual([expect.objectContaining({ id: 'withdraw', level: 'must' })]);
   });
 });

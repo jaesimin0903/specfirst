@@ -132,11 +132,16 @@ export default function AboutPage() {
         <h2>MUST and SHOULD</h2>
         <p>
           Not every property checks a MUST. The eight round trips of the upstream suite check EIP-4626&apos;s rounding guidance in Security
-          Considerations: rounding should favor the vault over its users. That is a SHOULD. A vault that fails only round trips, often by a base unit in
-          the caller&apos;s favor through a wrapped asset, is shown as &quot;Rounding favors caller&quot; with its own badge, not as a spec mismatch.
-          The two zero-allowance properties are SHOULDs too, since withdraw and redeem only SHOULD check that the caller may spend the owner&apos;s
-          shares; a vault failing those keeps the spec mismatch chip, because the sentence names what went through. Every failed property is shown
-          with its level, and any failed MUST makes the vault a spec mismatch.
+          Considerations: rounding should favor the vault over its users. That is a SHOULD. When every failure of a vault is a round trip off by at most
+          2 base units or 1 basis point of the amount, often a base unit in the caller&apos;s favor through a wrapped asset, the board shows
+          &quot;Rounding favors caller&quot; instead of a spec mismatch. A round trip off by more, or by an amount the report does not give, is still
+          a SHOULD but keeps the spec mismatch chip and says by how much: that is a conversion that is wrong, not rounding.
+        </p>
+        <p>
+          Withdraw and redeem only SHOULD check that the caller may spend the owner&apos;s shares. So the two zero-allowance properties are SHOULDs,
+          and so is a withdraw or redeem property that failed on its allowance or access-control assertion; any other assertion of those properties,
+          such as the shares burned or the assets paid, is a MUST. Allowance failures keep the spec mismatch chip, because the sentence names what went
+          through. Every failure is shown with its level, and any failed MUST makes the vault a spec mismatch.
         </p>
 
         <h2>Onchain attestations</h2>

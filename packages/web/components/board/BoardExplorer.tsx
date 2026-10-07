@@ -116,7 +116,7 @@ export function BoardExplorer({ rows, protocols, split }: BoardExplorerProps) {
   }, [rows, filters]);
   // Mismatches whose only failures are round trips (SHOULD guidance): counted, not a status of their own.
   const roundingCount = useMemo(
-    () => filterRows(rows, { ...filters, status: ALL }).filter((r) => r.status === 'mismatch' && failureLevelOf(r.failed.map((f) => f.id)) === 'rounding').length,
+    () => filterRows(rows, { ...filters, status: ALL }).filter((r) => r.status === 'mismatch' && failureLevelOf(r.failed) === 'rounding').length,
     [rows, filters],
   );
   const filtered = useMemo(() => filterRows(rows, filters), [rows, filters]);
@@ -221,7 +221,7 @@ export function BoardExplorer({ rows, protocols, split }: BoardExplorerProps) {
               {sorted.map((r) => (
                 <tr key={r.id}>
                   <td className="nowrap">
-                    <VaultChip status={r.status} failure={failureLevelOf(r.failed.map((f) => f.id))} />
+                    <VaultChip status={r.status} failure={failureLevelOf(r.failed)} />
                   </td>
                   <td className="sb-vault-cell">
                     <a href={`/v/${r.id}`} className={r.name ? undefined : 'mono'}>

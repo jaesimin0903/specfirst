@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { describeFailure } from '../board/reasons';
-import { propertyLevel } from '../board/levels';
+import { classifyFailure } from '../board/levels';
 import { txUrl } from '../board/attestations';
 import { reproduceArgs } from '../board/reproduce';
 import type { PropertyStatus } from '../board/types';
@@ -37,6 +37,7 @@ export const vaultApiResponseSchema = z.object({
       startedAt: z.string(),
       summary: counts,
       total: z.number(),
+      /** level: the EIP-4626 word the failure goes against, from the property and the assertion that failed. */
       failed: z.array(z.object({ id: z.string(), finding: z.string(), level: z.enum(['must', 'should']) })),
       reportHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
       suiteHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
@@ -65,7 +66,13 @@ export const vaultApiResponseSchema = z.object({
     registry: z.object({ chainId: z.number(), address: z.string() }),
     reason: z.string().nullable(),
   }),
-  badge: z.object({ state: z.enum(['compliant', 'mismatch', 'rounding', 'partial', 'not-attested', 'unavailable']), text: z.string(), url: z.string() }),
+  /** state is unchanged by levels (mismatch for any failure); level says, for a mismatch, whether only SHOULDs failed. */
+  badge: z.object({
+    state: z.enum(['compliant', 'mismatch', 'partial', 'not-attested', 'unavailable']),
+    level: z.enum(['must', 'should']).nullable(),
+    text: z.string(),
+    url: z.string(),
+  }),
   reproduce: z.object({ command: z.string(), args: z.array(z.string()) }).nullable(),
   links: z.object({ page: z.string(), badge: z.string(), report: z.string().nullable(), requestCheck: z.string() }),
   readAt: z.string(),
@@ -113,7 +120,7 @@ export function buildVaultApi({ resolved, live, origin, now = new Date() }: Buil
             startedAt: report.startedAt,
             summary: report.summary,
             total: report.results.length,
-            failed: report.results.filter((r) => r.status === 'fail').map((r) => ({ id: r.id, finding: describeFailure(r.reason, r.id).finding, level: propertyLevel(r.id) })),
+            failed: report.results.filter((r) => r.status === 'fail').map((r) => ({ id: r.id, finding: describeFailure(r.reason, r).finding, level: classifyFailure(r).level })),
             reportHash: detail.reportHash,
             suiteHash: detail.suiteHash,
             url: `${origin}${detail.row.reportPath}`,
@@ -134,7 +141,7 @@ export function buildVaultApi({ resolved, live, origin, now = new Date() }: Buil
       registry: { chainId: DESK_CHAIN_ID, address: registryAddress() },
       reason: live.kind === 'unread' ? live.reason : null,
     },
-    badge: { state: badge.state, text: badge.text, url: badgeUrl },
+    badge: { state: badge.state, level: badge.level ?? null, text: badge.text, url: badgeUrl },
     reproduce: report ? { command: reproduceArgs(report).join(' '), args: reproduceArgs(report) } : null,
     links: { page, badge: badgeUrl, report: detail ? `${origin}${detail.row.reportPath}` : null, requestCheck: `${origin}/check?vault=${address}` },
     readAt: now.toISOString(),
