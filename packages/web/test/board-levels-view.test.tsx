@@ -49,7 +49,7 @@ describe('vault pages, one per case', () => {
     expect(within(head()).getByText('Rounding favors caller')).toBeInTheDocument();
     expect(
       within(head()).getByText(
-        "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 109,195,820, by at most 1 base unit; no MUST sentence failed.",
+        "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 109,195,820, by at most 1 base unit, <0.01% of the amount; no MUST sentence failed.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/contradicts an EIP-4626 MUST sentence/)).toBeNull();

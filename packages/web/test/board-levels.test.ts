@@ -108,8 +108,14 @@ describe('verdict and labels', () => {
 
   it('round trips off by a rounding difference: rounding favors the caller, with the size', () => {
     expect(verdictSentence('mismatch', SUMMARY(3), '110000000', TY_YIELD)).toBe(
-      "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 110,000,000, by at most 1 base unit; no MUST sentence failed.",
+      "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 110,000,000, by at most 1 base unit, <0.01% of the amount; no MUST sentence failed.",
     );
+    // The share of the amount is that of the largest difference; a class without the amount gives the size alone.
+    expect(verdictSentence('mismatch', SUMMARY(2), '7', [TY_YIELD[0]!, rt('RT-deposit-redeem', 1e15, 1e15 - 13_080_554, 13_080_554)])).toBe(
+      "Rounding favors the caller: 2 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 7, by at most 13,080,554 base units, <0.01% of the amount; no MUST sentence failed.",
+    );
+    expect(verdictSentence('mismatch', SUMMARY(1), '7', [rt('RT-redeem-mint', 98, 100, 2)])).toMatch(/, by at most 2 base units, 2% of the amount; no MUST sentence failed\.$/);
+    expect(verdictSentence('mismatch', SUMMARY(1), '7', [{ id: 'RT-redeem-mint', topic: 'rounding', delta: '1' }])).toMatch(/at block 7, by at most 1 base unit; no MUST sentence failed\.$/);
     expect(vaultLabel('mismatch', 'rounding')).toBe('Rounding favors caller');
     expect(describeFailure(TY_YIELD[0]!.reason, TY_YIELD[0]).finding).toBe("Forge found a counterexample: the round trip ended 1 base unit in the caller's favor (1,000,001 against 1,000,000).");
     expect(describeFailure(TY_YIELD[0]!.reason, TY_YIELD[0]).rule).toMatch(/rounding should favor the Vault over its users\. That is a SHOULD, not a MUST/);

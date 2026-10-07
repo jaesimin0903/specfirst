@@ -399,8 +399,9 @@ function units(delta: string): string {
 /**
  * The one-line verdict at the top of a vault page. A mismatch follows the classes of its failures (`failures`, with
  * their reasons and logs when known): any MUST keeps "contradicts an EIP-4626 MUST sentence"; round trips off by a
- * rounding-sized amount read as rounding; other SHOULD failures say what went through and by how much. Without
- * failures it reads as a MUST, so nothing is softened by mistake.
+ * rounding-sized amount read as rounding, with the largest difference and its share of the amount; other SHOULD
+ * failures say what went through and by how much. Without failures it reads as a MUST, so nothing is softened by
+ * mistake.
  */
 export function verdictSentence(status: VaultStatus, summary: StatusCounts, blockNumber: string, failures: ReadonlyArray<FailureLike> = []): string {
   const total = summary.pass + summary.fail + summary.inconclusive + summary.notApplicable;
@@ -412,7 +413,7 @@ export function verdictSentence(status: VaultStatus, summary: StatusCounts, bloc
       const of = (t: FailureClass['topic']) => classes.filter((c) => c.topic === t);
       if (level === 'rounding') {
         const top = maxDelta(classes);
-        return `Rounding favors the caller: ${plural(classes.length, 'round-trip property fails', 'round-trip properties fail')} EIP-4626's SHOULD guidance (Security Considerations) at block ${block}${top ? `, by at most ${units(top.delta!)}` : ''}; no MUST sentence failed.`;
+        return `Rounding favors the caller: ${plural(classes.length, 'round-trip property fails', 'round-trip properties fail')} EIP-4626's SHOULD guidance (Security Considerations) at block ${block}${top ? `, by at most ${units(top.delta!)}${top.amount ? `, ${percentOf(top.delta!, top.amount)} of the amount` : ''}` : ''}; no MUST sentence failed.`;
       }
       if (level === 'should') {
         const parts: string[] = [];
