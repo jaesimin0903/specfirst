@@ -34,6 +34,11 @@ export const DEFAULT_GATE_VAULT_VIEW_GAS = 300_000n;
 /** Keeper backoff after an exit that would move nothing (ExitFailed): from a minute, doubling, up to an hour. */
 export const GATE_BACKOFF_MIN_MS = 60_000;
 export const GATE_BACKOFF_MAX_MS = 3_600_000;
+/**
+ * An exit that took the books down by no more than this share of them (basis points, 0.1%) counts as moving nothing
+ * for the keeper: a vault that pays a wei per exit would otherwise be sent an exit every pass.
+ */
+export const GATE_DUST_BPS = 10n;
 
 /** AllocationGate.Position as viem decodes it. */
 export interface GatePosition {
@@ -82,7 +87,8 @@ export type GateExitOutcome = GateTx & { vault: Address; verdict: GateVerdict; a
   );
 
 export class GateError extends Error {
-  constructor(message: string, readonly errorName?: string, readonly cause?: unknown) {
+  /** Set when the transaction was sent: it reverted when mined, or its receipt could not be had. */
+  constructor(message: string, readonly errorName?: string, readonly cause?: unknown, readonly txHash?: Hex) {
     super(message);
     this.name = 'GateError';
   }
@@ -222,16 +228,18 @@ export class AllocationGateClient {
   private async write(functionName: 'allocate' | 'exit' | 'withdraw' | 'resync', args: readonly unknown[]): Promise<Mined> {
     if (!this.wallet) throw new GateError(`${functionName} needs a wallet client`);
     const call = { address: this.address, abi: allocationGateAbi, functionName, args, account: this.wallet.account } as never;
+    let hash: Hex | undefined;
     try {
       const sim = await this.client.simulateContract(call);
       const gas = gasLimit(await this.client.estimateContractGas(call));
-      const hash = await this.wallet.writeContract({ ...(sim as { request: object }).request, gas } as never);
+      hash = await this.wallet.writeContract({ ...(sim as { request: object }).request, gas } as never);
       const receipt = await this.client.waitForTransactionReceipt({ hash });
-      if (receipt.status !== 'success') throw new GateError(`${functionName} tx ${hash} reverted`);
+      if (receipt.status !== 'success') throw new GateError(`${functionName} tx ${hash} reverted`, 'TxReverted', undefined, hash);
       return { ...txOf(hash, receipt), receipt };
     } catch (err) {
       if (err instanceof GateError) throw err;
-      throw failure(`${functionName} failed`, err);
+      const f = failure(`${functionName} failed${hash ? ` after tx ${hash} was sent` : ''}`, err);
+      throw hash ? new GateError(f.message, f.errorName, err, hash) : f;
     }
   }
 
@@ -360,22 +368,25 @@ export interface GateKeeperTarget {
 /**
  * What one keeper pass did with one vault. empty: no shares, nothing else read. closed: exit is not open to anyone.
  * waiting: backing off, not tried. backoff: the exit would move nothing (simulated, or mined as ExitFailed), so a new,
- * longer wait starts; this is the one to log. exited: assets came back. error: a read, simulation or send failed
- * (no wait: an RPC hiccup should not hold an exit back).
+ * longer wait starts; this is the one to log. That is also the case for an exit that took the books down by no more
+ * than GATE_DUST_BPS of them, and for a sent exit that reverted or whose receipt failed (`error` set). exited: the
+ * books shrank by more than dust. error: a read, the simulation or a send that never left failed (no wait: an RPC
+ * hiccup should not hold an exit back, and nothing was paid for).
  */
 export type GateKeeperResult =
   | { vault: Address; kind: 'empty' }
   | { vault: Address; kind: 'closed'; verdict: GateVerdict }
   | { vault: Address; kind: 'waiting'; until: number }
-  | { vault: Address; kind: 'backoff'; verdict: GateVerdict; delayMs: number; until: number; outcome?: GateExitOutcome }
+  | { vault: Address; kind: 'backoff'; verdict: GateVerdict; delayMs: number; until: number; outcome?: GateExitOutcome; error?: GateError }
   | { vault: Address; kind: 'exited'; outcome: GateExitOutcome }
   | { vault: Address; kind: 'error'; error: GateError };
 
 /**
  * The keeper behind `watch demo gate keep`: each pass looks at every vault of the gate, in the gate's order, one
  * transaction at most per vault. A vault whose exit would move nothing is simulated, not sent, and then left alone for
- * GATE_BACKOFF_MIN_MS, doubling after each further try that moves nothing up to GATE_BACKOFF_MAX_MS; the wait ends
- * when the vault pays, its exit closes or its position empties.
+ * GATE_BACKOFF_MIN_MS, doubling after each further try that moves nothing up to GATE_BACKOFF_MAX_MS; so is one whose
+ * sent exit took back only dust or failed on chain. The wait ends when an exit takes back more than dust, the exit
+ * closes or the position empties.
  */
 export class GateKeeper {
   private readonly waits = new Map<string, { delayMs: number; until: number }>();
@@ -392,19 +403,20 @@ export class GateKeeper {
     return results;
   }
 
-  private backoff(vault: Address, verdict: GateVerdict, outcome?: GateExitOutcome): GateKeeperResult {
+  private backoff(vault: Address, verdict: GateVerdict, outcome?: GateExitOutcome, error?: GateError): GateKeeperResult {
     const key = vault.toLowerCase();
     const prev = this.waits.get(key);
     const delayMs = prev ? Math.min(prev.delayMs * 2, GATE_BACKOFF_MAX_MS) : GATE_BACKOFF_MIN_MS;
     const until = this.now() + delayMs;
     this.waits.set(key, { delayMs, until });
-    return { vault, kind: 'backoff', verdict, delayMs, until, ...(outcome ? { outcome } : {}) };
+    return { vault, kind: 'backoff', verdict, delayMs, until, ...(outcome ? { outcome } : {}), ...(error ? { error } : {}) };
   }
 
   private async one(vault: Address): Promise<GateKeeperResult> {
     const key = vault.toLowerCase();
     try {
-      if ((await this.gate.position(vault)).shares === 0n) {
+      const books = (await this.gate.position(vault)).shares;
+      if (books === 0n) {
         this.waits.delete(key);
         return { vault, kind: 'empty' };
       }
@@ -416,8 +428,15 @@ export class GateKeeper {
         return { vault, kind: 'closed', verdict };
       }
       if (!(await this.gate.simulateExit(vault))) return this.backoff(vault, verdict);
-      const outcome = await this.gate.exit(vault);
-      if (!outcome.exited) return this.backoff(vault, verdict, outcome);
+      let outcome: GateExitOutcome;
+      try {
+        outcome = await this.gate.exit(vault);
+      } catch (err) {
+        // A sent exit that failed on chain cost gas like an ExitFailed: wait the same way. One that never left did not.
+        if (err instanceof GateError && err.txHash) return this.backoff(vault, verdict, undefined, err);
+        throw err;
+      }
+      if (!outcome.exited || outcome.shares * 10_000n <= books * GATE_DUST_BPS) return this.backoff(vault, verdict, outcome);
       this.waits.delete(key);
       return { vault, kind: 'exited', outcome };
     } catch (err) {

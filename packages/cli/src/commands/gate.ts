@@ -26,7 +26,7 @@ import type { Command } from 'commander';
 import pc from 'picocolors';
 import { formatEther, getAddress, parseEther, type Address, type Hex } from 'viem';
 import { contextFrom, emitEvent, printLine, type CliContext } from '../lib/context.js';
-import { ConfigError, DEPLOYER_KEY_ENV, resolveAttestRegistry, resolveKey, resolveNetwork, type ResolvedNetwork } from '../lib/network.js';
+import { ConfigError, DEPLOYER_KEY_ENV, REQUESTER_KEY_ENV, resolveAttestRegistry, resolveKey, resolveNetwork, type ResolvedNetwork } from '../lib/network.js';
 import { StageError } from '../lib/pipeline.js';
 import { cont, stage } from '../lib/runLog.js';
 import { runStage } from '../lib/stageRunner.js';
@@ -35,6 +35,9 @@ import { runStage } from '../lib/stageRunner.js';
 export function gateEnvVar(chainId: number): string {
   return `SPECFIRST_GATE_${chainId}`;
 }
+
+/** The keeper's own key: exit is open to anyone, so `keep` needs no owner key (default REQUESTER_PRIVATE_KEY when unset). */
+export const KEEPER_KEY_ENV = 'KEEPER_PRIVATE_KEY';
 
 /** The web reads the testnet gate from this variable. */
 export const WEB_GATE_ENV = 'NEXT_PUBLIC_SPECFIRST_GATE_10143';
@@ -282,8 +285,9 @@ export function registerWatchDemoGate(demo: Command): void {
 
   gate
     .command('keep')
-    .description('Keeper: every pass, exit each vault of the gate whose exit is open. Needs no owner key. Runs until stopped, a pass every --poll seconds; --once runs one pass (both are options of `watch`).')
-    .action(async (_opts: unknown, command: Command) => {
+    .description(`Keeper: every pass, exit each vault of the gate whose exit is open to anyone. Signs with its own key (--key-env, default ${KEEPER_KEY_ENV}, else ${REQUESTER_KEY_ENV}), never needs the owner's. Runs until stopped, a pass every --poll seconds; --once runs one pass (both are options of \`watch\`).`)
+    .option('--key-env <NAME>', `environment variable holding the keeper's key (default ${KEEPER_KEY_ENV} when set, else ${REQUESTER_KEY_ENV})`)
+    .action(async (keepOpts: { keyEnv?: string }, command: Command) => {
       const ctx = contextFrom(command);
       await runStage(ctx, 'watch demo gate keep', WATCH_FAILED_EXIT_CODE, async () => {
         // `watch` defines --once and --poll, and commander gives a parent's option to the parent wherever it appears.
@@ -291,10 +295,14 @@ export function registerWatchDemoGate(demo: Command): void {
         if (!/^[1-9]\d*$/.test(opts.poll)) throw new ConfigError(`--poll must be a positive number of seconds, got "${opts.poll}"`);
         const net = network(command);
         const at = gateAddress(net, command);
-        const wallet = net.clients.wallet(resolveKey(net, DEPLOYER_KEY_ENV));
+        const keyEnv = keepOpts.keyEnv ?? (process.env[KEEPER_KEY_ENV] ? KEEPER_KEY_ENV : REQUESTER_KEY_ENV);
+        if (!/^[A-Z_][A-Z0-9_]*$/.test(keyEnv)) throw new ConfigError(`--key-env must name an environment variable (A-Z, 0-9, _), got "${keyEnv}"`);
+        const wallet = net.clients.wallet(resolveKey(net, keyEnv));
+        for (const n of net.notices) printLine(ctx, `         ! ${n}`);
         const g = new AllocationGateClient(at, net.clients.publicClient, wallet);
         const chainId = net.clients.chain.id;
-        printLine(ctx, stage('gate', `keeping ${pc.bold(at)} on ${net.name} ${chainId} as ${wallet.account.address}${opts.once ? '' : `, every ${opts.poll} s`}`));
+        printLine(ctx, stage('gate', `keeping ${pc.bold(at)} on ${net.name} ${chainId} as ${wallet.account.address} (${keyEnv})${opts.once ? '' : `, every ${opts.poll} s`}`));
+        emitEvent(ctx, { type: 'watch-demo-gate-keep-start', chainId, gate: at, keeper: wallet.account.address, keyEnv });
         const keeper = new GateKeeper(g);
         for (;;) {
           let sendFailures = 0;
@@ -307,8 +315,15 @@ export function registerWatchDemoGate(demo: Command): void {
               } else if (r.kind === 'backoff') {
                 // Logged once per step: the vault is left alone until `until`.
                 if (r.outcome) emitEvent(ctx, outcomeEvent(chainId, at, r.outcome));
-                printLine(ctx, stage('gate', `${pc.yellow('backing off')} ${pc.bold(r.vault)}: its exit ${r.outcome ? 'moved nothing (ExitFailed)' : 'would move nothing, not sent'}; next try in ${Math.round(r.delayMs / 60_000)} min`));
-                emitEvent(ctx, { type: 'watch-demo-gate-backoff', chainId, gate: at, vault: r.vault, verdict: r.verdict, delaySec: r.delayMs / 1000, until: new Date(r.until).toISOString(), mined: Boolean(r.outcome) });
+                const why = r.error
+                  ? `exit tx ${r.error.txHash} failed on chain (${r.error.errorName ?? r.error.message})`
+                  : !r.outcome
+                    ? 'its exit would move nothing, not sent'
+                    : r.outcome.exited
+                      ? `its exit took back only dust (${formatEther(r.outcome.shares)} shares)`
+                      : 'its exit moved nothing (ExitFailed)';
+                printLine(ctx, stage('gate', `${pc.yellow('backing off')} ${pc.bold(r.vault)}: ${why}; next try in ${Math.round(r.delayMs / 60_000)} min`));
+                emitEvent(ctx, { type: 'watch-demo-gate-backoff', chainId, gate: at, vault: r.vault, verdict: r.verdict, delaySec: r.delayMs / 1000, until: new Date(r.until).toISOString(), mined: Boolean(r.outcome || r.error), reason: why });
               } else if (r.kind === 'error') {
                 sendFailures++;
                 printLine(ctx, stage('gate', `${pc.red('exit not sent')} ${pc.bold(r.vault)}: ${r.error.message}`));

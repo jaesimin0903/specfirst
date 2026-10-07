@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Address } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { GATE_BACKOFF_MAX_MS, GATE_BACKOFF_MIN_MS, GateError, GateKeeper, type GateExitOutcome, type GateKeeperTarget, type GatePosition } from '../src/gate/client.js';
+import { GATE_BACKOFF_MAX_MS, GATE_BACKOFF_MIN_MS, GATE_DUST_BPS, GateError, GateKeeper, type GateExitOutcome, type GateKeeperTarget, type GatePosition } from '../src/gate/client.js';
 import {
   type GateVerdict,
   allocationAllowed,
@@ -149,6 +149,41 @@ describe('GateKeeper', () => {
     const r = await k.pass();
     expect(r[0]).toMatchObject({ vault: STUCK, kind: 'exited' });
     expect((await k.pass())[0]).toMatchObject({ vault: STUCK, kind: 'empty' });
+  });
+
+  it('backs off an exit that took back only dust, and a sent exit that failed on chain; an error before sending waits for nothing', async () => {
+    const DUST = '0x00000000000000000000000000000000000000b1' as Address;
+    const REVERTS = '0x00000000000000000000000000000000000000b2' as Address;
+    const NEVER_SENT = '0x00000000000000000000000000000000000000b3' as Address;
+    let clock = 5_000_000;
+    const books = 10_000n;
+    const exits: string[] = [];
+    const tx = { hash: `0x${'22'.repeat(32)}`, blockNumber: 1n, gasUsed: 1n, effectiveGasPrice: 1n, gasCostWei: 1n } as const;
+    const target: GateKeeperTarget = {
+      summary: async () => ({ vaults: [DUST, REVERTS, NEVER_SENT] }),
+      position: async () => ({ shares: books, assetsIn: 0n, assetsOut: 0n, lastAllocatedBlock: 1n, lastExitBlock: 0n }),
+      verdict: async () => ({ verdict: 'NotCompliant', attestationId: 1n }),
+      simulateExit: async () => true,
+      exit: async (v) => {
+        exits.push(v);
+        if (v === REVERTS) throw new GateError(`exit tx ${tx.hash} reverted`, 'TxReverted', undefined, tx.hash);
+        if (v === NEVER_SENT) throw new GateError('exit failed: HTTP request failed');
+        // A wei of assets for books x GATE_DUST_BPS / 10000 shares: exactly the dust line.
+        return { ...tx, vault: v, verdict: 'NotCompliant', attestationId: 1n, exited: true, path: 'Redeem', shares: (books * GATE_DUST_BPS) / 10_000n, assets: 1n } satisfies GateExitOutcome;
+      },
+    };
+    const k = new GateKeeper(target, () => clock);
+    const r = await k.pass();
+    expect(r.map((x) => [x.vault, x.kind])).toEqual([
+      [DUST, 'backoff'],
+      [REVERTS, 'backoff'],
+      [NEVER_SENT, 'error'],
+    ]);
+    expect(r[0]).toMatchObject({ outcome: { exited: true, assets: 1n } });
+    expect(r[1]).toMatchObject({ error: { errorName: 'TxReverted', txHash: tx.hash } });
+    clock += 15_000;
+    expect((await k.pass()).map((x) => x.kind)).toEqual(['waiting', 'waiting', 'error']);
+    expect(exits).toEqual([DUST, REVERTS, NEVER_SENT, NEVER_SENT]);
   });
 
   it('an RPC failure is reported and starts no wait', async () => {

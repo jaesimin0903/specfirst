@@ -119,7 +119,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
     clients = createChainClients({ chain: anvilChain, rpcUrls: [anvil.url], rps: 1000 });
     dir = await mkdtemp(path.join(tmpdir(), 'specfirst-gate-'));
     Object.assign(process.env, { ANVIL_RPC: anvil.url, DEPLOYER_PRIVATE_KEY: DEPLOYER_KEY, ISSUER_PRIVATE_KEY: ISSUER_KEY });
-    for (const k of ['SPECFIRST_ATTEST_REGISTRY_31337', 'SPECFIRST_GATE_31337', 'SPECFIRST_REPORT_BASE_URL']) delete process.env[k];
+    for (const k of ['SPECFIRST_ATTEST_REGISTRY_31337', 'SPECFIRST_GATE_31337', 'SPECFIRST_REPORT_BASE_URL', 'KEEPER_PRIVATE_KEY', 'REQUESTER_PRIVATE_KEY']) delete process.env[k];
   }, 60_000);
 
   afterAll(async () => {
@@ -230,18 +230,19 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
     expect(ex.err).toBe('');
     expect(event(ex, 'watch-demo-gate-exit')).toMatchObject({ vault: a, exited: true, path: 'Redeem', verdict: 'NotCompliant', attestationId: failA, shares: parseEther('10').toString(), assets: parseEther('10').toString() });
 
-    // The keeper signs with a key that is neither the owner nor an issuer.
-    process.env.DEPLOYER_PRIVATE_KEY = KEEPER_KEY;
+    // The keeper signs with its own key, neither the owner's nor an issuer's (KEEPER_PRIVATE_KEY).
+    process.env.KEEPER_PRIVATE_KEY = KEEPER_KEY;
     try {
       const keep = await demo('gate', 'keep', '--once');
       expect(keep.err).toBe('');
       expect(keep.code).toBe(0);
+      expect(event(keep, 'watch-demo-gate-keep-start')).toMatchObject({ keeper: KEEPER, keyEnv: 'KEEPER_PRIVATE_KEY' });
       const exits = keep.events.filter((e) => e.type === 'watch-demo-gate-exit');
       expect(exits).toHaveLength(1);
       expect(exits[0]).toMatchObject({ vault: b, exited: true, assets: parseEther('20.5').toString() });
       expect(event(keep, 'watch-demo-gate-pass')).toMatchObject({ vaults: 2, due: 1, exited: 1 });
     } finally {
-      process.env.DEPLOYER_PRIVATE_KEY = DEPLOYER_KEY;
+      delete process.env.KEEPER_PRIVATE_KEY;
     }
     const logs = await clients.publicClient.getLogs({ address: gate, fromBlock: 0n });
     expect(logs.length).toBeGreaterThan(0);
@@ -288,7 +289,23 @@ describe.skipIf(SKIP_ANVIL)('specfirst watch demo gate on anvil', { timeout: 300
     expect(event(stale, 'watch-demo-gate-refused')).toMatchObject({ vault: c, verdict: 'Stale' });
     expect(stale.err).toMatch(/allocation refused \(Stale\): .*unchanged re-checks of the watcher are not attested.*specfirst cert attest/);
     // Stale opens no exit for others; the keeper leaves c alone (nothing held anyway) and the rest is exited.
-    expect(event(await demo('gate', 'keep', '--once'), 'watch-demo-gate-pass')).toMatchObject({ vaults: 3, due: 0 });
+    // Without KEEPER_PRIVATE_KEY the keeper signs with REQUESTER_PRIVATE_KEY; --key-env names another variable.
+    const requester = ANVIL_KEYS[2] as Hex;
+    process.env.REQUESTER_PRIVATE_KEY = requester;
+    process.env.MY_KEEPER = KEEPER_KEY;
+    try {
+      const keep = await demo('gate', 'keep', '--once');
+      expect(event(keep, 'watch-demo-gate-keep-start')).toMatchObject({ keeper: privateKeyToAccount(requester).address, keyEnv: 'REQUESTER_PRIVATE_KEY' });
+      expect(event(keep, 'watch-demo-gate-pass')).toMatchObject({ vaults: 3, due: 0 });
+      const named = await demo('gate', 'keep', '--once', '--key-env', 'MY_KEEPER');
+      expect(event(named, 'watch-demo-gate-keep-start')).toMatchObject({ keeper: KEEPER, keyEnv: 'MY_KEEPER' });
+      const bad = await demo('gate', 'keep', '--once', '--key-env', 'my-keeper');
+      expect(bad.code).toBe(19);
+      expect(bad.err).toMatch(/--key-env must name an environment variable/);
+    } finally {
+      delete process.env.REQUESTER_PRIVATE_KEY;
+      delete process.env.MY_KEEPER;
+    }
   });
 
   it('human output names each vault, its verdict and its latest attestation', async () => {
