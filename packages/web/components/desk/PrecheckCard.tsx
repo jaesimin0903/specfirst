@@ -1,5 +1,5 @@
 import type { PrecheckResult } from '../../lib/desk/precheck';
-import { VAULT_STATUS_LABEL, formatBlock } from '../../lib/board/reasons';
+import { formatBlock, vaultLabel } from '../../lib/board/reasons';
 import { Glyph } from '../board/Glyph';
 import { Dot } from './Marks';
 
@@ -40,10 +40,11 @@ export function PrecheckCard({ p }: { p: PrecheckResult }) {
         )}
         {p.latestReport ? (
           <li>
-            <Glyph kind={p.latestReport.status} />
+            <Glyph kind={p.latestReport.status === 'mismatch' && p.latestReport.failureLevel === 'rounding' ? 'should' : p.latestReport.status} />
             <span>
               {p.latestReport.source === 'board' ? 'On the board: ' : 'Checked on request: '}
-              <a href={`/v/${p.chainId}/${p.address!.toLowerCase()}`}>{VAULT_STATUS_LABEL[p.latestReport.status]}</a> at block {formatBlock(p.latestReport.blockNumber)},{' '}
+              <a href={`/v/${p.chainId}/${p.address!.toLowerCase()}`}>{vaultLabel(p.latestReport.status, p.latestReport.failureLevel)}</a> at block{' '}
+              {formatBlock(p.latestReport.blockNumber)},{' '}
               {p.latestReport.summary.pass} pass, {p.latestReport.summary.fail} fail.
             </span>
           </li>

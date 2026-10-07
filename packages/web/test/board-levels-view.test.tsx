@@ -8,6 +8,7 @@ import type { BoardData, RegistryRead, VaultDetail } from '../lib/board/types';
 import { VaultView } from '../components/board/VaultView';
 import { BoardExplorer } from '../components/board/BoardExplorer';
 import { Figures, Findings } from '../components/board/BoardSections';
+import { PropertyMatrix } from '../components/board/PropertyMatrix';
 import { buildVaultApi } from '../lib/desk/vaultApi';
 
 /* The board on the fixture reports of test/fixtures/levels (see its README.txt), one per case. */
@@ -124,6 +125,13 @@ describe('the board and the API', () => {
     const rows = screen.getAllByRole('row');
     expect(rows.filter((r) => within(r).queryByText('Rounding favors caller'))).toHaveLength(1);
     expect(screen.getByRole('button', { name: /Spec mismatch/ })).toHaveTextContent('Spec mismatch 9 (1 only rounding)');
+  });
+
+  it("the matrix names each column's status as its chip does", () => {
+    const { container } = render(<PropertyMatrix board={board} />);
+    const titles = [...container.querySelectorAll('a.col title')].map((t) => t.textContent);
+    expect(titles.filter((t) => t!.endsWith(': Rounding favors caller'))).toEqual([`${board.vaults.find((r) => r.id === `143/${TY_YIELD}`)!.address}: Rounding favors caller`]);
+    expect(titles.filter((t) => t!.endsWith(': Spec mismatch'))).toHaveLength(8);
   });
 
   it('the figures and the findings count and label the same way', () => {

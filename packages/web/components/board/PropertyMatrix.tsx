@@ -1,5 +1,6 @@
 import type { BoardData, VaultRow } from '../../lib/board/types';
-import { VAULT_STATUS_LABEL } from '../../lib/board/reasons';
+import { vaultLabel } from '../../lib/board/reasons';
+import { failureLevelOf } from '../../lib/board/levels';
 
 const PX = 6; // column pitch
 const CW = 5; // cell width
@@ -74,7 +75,7 @@ export function PropertyMatrix({ board }: { board: BoardData }) {
             {columns.map(({ x: cx, row }) => (
               <a key={row.id} href={`/v/${row.id}`} className="col" tabIndex={-1}>
                 <rect x={cx - 0.5} y={0} width={PX} height={H} />
-                <title>{`${row.name ?? row.address}${row.protocol ? `, ${row.protocol}` : ''}: ${VAULT_STATUS_LABEL[row.status]}`}</title>
+                <title>{`${row.name ?? row.address}${row.protocol ? `, ${row.protocol}` : ''}: ${vaultLabel(row.status, failureLevelOf(row.failed))}`}</title>
               </a>
             ))}
           </svg>

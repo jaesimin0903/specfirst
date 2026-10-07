@@ -1,5 +1,6 @@
 import type { ResultJson } from '../../lib/desk/types';
 import { verdictSentence } from '../../lib/board/reasons';
+import { failureLevelOf } from '../../lib/board/levels';
 import { testnetTxUrl } from '../../lib/desk/config';
 import { shortHash } from '../../lib/format';
 import { VaultChip } from '../board/StatusChip';
@@ -15,11 +16,11 @@ export function ResultCard({ result, origin }: { result: ResultJson; origin: str
   const a = result.attestation;
   return (
     <article className="sb-result" data-status={result.status} aria-labelledby="result-h">
-      <VaultChip status={result.status} />
+      <VaultChip status={result.status} failure={failureLevelOf(result.failed)} />
       <h2 className="sb-h2" id="result-h">
         The result
       </h2>
-      <p className="sb-verdict">{verdictSentence(result.status, result.summary, result.blockNumber)}</p>
+      <p className="sb-verdict">{verdictSentence(result.status, result.summary, result.blockNumber, result.failed)}</p>
       <PropertyCells cells={result.cells} split={result.split} width={420} />
 
       {result.failed.length > 0 && (
