@@ -151,10 +151,12 @@ library SfEvents {
 /// answer for a disabled action; each such discard is recorded so the runner can report a property whose
 /// max was always 0 as not applicable), and a failed setup step (funding, approve, the deposit that gives
 /// the user shares) discards the input too. Users come from the same salted 16-address pool as the harness.
-/// Two more rules keep other causes off the max properties. An amount below the bound min(max, cap) that
-/// reverts is tried again at the bound: EIP-4626 constrains max as an upper bound of what is accepted, so when
-/// the bound goes through the input is discarded and counted, and when it reverts too the property fails. And
-/// a revert that needed a precompile Monad has and this fork lacks (SfForkGaps.precompileCause) leaves that input
+/// Every run tries the drawn amount and, when that goes through, the bound min(max, cap) itself from the same
+/// state: the EIP sentence is about the max, and a revert in the last few basis points below it is rarely drawn.
+/// Two more rules keep other causes off the max properties. A drawn amount below the bound that reverts is tried
+/// again at the bound: EIP-4626 constrains max as an upper bound of what is accepted, so when the bound goes
+/// through the input is discarded and counted, and when it reverts too the property fails. And a revert of a
+/// call that reached a precompile Monad has and this fork lacks (SfForkGaps.precompileCause) leaves that input
 /// unjudged with an event; other inputs keep being judged, and the runner never reports a property with an
 /// unjudged input as a pass (a fail elsewhere stays a fail, otherwise it is inconclusive).
 contract SpecfirstMaxHonored is Test {
@@ -216,7 +218,8 @@ contract SpecfirstMaxHonored is Test {
         return address(uint160(uint256(keccak256(abi.encode(poolSalt, index)))));
     }
 
-    /// deposit(a) for 0 < a <= min(maxDeposit, cap) with previewDeposit(a) > 0 must not revert.
+    /// deposit(a) for 0 < a <= min(maxDeposit, cap) with previewDeposit(a) > 0 must not revert: the drawn amount,
+    /// then the bound.
     function test_sf_maxDeposit_honored(uint256 who, uint256 amount) public {
         address u = _user(who);
         uint256 max = _read(abi.encodeCall(ISfVault.maxDeposit, (u)));
@@ -225,13 +228,19 @@ contract SpecfirstMaxHonored is Test {
         uint256 a = bound(amount, 1, hi);
         vm.assume(_read(abi.encodeCall(ISfVault.previewDeposit, (a))) > 0);
         _fund(u, a);
-        (bool ok, bytes memory ret) = _callVault(u, abi.encodeCall(ISfVault.deposit, (a, u)));
-        if (ok) return;
+        (bool ok, bytes memory ret) = _callVaultThenRestore(u, abi.encodeCall(ISfVault.deposit, (a, u)));
+        if (ok) {
+            if (a < hi && _quotes(abi.encodeCall(ISfVault.previewDeposit, (hi)), type(uint256).max)) {
+                _requireBound(u, abi.encodeCall(ISfVault.deposit, (hi, u)), hi, "deposit", hi, "maxDeposit", max);
+            }
+            return;
+        }
         if (a < hi) _discardIfAcceptedAt(u, abi.encodeCall(ISfVault.deposit, (hi, u)), hi);
         _failMax(ret, "deposit", a, "maxDeposit", max);
     }
 
-    /// mint(s) for 0 < s <= min(maxMint, shares of cap) with previewMint(s) > 0 must not revert.
+    /// mint(s) for 0 < s <= min(maxMint, shares of cap) with previewMint(s) > 0 must not revert: the drawn amount,
+    /// then the bound.
     function test_sf_maxMint_honored(uint256 who, uint256 shares) public {
         address u = _user(who);
         uint256 max = _read(abi.encodeCall(ISfVault.maxMint, (u)));
@@ -245,8 +254,11 @@ contract SpecfirstMaxHonored is Test {
         // Twice what previewMint quotes plus one whole token: a mint that pulls more than its quote is
         // test_previewMint's finding, and must not fail here for lack of funds.
         _fund(u, _mintFunding(need));
-        (bool ok, bytes memory ret) = _callVault(u, abi.encodeCall(ISfVault.mint, (s, u)));
-        if (ok) return;
+        (bool ok, bytes memory ret) = _callVaultThenRestore(u, abi.encodeCall(ISfVault.mint, (s, u)));
+        if (ok) {
+            if (s < hi) _requireMintBound(u, hi, max);
+            return;
+        }
         if (s < hi) {
             (bool quoted, uint256 needHi) = _tryRead(abi.encodeCall(ISfVault.previewMint, (hi)));
             if (quoted && needHi <= 2 * cap) _discardIfAcceptedAt(u, abi.encodeCall(ISfVault.mint, (hi, u)), _mintFunding(needHi));
@@ -254,20 +266,25 @@ contract SpecfirstMaxHonored is Test {
         _failMax(ret, "mint", s, "maxMint", max);
     }
 
-    /// After a deposit, withdraw(a, u, u) for 0 < a <= maxWithdraw(u) must not revert.
+    /// After a deposit, withdraw(a, u, u) for 0 < a <= maxWithdraw(u) must not revert: the drawn amount, then
+    /// maxWithdraw(u).
     function test_sf_maxWithdraw_honored(uint256 who, uint256 deposited, uint256 amount) public {
         address u = _user(who);
         _holdShares(u, deposited);
         uint256 max = _read(abi.encodeCall(ISfVault.maxWithdraw, (u)));
         _discardIfZero(max);
         uint256 a = bound(amount, 1, max);
-        (bool ok, bytes memory ret) = _callVault(u, abi.encodeCall(ISfVault.withdraw, (a, u, u)));
-        if (ok) return;
+        (bool ok, bytes memory ret) = _callVaultThenRestore(u, abi.encodeCall(ISfVault.withdraw, (a, u, u)));
+        if (ok) {
+            if (a < max) _requireBound(u, abi.encodeCall(ISfVault.withdraw, (max, u, u)), 0, "withdraw", max, "maxWithdraw", max);
+            return;
+        }
         if (a < max) _discardIfAcceptedAt(u, abi.encodeCall(ISfVault.withdraw, (max, u, u)), 0);
         _failMax(ret, "withdraw", a, "maxWithdraw", max);
     }
 
-    /// After a deposit, redeem(s, u, u) for 0 < s <= maxRedeem(u) with previewRedeem(s) > 0 must not revert.
+    /// After a deposit, redeem(s, u, u) for 0 < s <= maxRedeem(u) with previewRedeem(s) > 0 must not revert: the
+    /// drawn amount, then maxRedeem(u).
     function test_sf_maxRedeem_honored(uint256 who, uint256 deposited, uint256 shares) public {
         address u = _user(who);
         _holdShares(u, deposited);
@@ -275,8 +292,13 @@ contract SpecfirstMaxHonored is Test {
         _discardIfZero(max);
         uint256 s = bound(shares, 1, max);
         vm.assume(_read(abi.encodeCall(ISfVault.previewRedeem, (s))) > 0);
-        (bool ok, bytes memory ret) = _callVault(u, abi.encodeCall(ISfVault.redeem, (s, u, u)));
-        if (ok) return;
+        (bool ok, bytes memory ret) = _callVaultThenRestore(u, abi.encodeCall(ISfVault.redeem, (s, u, u)));
+        if (ok) {
+            if (s < max && _quotes(abi.encodeCall(ISfVault.previewRedeem, (max)), type(uint256).max)) {
+                _requireBound(u, abi.encodeCall(ISfVault.redeem, (max, u, u)), 0, "redeem", max, "maxRedeem", max);
+            }
+            return;
+        }
         if (s < max) _discardIfAcceptedAt(u, abi.encodeCall(ISfVault.redeem, (max, u, u)), 0);
         _failMax(ret, "redeem", s, "maxRedeem", max);
     }
@@ -288,6 +310,41 @@ contract SpecfirstMaxHonored is Test {
         vm.prank(u);
         (ok, ret) = vault.call(data);
         if (!ok) _discardIfPrecompile(u, data, false);
+    }
+
+    /// _callVault in a snapshot, so whatever the call did is undone and the bound can be tried from the same state.
+    function _callVaultThenRestore(address u, bytes memory data) internal returns (bool ok, bytes memory ret) {
+        uint256 snap = vm.snapshotState();
+        (ok, ret) = _callVault(u, data);
+        vm.revertToStateAndDelete(snap);
+    }
+
+    /// The drawn amount went through. EIP-4626 speaks of the max itself, and a window of a few basis points
+    /// below it (a withdrawal fee that maxWithdraw ignores, as on sLVMON) is rarely drawn, so the action at the
+    /// bound runs too: from the state the drawn one started in, inside a snapshot, funded the same way. A revert
+    /// there fails the property with the bound as the amount; a revert that reached a missing precompile is not
+    /// judged (_callVault). The bound is tried only where the property's own premise holds (the preview quotes
+    /// more than 0, and for mint no more than twice the cap) and the funding can be given.
+    function _requireBound(address u, bytes memory atBound, uint256 funding, string memory action, uint256 amount, string memory maxName, uint256 max) internal {
+        uint256 snap = vm.snapshotState();
+        bool ok = true;
+        bytes memory ret;
+        if (funding == 0 || _tryFund(u, funding)) (ok, ret) = _callVault(u, atBound);
+        vm.revertToStateAndDelete(snap);
+        if (!ok) _failMax(ret, action, amount, maxName, max);
+    }
+
+    /// mint at the bound `hi`, funded like the drawn mint from what previewMint(hi) quotes.
+    function _requireMintBound(address u, uint256 hi, uint256 max) internal {
+        (bool quoted, uint256 need) = _tryRead(abi.encodeCall(ISfVault.previewMint, (hi)));
+        if (!quoted || need == 0 || need > 2 * cap) return;
+        _requireBound(u, abi.encodeCall(ISfVault.mint, (hi, u)), _mintFunding(need), "mint", hi, "maxMint", max);
+    }
+
+    /// True when the preview call answers more than 0 and at most `limit`.
+    function _quotes(bytes memory preview, uint256 limit) internal view returns (bool) {
+        (bool quoted, uint256 v) = _tryRead(preview);
+        return quoted && v > 0 && v <= limit;
     }
 
     /// Discards the input when the reverted call reached a missing precompile (SfForkGaps.precompileCause),

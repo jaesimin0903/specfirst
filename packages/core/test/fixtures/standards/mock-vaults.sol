@@ -73,7 +73,7 @@ abstract contract VaultBase {
     function maxRedeem(address o) public view virtual returns (uint256) { return balanceOf[o]; }
     function previewDeposit(uint256 a) public pure returns (uint256) { return a; }
     function previewMint(uint256 s) public pure returns (uint256) { return s; }
-    function previewWithdraw(uint256 a) public pure returns (uint256) { return a; }
+    function previewWithdraw(uint256 a) public pure virtual returns (uint256) { return a; }
     function previewRedeem(uint256 s) public pure returns (uint256) { return s; }
 
     function deposit(uint256 a, address r) public virtual returns (uint256 s) {
@@ -592,5 +592,19 @@ contract EpochGuardVault is VaultBase {
         (uint64 epoch,) = abi.decode(ret, (uint64, bool));
         if (epoch < 500) revert InvalidEpoch();
         return super.deposit(a, r);
+    }
+}
+
+/// sLVMON shape (2026-10-07): previewWithdraw and withdraw charge a 5 bps fee in shares (rounded down, so balances
+/// under 2,000 units pay none), maxWithdraw ignores it. withdraw(maxWithdraw) reverts for any larger balance, while
+/// every amount below the last 0.05% goes through. Only sf-maxWithdraw-honored can see it, and drawn amounts reach
+/// that window by luck: the bound itself has to be tried.
+contract WithdrawFeeVault is VaultBase {
+    function previewWithdraw(uint256 a) public pure override returns (uint256) { return a + a / 2000; }
+
+    function withdraw(uint256 a, address r, address o) public override returns (uint256 s) {
+        s = previewWithdraw(a);
+        _spend(o, s);
+        IERC20Min(asset()).transfer(r, a);
     }
 }
