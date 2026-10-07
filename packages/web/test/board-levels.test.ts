@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { ERC4626_CHECK_PROPERTIES, ERC4626_PROPERTY_LEVELS } from '@specfirst/core';
 import { classifyFailure, failureLevelOf, idsOfBitmap, isRoundingSized, PROPERTY_IDS, propertyLevel, roundTripDifference, SHOULD_PROPERTIES } from '../lib/board/levels';
-import { describeFailure, percentOf, verdictSentence, vaultLabel } from '../lib/board/reasons';
+import { describeFailure, percentOf, verdictSentence, vaultLabel, WITHDRAW_REDEEM_NOTE } from '../lib/board/reasons';
 import { checkBadgeOf } from '../lib/desk/checkBadge';
 import type { AttestationRecord } from '../lib/board/types';
 
@@ -35,15 +35,30 @@ describe('the level table', () => {
 });
 
 describe('the class of one failure', () => {
-  it("withdraw and redeem: an allowance or access-control assertion is a SHOULD, any other assertion a MUST", () => {
-    expect(classifyFailure({ id: 'withdraw', reason: 'access control' })).toEqual({ level: 'should', topic: 'allowance' });
-    expect(classifyFailure({ id: 'redeem', reason: 'allowance: 5000 !~= 0 (max delta: 0, real delta: 5000)' })).toEqual({ level: 'should', topic: 'allowance' });
+  it('withdraw and redeem are MUSTs whatever their reason says: a vault can make its own revert read "access control"', () => {
+    expect(classifyFailure({ id: 'withdraw', reason: 'access control' })).toEqual({ level: 'must', topic: 'must' });
+    expect(classifyFailure({ id: 'redeem', reason: 'allowance: 5000 !~= 0 (max delta: 0, real delta: 5000)' })).toEqual({ level: 'must', topic: 'must' });
     expect(classifyFailure({ id: 'withdraw', reason: 'share: 7000 !~= 6000 (max delta: 0, real delta: 1000)' })).toEqual({ level: 'must', topic: 'must' });
     expect(classifyFailure({ id: 'redeem', reason: 'asset: 1 !~= 2 (max delta: 0, real delta: 1)' })).toEqual({ level: 'must', topic: 'must' });
     expect(classifyFailure({ id: 'withdraw' })).toEqual({ level: 'must', topic: 'must' });
     // The label only counts for withdraw and redeem.
     expect(classifyFailure({ id: 'deposit', reason: 'access control' })).toEqual({ level: 'must', topic: 'must' });
     expect(classifyFailure({ id: 'withdraw-zero-allowance', reason: 'assertion failed' })).toEqual({ level: 'should', topic: 'allowance' });
+    expect(describeFailure('access control', { id: 'withdraw', reason: 'access control' }).rule).toBe(WITHDRAW_REDEEM_NOTE);
+    expect(WITHDRAW_REDEEM_NOTE).toMatch(/withdraw-zero-allowance and redeem-zero-allowance, which are SHOULDs/);
+  });
+
+  it("a pair the vault writes with console.log can only make a round trip stricter: every pair must be small", () => {
+    const real = ['Error: a <=~ b not satisfied [uint]', '   Value a: 5000000', '   Value b: 1000000', ' Max Delta: 0', '     Delta: 4000000'];
+    const injected = ['Value a: 1000001', 'Value b: 1000000', '     Delta: 1'];
+    for (const logs of [[...injected, ...real], [...real, ...injected]]) {
+      expect(classifyFailure({ id: 'RT-deposit-redeem', reason: real[0], counterexample: { logs } })).toEqual({ level: 'should', topic: 'round-trip', delta: '4000000', amount: '5000000' });
+    }
+    // A large injected pair next to a 1-unit assertion: not rounding either.
+    const small = ['Error: a <=~ b not satisfied [uint]', '   Value a: 1000001', '   Value b: 1000000', ' Max Delta: 0', '     Delta: 1'];
+    expect(classifyFailure({ id: 'RT-deposit-redeem', counterexample: { logs: ['Value a: 9', 'Value b: 900', ...small] } }).topic).toBe('round-trip');
+    // A "Delta" line is not believed: the difference comes from the pair.
+    expect(classifyFailure({ id: 'RT-deposit-redeem', counterexample: { logs: ['Error: a <=~ b not satisfied [uint]', '   Value a: 5000000', '   Value b: 1000000', '     Delta: 1'] } })).toMatchObject({ topic: 'round-trip', delta: '4000000' });
   });
 
   it('a round trip is rounding up to max(2 base units, 1 bp of the amount), more is a round trip off by more, no size is unknown', () => {
@@ -68,7 +83,8 @@ describe('the class of one failure', () => {
     expect(failureLevelOf([{ id: 'previewDeposit' }, ...TY_YIELD])).toBe('must');
     expect(failureLevelOf([rt('RT-deposit-redeem', 1_050_000, 1_000_000, 50_000)])).toBe('should');
     expect(failureLevelOf([{ id: 'RT-redeem-mint' }])).toBe('should'); // no size: not shown as rounding
-    expect(failureLevelOf([{ id: 'withdraw', reason: 'access control' }])).toBe('should');
+    expect(failureLevelOf([{ id: 'withdraw', reason: 'access control' }])).toBe('must');
+    expect(failureLevelOf([{ id: 'withdraw-zero-allowance' }])).toBe('should');
     expect(failureLevelOf([])).toBeNull();
   });
 
@@ -111,11 +127,12 @@ describe('verdict and labels', () => {
     expect(percentOf('5', '100')).toBe('5%');
   });
 
-  it('an allowance SHOULD says what went through, whether in the zero-allowance property or inside withdraw', () => {
-    expect(verdictSentence('mismatch', SUMMARY(2), '5', [{ id: 'withdraw', reason: 'access control' }, TY_YIELD[0]!])).toBe(
-      "2 of 30 properties failed at block 5, all of them EIP-4626 SHOULD sentences: 1 withdraw or redeem for an owner went through without the owner's allowance or without spending it, which the vault SHOULD check; a round trip favors the caller by a rounding difference. No MUST sentence failed.",
+  it('an allowance SHOULD (the zero-allowance properties) says what went through', () => {
+    expect(verdictSentence('mismatch', SUMMARY(2), '5', [{ id: 'withdraw-zero-allowance' }, TY_YIELD[0]!])).toBe(
+      "2 of 30 properties failed at block 5, all of them EIP-4626 SHOULD sentences: 1 withdraw or redeem for an owner went through without the owner's allowance, which the vault SHOULD check; a round trip favors the caller by a rounding difference. No MUST sentence failed.",
     );
-    expect(describeFailure('access control', { id: 'withdraw', reason: 'access control' }).rule).toMatch(/SHOULD check that the caller may spend the owner's shares/);
+    expect(verdictSentence('mismatch', SUMMARY(1), '5', [{ id: 'withdraw', reason: 'access control' }])).toMatch(/contradicts an EIP-4626 MUST sentence/);
+    expect(describeFailure('assertion failed', { id: 'redeem-zero-allowance' }).rule).toMatch(/SHOULD check that the caller may spend the owner's shares/);
     expect(describeFailure(undefined, { id: 'previewDeposit' }).rule).toBeNull();
   });
 });

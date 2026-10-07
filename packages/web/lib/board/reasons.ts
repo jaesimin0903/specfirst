@@ -85,6 +85,13 @@ export function percentOf(delta: string, amount: string): string {
   return `${whole}${frac ? `.${frac}` : ''}%`;
 }
 
+/**
+ * Under a failed withdraw or redeem: why it counts as a MUST even when its reason names allowance or access control,
+ * and where an allowance-only problem shows instead.
+ */
+export const WITHDRAW_REDEEM_NOTE =
+  'A withdraw or redeem failure counts as a MUST whatever its reason says, since the reason text can come from the vault. A vault that only skips the allowance check shows up in withdraw-zero-allowance and redeem-zero-allowance, which are SHOULDs.';
+
 /** The rule a failed SHOULD goes against, by its class; null for a MUST (its rule comes from the failure itself). */
 export function shouldRule(c: FailureClass): string | null {
   switch (c.topic) {
@@ -186,13 +193,15 @@ export function describeFailure(reason: string | undefined, failure?: FailureLik
     return { finding: `${f.maxName} was ${groupDigits(f.max)}, but ${f.action}(${groupDigits(f.amount)}) reverted ${how}.`, rule: eipSentence(f.maxName) || null };
   }
   const c = failure ? classifyFailure({ ...failure, reason: failure.reason ?? reason }) : null;
+  const rule = c ? shouldRule(c) : null;
+  const note = failure && (failure.id === 'withdraw' || failure.id === 'redeem') ? WITHDRAW_REDEEM_NOTE : null;
   const d = roundTripDifference(failure?.counterexample?.logs);
   const finding = d
     ? `Forge found a counterexample: the round trip ended ${groupDigits(d.delta.toString())} base ${d.delta === 1n ? 'unit' : 'units'} in the caller's favor (${groupDigits(d.a.toString())} against ${groupDigits(d.b.toString())}).`
     : reason
       ? `Forge found a counterexample: ${reason}`
       : 'Forge found a counterexample.';
-  return { finding, rule: c ? shouldRule(c) : null };
+  return { finding, rule: rule ?? note };
 }
 
 /** One or two sentences on what a failed property found. */
@@ -396,7 +405,7 @@ export function verdictSentence(status: VaultStatus, summary: StatusCounts, bloc
         const parts: string[] = [];
         const allowance = of('allowance');
         if (allowance.length > 0) {
-          parts.push(`${plural(allowance.length, 'withdraw or redeem', 'withdraws or redeems')} for an owner went through without the owner's allowance or without spending it, which the vault SHOULD check`);
+          parts.push(`${plural(allowance.length, 'withdraw or redeem', 'withdraws or redeems')} for an owner went through without the owner's allowance, which the vault SHOULD check`);
         }
         const large = of('round-trip').filter((c) => c.delta);
         if (large.length > 0) {

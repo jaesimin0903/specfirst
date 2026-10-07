@@ -73,19 +73,21 @@ export const LEVEL_LABEL: Readonly<Record<PropertyLevel, string>> = { must: 'EIP
 /**
  * What one failure is about, which can be more than its property id says.
  * must: a MUST sentence failed.
- * allowance: a SHOULD about allowance: the zero-allowance properties, and the "allowance" and "access control"
- * assertions inside upstream prop_withdraw and prop_redeem, which test_withdraw and test_redeem reach with a fuzzed
- * allowance (a vault that skips the check fails them).
- * rounding: a round trip off by at most max(2 base units, 1 bp of the amount): rounding in the caller's favor.
- * round-trip: a round trip off by more than that, or by an amount the report does not give; a SHOULD, but not
- * shown as rounding, since a large difference is a broken conversion rather than rounding.
+ * allowance: a SHOULD about allowance, the zero-allowance properties. withdraw and redeem failures are MUSTs whatever
+ * their reason says, even when an allowance assertion failed: the reason text can come from the vault itself (a view
+ * that reverts with "access control"), and a label the vault can steer must never soften the verdict. A vault that
+ * only skips the allowance check is told apart by the zero-allowance properties.
+ * rounding: a round trip whose every logged pair of values is within max(2 base units, 1 bp of the amount):
+ * rounding in the caller's favor.
+ * round-trip: a round trip off by more than that in any pair, or by an amount the report does not give; a SHOULD,
+ * but not shown as rounding, since a large difference is a broken conversion rather than rounding.
  */
 export type FailureTopic = 'must' | 'allowance' | 'rounding' | 'round-trip';
 
 export interface FailureClass {
   level: PropertyLevel;
   topic: FailureTopic;
-  /** For a round trip whose difference the report carries: base units in the caller's favor, and the amount compared. */
+  /** For a round trip whose logs carry values: the largest difference in base units, and the amount of that pair. */
   delta?: string;
   amount?: string;
 }
@@ -100,26 +102,43 @@ export interface FailureLike {
   amount?: string;
 }
 
-/** forge-std's message for prop_withdraw and prop_redeem's allowance checks: "allowance: 5 !~= 3 (...)", "access control". */
-const ALLOWANCE_ASSERTION = /^(?:allowance: |access control(?:$|;))/;
 const ROUND_TRIP_ERROR = /^Error: a [<>]=~ b not satisfied/;
-const LOG_VALUE = /^\s*(Value a|Value b|Delta):\s*(\d+)\s*$/;
+const LOG_VALUE = /^\s*(Value a|Value b):\s*(\d+)\s*$/;
+
+export interface ValuePair {
+  a: bigint;
+  b: bigint;
+  /** |a - b|, computed here: a "Delta" line in the logs is not read, the vault could have written it. */
+  delta: bigint;
+}
 
 /**
- * The difference of a failed round trip from upstream's assertApproxLeAbs / assertApproxGeAbs log lines ("Value a",
- * "Value b", "Delta"); null when the logs do not carry them.
+ * Every "Value a" / "Value b" pair in a failed round trip's logs, in order: upstream's assertApproxLeAbs and
+ * assertApproxGeAbs write one, and a vault's own console.log lines may add others. Empty when the logs carry no
+ * assertion error or no complete pair.
  */
-export function roundTripDifference(logs: ReadonlyArray<string> | undefined): { a: bigint; b: bigint; delta: bigint } | null {
-  if (!logs || !logs.some((l) => ROUND_TRIP_ERROR.test(l))) return null;
-  const v: Record<string, bigint> = {};
+export function valuePairs(logs: ReadonlyArray<string> | undefined): ValuePair[] {
+  if (!logs || !logs.some((l) => ROUND_TRIP_ERROR.test(l))) return [];
+  const pairs: ValuePair[] = [];
+  let a: bigint | null = null;
   for (const l of logs) {
     const m = LOG_VALUE.exec(l);
-    if (m && v[m[1]!] === undefined) v[m[1]!] = BigInt(m[2]!);
+    if (!m) continue;
+    const v = BigInt(m[2]!);
+    if (m[1] === 'Value a') a = v;
+    else if (a !== null) {
+      pairs.push({ a, b: v, delta: a > v ? a - v : v - a });
+      a = null;
+    }
   }
-  if (v['Value a'] === undefined || v['Value b'] === undefined) return null;
-  const a = v['Value a'];
-  const b = v['Value b'];
-  return { a, b, delta: v.Delta ?? (a > b ? a - b : b - a) };
+  return pairs;
+}
+
+/** The pair with the largest difference, which is what a round trip is judged and described by; null when none. */
+export function roundTripDifference(logs: ReadonlyArray<string> | undefined): ValuePair | null {
+  let best: ValuePair | null = null;
+  for (const p of valuePairs(logs)) if (!best || p.delta > best.delta) best = p;
+  return best;
 }
 
 /** At most max(2 base units, 1 bp of the larger amount). */
@@ -129,18 +148,21 @@ export function isRoundingSized(d: { a: bigint; b: bigint; delta: bigint }): boo
   return d.delta <= (bp > 2n ? bp : 2n);
 }
 
-/** The class of one failed property, from its id, its reason and forge's logs. */
+/**
+ * The class of one failed property, from its id and, for a round trip, forge's logs. A round trip is rounding only
+ * when every pair of values in its logs is within the bound, so pairs a vault injects can only make it stricter.
+ */
 export function classifyFailure(f: FailureLike): FailureClass {
   if (f.topic) return { level: f.topic === 'must' ? 'must' : 'should', topic: f.topic, ...(f.delta ? { delta: f.delta } : {}), ...(f.amount ? { amount: f.amount } : {}) };
   const should = SHOULD_PROPERTIES[f.id];
   if (should === 'allowance') return { level: 'should', topic: 'allowance' };
   if (should === 'rounding') {
+    const pairs = valuePairs(f.counterexample?.logs);
     const d = roundTripDifference(f.counterexample?.logs);
     if (!d) return { level: 'should', topic: 'round-trip' };
     const amount = (d.a > d.b ? d.a : d.b).toString();
-    return { level: 'should', topic: isRoundingSized(d) ? 'rounding' : 'round-trip', delta: d.delta.toString(), amount };
+    return { level: 'should', topic: pairs.every(isRoundingSized) ? 'rounding' : 'round-trip', delta: d.delta.toString(), amount };
   }
-  if ((f.id === 'withdraw' || f.id === 'redeem') && ALLOWANCE_ASSERTION.test(f.reason ?? '')) return { level: 'should', topic: 'allowance' };
   return { level: 'must', topic: 'must' };
 }
 

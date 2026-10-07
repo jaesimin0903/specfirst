@@ -138,10 +138,11 @@ export default function AboutPage() {
           a SHOULD but keeps the spec mismatch chip and says by how much: that is a conversion that is wrong, not rounding.
         </p>
         <p>
-          Withdraw and redeem only SHOULD check that the caller may spend the owner&apos;s shares. So the two zero-allowance properties are SHOULDs,
-          and so is a withdraw or redeem property that failed on its allowance or access-control assertion; any other assertion of those properties,
-          such as the shares burned or the assets paid, is a MUST. Allowance failures keep the spec mismatch chip, because the sentence names what went
-          through. Every failure is shown with its level, and any failed MUST makes the vault a spec mismatch.
+          Withdraw and redeem only SHOULD check that the caller may spend the owner&apos;s shares, so the two zero-allowance properties are
+          SHOULDs. A failure of the withdraw or redeem property itself counts as a MUST whatever its reason says, because the reason text can come from
+          the vault; a vault that only skips the allowance check shows up in the zero-allowance properties. A round trip is judged by every pair of
+          values in its logs, so values a vault writes there can only make the verdict stricter. Allowance failures keep the spec mismatch chip,
+          because the sentence names what went through. Every failure is shown with its level, and any failed MUST makes the vault a spec mismatch.
         </p>
 
         <h2>Onchain attestations</h2>

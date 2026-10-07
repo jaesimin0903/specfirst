@@ -21,6 +21,8 @@ const REDEEM_ALLOWANCE = '0x1000000000000000000000000000000000000002';
 const WITHDRAW_SHARE = '0x1000000000000000000000000000000000000003';
 const RT_LARGE = '0x1000000000000000000000000000000000000004';
 const RT_UNKNOWN = '0x1000000000000000000000000000000000000005';
+const RT_INJECTED = '0x1000000000000000000000000000000000000006';
+const ZERO_ALLOWANCE = '0x1000000000000000000000000000000000000007';
 
 let board: BoardData;
 let details: VaultDetail[];
@@ -65,20 +67,34 @@ describe('vault pages, one per case', () => {
     expect(within(failedRegion()).getByText('EIP-4626 SHOULD')).toBeInTheDocument();
   });
 
-  it('withdraw failing its "access control" assertion is a SHOULD, not a MUST', () => {
+  it('withdraw with reason "access control", as a reverting vault view leaves it: a MUST, with the note on where allowance shows', () => {
     render(<VaultView detail={detailOf(WITHDRAW_ACCESS)} />);
     expect(within(head()).getByText('Spec mismatch')).toBeInTheDocument();
-    expect(within(head()).getByText(/all of them EIP-4626 SHOULD sentences: 1 withdraw or redeem for an owner went through without the owner's allowance or without spending it, which the vault SHOULD check\. No MUST sentence failed\./)).toBeInTheDocument();
-    expect(within(failedRegion()).getByText('EIP-4626 SHOULD')).toBeInTheDocument();
-    expect(within(failedRegion()).getByText(/withdraw and redeem SHOULD check that the caller may spend the owner's shares/)).toBeInTheDocument();
+    expect(within(head()).getByText("1 of 30 properties failed at block 109,195,820. The vault's behavior contradicts an EIP-4626 MUST sentence.")).toBeInTheDocument();
+    expect(within(failedRegion()).getByText('EIP-4626 MUST')).toBeInTheDocument();
+    expect(within(failedRegion()).getByText(/counts as a MUST whatever its reason says, since the reason text can come from the vault\. A vault that only skips the allowance check shows up in withdraw-zero-allowance and redeem-zero-allowance, which are SHOULDs/)).toBeInTheDocument();
     const row = document.getElementById('p-withdraw')!;
-    expect(within(row).getByText('EIP-4626 SHOULD')).toBeInTheDocument();
+    expect(within(row).getByText('EIP-4626 MUST')).toBeInTheDocument();
+    expect(within(row).getByText(/shows up in withdraw-zero-allowance and redeem-zero-allowance/)).toBeInTheDocument();
   });
 
-  it('redeem failing its "allowance" assertion is a SHOULD too', () => {
+  it('redeem with an "allowance" assertion reason is a MUST as well', () => {
     render(<VaultView detail={detailOf(REDEEM_ALLOWANCE)} />);
-    expect(within(head()).getByText(/No MUST sentence failed\./)).toBeInTheDocument();
+    expect(within(head()).getByText(/contradicts an EIP-4626 MUST sentence/)).toBeInTheDocument();
+    expect(within(failedRegion()).getByText('EIP-4626 MUST')).toBeInTheDocument();
+  });
+
+  it('a vault that only skips the allowance check: withdraw-zero-allowance fails, a SHOULD', () => {
+    render(<VaultView detail={detailOf(ZERO_ALLOWANCE)} />);
+    expect(within(head()).getByText(/1 withdraw or redeem for an owner went through without the owner's allowance, which the vault SHOULD check\. No MUST sentence failed\./)).toBeInTheDocument();
     expect(within(failedRegion()).getByText('EIP-4626 SHOULD')).toBeInTheDocument();
+  });
+
+  it('a 1-unit pair the vault wrote with console.log does not make a 4,000,000 round trip rounding', () => {
+    render(<VaultView detail={detailOf(RT_INJECTED)} />);
+    expect(within(head()).getByText('Spec mismatch')).toBeInTheDocument();
+    expect(within(head()).getByText(/a round trip favors the caller by 4,000,000 base units, 80% of the amount, more than rounding/)).toBeInTheDocument();
+    expect(within(failedRegion()).getByText(/the round trip ended 4,000,000 base units in the caller's favor \(5,000,000 against 1,000,000\)/)).toBeInTheDocument();
   });
 
   it('withdraw failing its "share" assertion stays a MUST', () => {
@@ -107,7 +123,7 @@ describe('the board and the API', () => {
     render(<BoardExplorer rows={board.vaults.map(toExplorerRow)} protocols={[]} split={26} />);
     const rows = screen.getAllByRole('row');
     expect(rows.filter((r) => within(r).queryByText('Rounding favors caller'))).toHaveLength(1);
-    expect(screen.getByRole('button', { name: /Spec mismatch/ })).toHaveTextContent('Spec mismatch 7 (1 only rounding)');
+    expect(screen.getByRole('button', { name: /Spec mismatch/ })).toHaveTextContent('Spec mismatch 9 (1 only rounding)');
   });
 
   it('the figures and the findings count and label the same way', () => {
@@ -119,15 +135,16 @@ describe('the board and the API', () => {
     );
     expect(screen.getByText(/1 of them only round trips, a SHOULD/)).toBeInTheDocument();
     const findings = screen.getByRole('region', { name: 'Where vaults disagree with EIP-4626' });
-    // 3 + 1 round trips (tyYIELD, MUST_AND_RT), access control, allowance, the two other round trips: 8 SHOULD; previewDeposit and share: 2 MUST.
+    // SHOULD: 3 + 1 round trips (tyYIELD, MUST_AND_RT), the large, unknown and injected round trips, withdraw-zero-allowance.
+    // MUST: previewDeposit and the three withdraw or redeem failures.
     expect(within(findings).getAllByText('EIP-4626 SHOULD')).toHaveLength(8);
-    expect(within(findings).getAllByText('EIP-4626 MUST')).toHaveLength(2);
+    expect(within(findings).getAllByText('EIP-4626 MUST')).toHaveLength(4);
   });
 
   it('the vault API keeps badge.state and adds the levels', () => {
     const live = { kind: 'none' as const };
     const api = buildVaultApi({ resolved: { chainId: 143, address: WITHDRAW_ACCESS, detail: detailOf(WITHDRAW_ACCESS), source: 'board' } as never, live, origin: 'https://x' });
-    expect(api.report?.failed).toEqual([expect.objectContaining({ id: 'withdraw', level: 'should' })]);
+    expect(api.report?.failed).toEqual([expect.objectContaining({ id: 'withdraw', level: 'must' })]);
     expect(api.badge).toMatchObject({ state: 'not-attested', level: null });
     const must = buildVaultApi({ resolved: { chainId: 143, address: WITHDRAW_SHARE, detail: detailOf(WITHDRAW_SHARE), source: 'board' } as never, live, origin: 'https://x' });
     expect(must.report?.failed).toEqual([expect.objectContaining({ id: 'withdraw', level: 'must' })]);
