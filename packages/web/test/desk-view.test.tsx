@@ -4,6 +4,8 @@ import { computeProgress } from '../lib/desk/stages';
 import type { DeskViewJson, RequestViewJson, ResultJson } from '../lib/desk/types';
 import { Timeline } from '../components/desk/Timeline';
 import { ResultCard } from '../components/desk/ResultCard';
+import { PrecheckCard } from '../components/desk/PrecheckCard';
+import type { PrecheckResult } from '../lib/desk/precheck';
 import { DeskView } from '../components/desk/DeskView';
 import { RecentRequests } from '../components/desk/RecentRequests';
 
@@ -120,6 +122,49 @@ describe('ResultCard', () => {
     render(<ResultCard result={result} origin="https://specfirst.test" />);
     expect(screen.getByText(`[![Specfirst ERC-4626 check](https://specfirst.test${result.badgePath})](https://specfirst.test${result.vaultPath})`)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Attest tx/ })).toHaveAttribute('href', `https://testnet.monadscan.com/tx/0x${'a1'.repeat(32)}`);
+  });
+
+  it('a MUST failure keeps the spec mismatch chip and sentence', () => {
+    render(<ResultCard result={result} origin="https://specfirst.test" />);
+    expect(screen.getByText('Spec mismatch')).toBeInTheDocument();
+    expect(screen.getByText(/contradicts an EIP-4626 MUST sentence/)).toBeInTheDocument();
+  });
+
+  it('round trips off by a rounding difference read as the board reads them: the rounding chip and verdict', () => {
+    const rt = (id: string) => ({ id, finding: "Forge found a counterexample: the round trip ended 1 base unit in the caller's favor.", rule: null, topic: 'rounding' as const, delta: '1', amount: '1000001' });
+    const rounding: ResultJson = { ...result, summary: { pass: 27, fail: 3, inconclusive: 0, notApplicable: 0 }, failed: [rt('RT-redeem-deposit'), rt('RT-redeem-mint'), rt('RT-withdraw-deposit')] };
+    render(<ResultCard result={rounding} origin="https://specfirst.test" />);
+    expect(screen.getByText('Rounding favors caller')).toBeInTheDocument();
+    expect(screen.queryByText('Spec mismatch')).toBeNull();
+    expect(
+      screen.getByText(
+        "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 109,400,000, by at most 1 base unit, <0.01% of the amount; no MUST sentence failed.",
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('PrecheckCard', () => {
+  it('a vault whose only failures are rounding-sized round trips: the rounding label and mark, as on the board', () => {
+    const p: PrecheckResult = {
+      input: UPSHIFT,
+      chainId: 143,
+      address: UPSHIFT,
+      ok: true,
+      contract: null,
+      onBoard: true,
+      latestReport: { status: 'mismatch', summary: { pass: 27, fail: 3, inconclusive: 0, notApplicable: 0 }, blockNumber: '109195820', startedAt: '', source: 'board', failureLevel: 'rounding' },
+      attestation: null,
+      pending: [],
+      blockers: [],
+      notes: [],
+    };
+    const { container, rerender } = render(<PrecheckCard p={p} />);
+    expect(screen.getByRole('link', { name: 'Rounding favors caller' })).toHaveAttribute('href', `/v/143/${UPSHIFT.toLowerCase()}`);
+    expect(container.querySelector('.sb-glyph rect.s')).not.toBeNull();
+    rerender(<PrecheckCard p={{ ...p, latestReport: { ...p.latestReport!, failureLevel: 'must' } }} />);
+    expect(screen.getByRole('link', { name: 'Spec mismatch' })).toBeInTheDocument();
+    expect(container.querySelector('.sb-glyph rect.f')).not.toBeNull();
   });
 });
 

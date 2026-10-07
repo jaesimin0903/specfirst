@@ -9,7 +9,7 @@ import { displayWatchDir, isChainId, watchFile } from './paths';
 import { readFeed, readStatus, readVaults, watchedChains } from './read';
 import { reportCandidate, reportInfo } from './reports';
 import type { FeedEventJson, FeedPageJson, VaultWatchJson, WatchStatusJson } from './types';
-import { checksum, countFound, eventJson, foundOf, indexFeed, labelFor, NO_REPORT, pageOf, sourceText, statusJson, type LabelContext } from './view';
+import { checksum, countFound, eventJson, foundOf, indexFeed, labelFor, NO_REPORT, pageOf, reportBefore, sourceText, statusJson, type LabelContext } from './view';
 
 /*
  * Server-side assembly of what the watch pages and API routes return. Files are read at request time (the feed
@@ -74,8 +74,12 @@ export async function feedEventsJson(events: readonly FeedEvent[], chainId: numb
   return Promise.all(
     events.map(async (e) => {
       const a = e.subject.toLowerCase();
-      const report = e.check ? await reportInfo(e.check, { chainId: e.chainId, address: e.subject }) : NO_REPORT;
-      return eventJson(e, ctx, report, foundOf(vaults.vaults[a], firstDetected.get(a)));
+      const subject = { chainId: e.chainId, address: e.subject };
+      const report = e.check ? await reportInfo(e.check, subject) : NO_REPORT;
+      // The report the change is against, trusted only when it hashes to what the watcher recorded.
+      const prior = reportBefore(e);
+      const before = prior ? await reportInfo(prior, subject) : NO_REPORT;
+      return eventJson(e, ctx, report, foundOf(vaults.vaults[a], firstDetected.get(a)), before);
     }),
   );
 }

@@ -1,5 +1,5 @@
 import { describeFailure } from '../board/reasons';
-import { metaFor } from '../board/aggregate';
+import { failedPropertiesOf, metaFor } from '../board/aggregate';
 import { loadVaultDetail } from '../board/load';
 import { reproduceCommand } from '../board/reproduce';
 import type { VaultDetail } from '../board/types';
@@ -145,11 +145,21 @@ async function resultOf(r: DeskRequest, worker: WorkerSnapshot, reader: Contract
   const attestation = await memo(`att-id:${registry}:${r.attestationId}`, 60_000, () => readAttestationById(reader, registry, r.attestationId, txs)).catch(() => null);
   const reports = await vaultReports(r.subjectChainId, r.subject);
   let candidate = attestation ? reports.find((c) => c.reportHash.toLowerCase() === attestation.reportHash.toLowerCase()) : undefined;
+  // Named by the registry's attestation, or by the desk worker when no attestation says otherwise; the latest report
+  // is a fallback.
+  let named = candidate !== undefined;
   const w = worker.requests.get(r.id.toString());
-  if (!candidate && w?.reportPath) candidate = (await reportAtPath(w.reportPath, repoRoot())) ?? undefined;
+  if (!candidate && w?.reportPath) {
+    const own = await reportAtPath(w.reportPath, repoRoot());
+    if (own && own.report.chainId === r.subjectChainId && own.report.address.toLowerCase() === r.subject.toLowerCase()) {
+      candidate = own;
+      named = !attestation || own.reportHash.toLowerCase() === attestation.reportHash.toLowerCase();
+    }
+  }
   const built = loadVaultDetail(String(r.subjectChainId), r.subject.toLowerCase());
   if (!candidate && built && attestation && built.reportHash.toLowerCase() === attestation.reportHash.toLowerCase()) {
     candidate = { report: built.report, file: built.row.reportPath.replace(/^\/reports\//, ''), reportHash: built.reportHash, suiteHash: built.suiteHash };
+    named = true;
   }
   candidate ??= reports[0];
   if (!candidate) return null;
@@ -162,6 +172,10 @@ async function resultOf(r: DeskRequest, worker: WorkerSnapshot, reader: Contract
       : detailFromRuntime(candidate, cachedBoard(), vaultMeta(), viewOfLive(live, candidate, at), registryReadOf(live, at));
   const results = detail.report.results;
   const split = results.filter((x) => !x.id.startsWith('sf-')).length;
+  // Levels are read from the logs, as the board reads them, only on a report the registry, the desk worker or the
+  // board names; on the fallback only the ids count, and they never read as rounding.
+  const failures = results.filter((x) => x.status === 'fail');
+  const classes = named || detail === built ? failedPropertiesOf(failures) : null;
   const paths = vaultPaths(r.subjectChainId, r.subject);
   const own = attestation ?? (live.kind === 'attested' ? live.record : null);
   return {
@@ -171,12 +185,11 @@ async function resultOf(r: DeskRequest, worker: WorkerSnapshot, reader: Contract
     total: results.length,
     cells: detail.row.cells,
     split,
-    failed: results
-      .filter((x) => x.status === 'fail')
-      .map((x) => {
-        const f = describeFailure(x.reason);
-        return { id: x.id, finding: f.finding, rule: f.rule };
-      }),
+    failed: failures.map((x, i) => {
+      const c = classes?.[i];
+      const f = describeFailure(x.reason, c ? { id: x.id, reason: x.reason, counterexample: x.counterexample } : undefined);
+      return { id: x.id, finding: f.finding, rule: f.rule, ...(c?.topic ? { topic: c.topic } : {}), ...(c?.delta ? { delta: c.delta, amount: c.amount } : {}) };
+    }),
     blockNumber: detail.report.blockNumber,
     startedAt: detail.report.startedAt,
     reportHash: detail.reportHash,

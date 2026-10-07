@@ -4,7 +4,8 @@ import { ERC4626_CHECK_PROPERTIES, ERC4626_PROPERTY_LEVELS } from '@specfirst/co
 import { classifyFailure, failureLevelOf, idsOfBitmap, isRoundingSized, PROPERTY_IDS, propertyLevel, roundTripDifference, SHOULD_PROPERTIES } from '../lib/board/levels';
 import { describeFailure, percentOf, verdictSentence, vaultLabel, WITHDRAW_REDEEM_NOTE } from '../lib/board/reasons';
 import { checkBadgeOf } from '../lib/desk/checkBadge';
-import type { AttestationRecord } from '../lib/board/types';
+import { failedPropertiesOf } from '../lib/board/aggregate';
+import type { AttestationRecord, ReportResultView } from '../lib/board/types';
 
 /* EIP-4626 levels on the board: the copy of core's table, each failure's class, the verdict, the label and the badge. */
 
@@ -96,6 +97,28 @@ describe('the class of one failure', () => {
   });
 });
 
+describe('what a report can steer', () => {
+  it('a class key written into a report result is not taken as given: the class comes from the id, reason and logs', () => {
+    const injected = [
+      { id: 'previewDeposit', status: 'fail', reason: 'assertion failed', topic: 'rounding', delta: '1', amount: '1000000' },
+      { ...rt('RT-deposit-redeem', 1_050_000, 1_000_000, 50_000), status: 'fail', topic: 'rounding' },
+    ] as unknown as ReportResultView[];
+    expect(failedPropertiesOf(injected).map((f) => [f.id, f.topic])).toEqual([
+      ['previewDeposit', 'must'],
+      ['RT-deposit-redeem', 'round-trip'],
+    ]);
+    expect(failureLevelOf(failedPropertiesOf(injected))).toBe('must');
+  });
+
+  it("a withdraw or redeem failure is not described from a vault's logs as a round trip", () => {
+    const logs = ['Error: a <=~ b not satisfied [uint]', '   Value a: 1000001', '   Value b: 1000000', '     Delta: 1'];
+    const d = describeFailure('share: 7000 !~= 6000 (max delta: 0, real delta: 1000)', { id: 'withdraw', counterexample: { logs } });
+    expect(d.finding).toBe('Forge found a counterexample: share: 7000 !~= 6000 (max delta: 0, real delta: 1000)');
+    expect(d.rule).toBe(WITHDRAW_REDEEM_NOTE);
+    expect(describeFailure('Error: a <=~ b not satisfied [uint]', { id: 'RT-deposit-redeem', counterexample: { logs } }).finding).toMatch(/the round trip ended 1 base unit/);
+  });
+});
+
 describe('verdict and labels', () => {
   it('a MUST failure keeps the spec mismatch sentence', () => {
     expect(verdictSentence('mismatch', SUMMARY(2), '109195820', [{ id: 'sf-maxWithdraw-honored' }, { id: 'sf-maxRedeem-honored' }])).toBe(
@@ -108,8 +131,24 @@ describe('verdict and labels', () => {
 
   it('round trips off by a rounding difference: rounding favors the caller, with the size', () => {
     expect(verdictSentence('mismatch', SUMMARY(3), '110000000', TY_YIELD)).toBe(
-      "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 110,000,000, by at most 1 base unit; no MUST sentence failed.",
+      "Rounding favors the caller: 3 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 110,000,000, by at most 1 base unit, <0.01% of the amount; no MUST sentence failed.",
     );
+    // The share is the largest any difference has of its amount; a class without the amount gives the size alone.
+    expect(verdictSentence('mismatch', SUMMARY(2), '7', [TY_YIELD[0]!, rt('RT-deposit-redeem', 1e15, 1e15 - 13_080_554, 13_080_554)])).toBe(
+      "Rounding favors the caller: 2 round-trip properties fail EIP-4626's SHOULD guidance (Security Considerations) at block 7, by at most 13,080,554 base units, <0.01% of the amount; no MUST sentence failed.",
+    );
+    expect(verdictSentence('mismatch', SUMMARY(1), '7', [rt('RT-redeem-mint', 98, 100, 2)])).toMatch(/, by at most 2 base units, at most 2% of the amount; no MUST sentence failed\.$/);
+    expect(verdictSentence('mismatch', SUMMARY(1), '7', [{ id: 'RT-redeem-mint', topic: 'rounding', delta: '1' }])).toMatch(/at block 7, by at most 1 base unit; no MUST sentence failed\.$/);
+    // Not the share of the largest difference: 2 base units of 3 are 66.67% (rounded up, as "at most" says), from the
+    // logs or from classes computed before.
+    const mixed = [rt('RT-deposit-redeem', 1e15, 1e15 - 13_080_554, 13_080_554), rt('RT-redeem-mint', 1, 3, 2)];
+    const sentence = "at block 7, by at most 13,080,554 base units, at most 66.67% of the amount; no MUST sentence failed.";
+    expect(verdictSentence('mismatch', SUMMARY(2), '7', mixed).endsWith(sentence)).toBe(true);
+    const classes = mixed.map((f) => ({ id: f.id, ...classifyFailure(f) }));
+    expect(classes.map((c) => c.topic)).toEqual(['rounding', 'rounding']);
+    expect(verdictSentence('mismatch', SUMMARY(2), '7', classes).endsWith(sentence)).toBe(true);
+    expect(percentOf('2', '3')).toBe('66.66%');
+    expect(percentOf('2', '3', true)).toBe('66.67%');
     expect(vaultLabel('mismatch', 'rounding')).toBe('Rounding favors caller');
     expect(describeFailure(TY_YIELD[0]!.reason, TY_YIELD[0]).finding).toBe("Forge found a counterexample: the round trip ended 1 base unit in the caller's favor (1,000,001 against 1,000,000).");
     expect(describeFailure(TY_YIELD[0]!.reason, TY_YIELD[0]).rule).toMatch(/rounding should favor the Vault over its users\. That is a SHOULD, not a MUST/);

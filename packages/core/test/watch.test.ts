@@ -531,7 +531,8 @@ describe('WatchStore files', () => {
       return path.relative(dir, file);
     };
     await write(reportOf(addr(1), 100n, { startedAt: '2026-10-01T00:00:00.000Z' }));
-    const newest = await write(reportOf(addr(1), 200n, { fail: ['deposit'], startedAt: '2026-10-02T00:00:00.000Z' }));
+    const newestReport = reportOf(addr(1), 200n, { fail: ['deposit'], startedAt: '2026-10-02T00:00:00.000Z' });
+    const newest = await write(newestReport);
     await write(reportOf(addr(2), 150n, { beacon: EVK_FACTORY }));
     await mkdir(path.join(dir, 'certs/checks/143', addr(3).toLowerCase()), { recursive: true });
     await writeFile(path.join(dir, 'certs/checks/143', addr(3).toLowerCase(), '5-0000000000000000.json'), '{"not":"a report"}');
@@ -546,7 +547,15 @@ describe('WatchStore files', () => {
     expect(store.vaults.vaults[addr(1).toLowerCase()]).toEqual({
       firstSeen: { source: 'backfill', block: '100', at: '2026-10-01T00:00:00.000Z' },
       deployBlock: null,
-      lastCheck: { block: '200', at: '2026-10-02T00:00:00.000Z', reportPath: newest, summary: { pass: 29, fail: 1, inconclusive: 0, notApplicable: 0 }, failed: ['deposit'], implementationKey: MORPHO.identity.implementationKey },
+      lastCheck: {
+        block: '200',
+        at: '2026-10-02T00:00:00.000Z',
+        reportPath: newest,
+        reportHash: checkReportHash(newestReport),
+        summary: { pass: 29, fail: 1, inconclusive: 0, notApplicable: 0 },
+        failed: ['deposit'],
+        implementationKey: MORPHO.identity.implementationKey,
+      },
       lastAttestationId: null,
       firstDepositBlock: null,
     });
@@ -985,6 +994,39 @@ describe('Watcher with stub effects', { timeout: 60_000 }, () => {
     expect(after[0]).toMatchObject({ reason: 'not attested [unchanged]: unchanged since attestation 0', check: { block: '2090' } });
     expect(h.registry.list).toHaveLength(1);
     expect(vault.lastCheck!.block).toBe('2090');
+  });
+
+  it("a change names the report of the vault's last check, not a superseded check with the same result", async () => {
+    const h = await harness();
+    h.chain.logs.push(factoryLog(V, 1995n));
+    h.store.state.cursor = '1991';
+    h.chain.head = 2010n;
+    const w = h.watcher({ checkRetryMs: 60_000 });
+    await w.pass();
+    const first = (await h.feed()).find((e) => e.kind === 'checked')!;
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastCheck).toMatchObject({ block: '2000', reportPath: first.check!.reportPath, reportHash: first.check!.reportHash });
+    // Another issuer attests a later block; the first-deposit re-check, with the same result, is superseded.
+    h.registry.attest({ ...attestParams(V, 2105n) });
+    let mark = (await h.feed()).length;
+    h.chain.logs.push(depositLog(V, 2050n));
+    h.chain.head = 2100n;
+    await w.pass();
+    const superseded = (await h.feed()).slice(mark).find((e) => e.kind === 'checked')!;
+    expect(superseded.reason).toMatch(/^not attested \[newer\]/);
+    expect(superseded.check).toMatchObject({ block: '2090', failed: first.check!.failed, summary: first.check!.summary });
+    expect(h.store.vaults.vaults[V.toLowerCase()]!.lastCheck!.block).toBe('2000');
+    // Then the vault regresses, confirmed by a second check: the change is against the first check's report.
+    h.chain.failing.set(V.toLowerCase(), ['previewDeposit']);
+    later(h, 60_000);
+    h.chain.head = 2200n;
+    await w.pass();
+    later(h, 2 * 60_000);
+    h.chain.head = 2300n;
+    mark = (await h.feed()).length;
+    await w.pass();
+    const changed = (await h.feed()).slice(mark).find((e) => e.kind === 'changed')!;
+    expect(changed.change).toMatchObject({ kind: 'regressed', from: { failed: [], reportPath: first.check!.reportPath, reportHash: first.check!.reportHash }, to: { failed: ['previewDeposit'] } });
+    expect(feedEventSchema.parse(JSON.parse(JSON.stringify(changed)))).toEqual(changed);
   });
 
   it('OlderThanLatest at send time (the desk attested meanwhile) is a superseded check, not a failure', async () => {

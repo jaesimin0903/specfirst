@@ -3,7 +3,7 @@ import { blockText, CHANGE_LABEL, clock, countsText, failedDiff, KIND_LABEL, pri
 import { formatDuration } from '../../lib/desk/format';
 import { shortAddress, shortHash } from '../../lib/format';
 import { VaultChip } from '../board/StatusChip';
-import { failureLevelOf } from '../../lib/board/levels';
+import { failureLevelOf, type FailureLevel } from '../../lib/board/levels';
 import { PropertyCells } from '../desk/Marks';
 
 /**
@@ -47,6 +47,14 @@ export function FeedItem({ e, showVault = true, fresh = false, note }: { e: Feed
       </div>
     </li>
   );
+}
+
+/**
+ * The level of a result's failures: the one the server read from the report's reasons and logs, as the board does,
+ * else what the failed ids alone say (a round trip without its logs is not shown as rounding).
+ */
+function levelOf(r: { failed: string[]; failureLevel?: FailureLevel | null }): FailureLevel | null {
+  return r.failureLevel ?? failureLevelOf(r.failed.map((id) => ({ id })));
 }
 
 function capitalize(s: string): string {
@@ -115,7 +123,7 @@ function CheckDetail({ e }: { e: FeedEventJson }) {
       {c && e.kind === 'checked' && (
         <>
           <div className="sw-result">
-            <VaultChip status={c.status} failure={failureLevelOf(c.failed.map((id) => ({ id })))} />
+            <VaultChip status={c.status} failure={levelOf(c)} />
             {c.cells ? <PropertyCells cells={c.cells} width={240} /> : null}
           </div>
           <p className="sw-line">
@@ -170,13 +178,13 @@ function ChangeDetail({ e }: { e: FeedEventJson }) {
       <div className="sw-result">
         {ch.from ? (
           <>
-            <VaultChip status={ch.from.status} failure={failureLevelOf(ch.from.failed.map((id) => ({ id })))} />
+            <VaultChip status={ch.from.status} failure={levelOf(ch.from)} />
             <span aria-hidden="true" className="sw-arrow">
               to
             </span>
           </>
         ) : null}
-        <VaultChip status={ch.to.status} failure={failureLevelOf(ch.to.failed.map((id) => ({ id })))} />
+        <VaultChip status={ch.to.status} failure={levelOf(ch.to)} />
       </div>
       <p className="sw-line">{ch.from ? `${countsText(ch.from.summary)} before; ${countsText(ch.to.summary)} now.` : `${countsText(ch.to.summary)}.`}</p>
       {diff.added.length > 0 && <p className="sw-line sw-err">Now failing: {diff.added.join(', ')}</p>}

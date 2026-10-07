@@ -1,6 +1,7 @@
 import { getAddress, isAddress, parseAbi } from 'viem';
 import type { CheckCandidate, VaultMetaEntry } from '../board/aggregate';
-import { vaultStatusOf } from '../board/aggregate';
+import { failedPropertiesOf, vaultStatusOf } from '../board/aggregate';
+import { failureLevelOf, type FailureLevel } from '../board/levels';
 import { formatBlock } from '../board/reasons';
 import type { VaultDetail, VaultStatus, StatusCounts } from '../board/types';
 import { describeReadError } from '../board/attestations';
@@ -56,6 +57,11 @@ export interface PrecheckReport {
   startedAt: string;
   /** board: in the prerendered board data; requested: a newer report from a paid check. */
   source: 'board' | 'requested';
+  /**
+   * lib/board/levels FailureLevel, read from the failures' logs as the board reads them when the report is the
+   * board's or the one the registry's latest attestation hashes; else from the failed ids alone. Null: none failed.
+   */
+  failureLevel: FailureLevel | null;
 }
 
 export type PrecheckAttestation =
@@ -152,9 +158,13 @@ export async function precheckVault(input: string, chainId: number, deps: Preche
   let latestReport: PrecheckReport | null = null;
   const boardNewest = board && (!latest || latest.reportHash.toLowerCase() === board.reportHash.toLowerCase() || BigInt(board.report.blockNumber) >= BigInt(latest.report.blockNumber));
   if (board && boardNewest) {
-    latestReport = { status: board.row.status, summary: board.report.summary, blockNumber: board.report.blockNumber, startedAt: board.report.startedAt, source: 'board' };
+    const failureLevel = failureLevelOf(failedPropertiesOf(board.report.results));
+    latestReport = { status: board.row.status, summary: board.report.summary, blockNumber: board.report.blockNumber, startedAt: board.report.startedAt, source: 'board', failureLevel };
   } else if (latest) {
-    latestReport = { status: vaultStatusOf(latest.report.summary), summary: latest.report.summary, blockNumber: latest.report.blockNumber, startedAt: latest.report.startedAt, source: 'requested' };
+    const failed = failedPropertiesOf(latest.report.results);
+    const attested = att.kind === 'attested' && att.record.reportHash.toLowerCase() === latest.reportHash.toLowerCase();
+    const failureLevel = failureLevelOf(attested ? failed : failed.map(({ id }) => ({ id })));
+    latestReport = { status: vaultStatusOf(latest.report.summary), summary: latest.report.summary, blockNumber: latest.report.blockNumber, startedAt: latest.report.startedAt, source: 'requested', failureLevel };
   }
   const latestHash = board && boardNewest ? board.reportHash : (latest?.reportHash ?? null);
 

@@ -1530,6 +1530,11 @@ export class Watcher {
     const outcome = outcomeOfReport(report);
     const prev: CheckOutcome | null = vault.lastCheck ? { summary: vault.lastCheck.summary, failed: vault.lastCheck.failed, implementationKey: vault.lastCheck.implementationKey } : null;
     const change = changeOf(prev, outcome);
+    // The report of the check the change is against, so a reader opens that one and not another with its result.
+    if (change?.from && vault.lastCheck) {
+      const last = vault.lastCheck;
+      change.from = { ...change.from, reportPath: last.reportPath, ...(last.reportHash ? { reportHash: last.reportHash } : {}) };
+    }
     const check = feedCheckOf(report, saved.reportPath);
     const base = { chainId: this.chainId, subject, source: entry.source, ...(entry.block ? { block: entry.block } : {}), ...(entry.txHash ? { txHash: entry.txHash } : {}) };
     const prefix = note ? `${note}; ` : '';

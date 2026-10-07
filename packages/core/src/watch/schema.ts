@@ -99,8 +99,15 @@ export type FeedCheck = z.infer<typeof feedCheckSchema>;
 export const feedAttestationSchema = z.object({ id: decimal, txHash: hex32, supersedes: decimal.nullable() }).strict();
 export type FeedAttestation = z.infer<typeof feedAttestationSchema>;
 
+/**
+ * The result a change is against, the vault's last check, with that check's report (added 2026-10-07, so a reader
+ * opens exactly that report; absent in earlier lines, and reportHash when the last check was saved before it was).
+ */
+export const previousResultSchema = watchResultSchema.extend({ reportPath: z.string().min(1).optional(), reportHash: hex32.optional() }).strict();
+export type PreviousResult = z.infer<typeof previousResultSchema>;
+
 /** A change found by a check: its result against the previous check's. */
-export const checkChangeSchema = z.object({ kind: z.enum(CHECK_CHANGE_KINDS), from: watchResultSchema.nullable(), to: watchResultSchema }).strict();
+export const checkChangeSchema = z.object({ kind: z.enum(CHECK_CHANGE_KINDS), from: previousResultSchema.nullable(), to: watchResultSchema }).strict();
 export type CheckChange = z.infer<typeof checkChangeSchema>;
 
 /**
@@ -201,9 +208,20 @@ export const watchStatusSchema = z
   .strict();
 export type WatchStatus = z.infer<typeof watchStatusSchema>;
 
-/** The latest check of a vault, as in the feed's check minus the hash and duration; at is the report's startedAt. */
+/**
+ * The latest check of a vault, as in the feed's check minus the duration; at is the report's startedAt. reportHash
+ * was added 2026-10-07 and is absent from checks saved before.
+ */
 export const watchLastCheckSchema = z
-  .object({ block: decimal, at: iso, reportPath: z.string().min(1), summary: watchSummarySchema, failed: z.array(z.string().min(1)), implementationKey: hex32.nullable() })
+  .object({
+    block: decimal,
+    at: iso,
+    reportPath: z.string().min(1),
+    reportHash: hex32.optional(),
+    summary: watchSummarySchema,
+    failed: z.array(z.string().min(1)),
+    implementationKey: hex32.nullable(),
+  })
   .strict();
 export type WatchLastCheck = z.infer<typeof watchLastCheckSchema>;
 

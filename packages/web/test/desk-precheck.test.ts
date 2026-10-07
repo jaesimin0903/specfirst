@@ -91,7 +91,7 @@ describe('precheckVault', () => {
     const r = await precheckVault(UPSHIFT, 143, deps({ [UPSHIFT]: erc4626 }));
     expect(r.ok).toBe(true);
     expect(r.onBoard).toBe(true);
-    expect(r.latestReport).toMatchObject({ status: 'mismatch', blockNumber: '109195820', source: 'board', summary: { fail: 2 } });
+    expect(r.latestReport).toMatchObject({ status: 'mismatch', blockNumber: '109195820', source: 'board', summary: { fail: 2 }, failureLevel: 'must' });
     expect(r.contract?.protocol).toBe('Upshift');
     expect(r.notes[0]).toMatch(/^Checked before at block 109,195,820 for the board\. A new request checks the vault again/);
   });
@@ -109,6 +109,22 @@ describe('precheckVault', () => {
     expect(r.pending).toEqual([{ id: '4', stage: 'running' }]);
     expect(r.notes[1]).toMatch(/already in progress \(request #4\)/);
     expect(r.ok).toBe(true);
+  });
+
+  it("levels as the board reads them: from the board's report, or a requested one the registry's attestation hashes", async () => {
+    // tyYIELD of test/fixtures/levels: three round trips off by 1 base unit.
+    const TY = '0xb4641064f64e2f3aaffc1b4b4a66be75c1c81408';
+    const levels = await collectReports(path.join(here, 'fixtures/levels'));
+    const ty = levels.candidates.find((c) => c.report.address.toLowerCase() === TY)!;
+    const tyDetail = assembleBoard({ candidates: [ty], meta: {}, registry: REG, attestations: new Map(), generatedAt: 'x', source: 'fixtures', skipped: [] }).details[0]!;
+    const onBoard = await precheckVault(TY, 143, deps({ [TY]: erc4626 }, { boardDetail: () => tyDetail }));
+    expect(onBoard.latestReport).toMatchObject({ source: 'board', status: 'mismatch', failureLevel: 'rounding' });
+    const attestedAs = (reportHash: string): LiveAttestation => ({ kind: 'attested', record: { ...fakeRecord(), reportHash, compliant: false } });
+    const requested = (att: LiveAttestation) => precheckVault(TY, 143, deps({ [TY]: erc4626 }, { latestReport: async () => ty, attestation: async () => att }));
+    expect((await requested(attestedAs(ty.reportHash))).latestReport).toMatchObject({ source: 'requested', failureLevel: 'rounding' });
+    // A report the registry does not hash: the ids alone, which never read as rounding.
+    expect((await requested(attestedAs(`0x${'77'.repeat(32)}`))).latestReport).toMatchObject({ source: 'requested', failureLevel: 'should' });
+    expect((await requested({ kind: 'none' })).latestReport!.failureLevel).toBe('should');
   });
 
   it('a native-asset vault is allowed with a warning; RPC trouble is a blocker that says so', async () => {

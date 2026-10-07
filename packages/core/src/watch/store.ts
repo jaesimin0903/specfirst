@@ -4,7 +4,7 @@ import { appendFile, mkdir, open, readdir, readFile, rename, rm, truncate } from
 import path from 'node:path';
 import { getAddress } from 'viem';
 import { z } from 'zod';
-import { parseCheckReport } from '../attest/params.js';
+import { checkReportHash, parseCheckReport } from '../attest/params.js';
 import { acquirePidLock } from '../desk/store.js';
 import type { StandardCheckReport } from '../standards/report.js';
 import { defaultCacheDir } from '../standards/workspace.js';
@@ -475,7 +475,7 @@ export function acquireWatchLock(projectDir: string, chainId: number, opts: { pi
 /** vaults.json's lastCheck for a report kept at `reportPath`. */
 export function lastCheckOf(report: StandardCheckReport, reportPath: string): WatchLastCheck {
   const o = outcomeOfReport(report);
-  return { block: report.blockNumber, at: report.startedAt, reportPath, summary: o.summary, failed: o.failed, implementationKey: o.implementationKey };
+  return { block: report.blockNumber, at: report.startedAt, reportPath, reportHash: checkReportHash(report), summary: o.summary, failed: o.failed, implementationKey: o.implementationKey };
 }
 
 /** The beacon a report says the subject resolves its implementation through (lowercase), or null. */

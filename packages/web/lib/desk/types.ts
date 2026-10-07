@@ -1,4 +1,4 @@
-import type { StatusCounts, VaultStatus } from '../board/types';
+import type { FailedProperty, StatusCounts, VaultStatus } from '../board/types';
 import type { RequestStatusName, WorkerStage } from './contract';
 import type { Progress } from './stages';
 
@@ -68,7 +68,11 @@ export interface ResultJson {
   total: number;
   cells: string;
   split: number;
-  failed: { id: string; finding: string; rule: string | null }[];
+  /**
+   * topic, delta and amount: the failure's class (lib/board/levels), as on the board; only when the report is the one
+   * the registry's attestation, the desk worker or the board names. Without them the ids alone give a level.
+   */
+  failed: ({ id: string; finding: string; rule: string | null } & Pick<FailedProperty, 'topic' | 'delta' | 'amount'>)[];
   blockNumber: string;
   startedAt: string;
   reportHash: string;

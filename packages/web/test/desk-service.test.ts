@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { keccak256, toHex } from 'viem';
 import type { ContractReader } from '../lib/desk/read';
 
@@ -19,6 +19,8 @@ import { clearMemo } from '../lib/desk/cache';
 import { deskView, requestView } from '../lib/desk/service';
 import { resolveVault } from '../lib/desk/vault';
 import { reportHashOf } from '../lib/desk/reportFiles';
+import { failureLevelOf } from '../lib/board/levels';
+import { vaultLabel, verdictSentence } from '../lib/board/reasons';
 import { vaultApiResponseSchema } from '../lib/desk/vaultApi';
 import { GET as vaultApi } from '../app/api/v1/vaults/[chainId]/[address]/route';
 import { GET as badgeRoute } from '../app/badge/check/[chainId]/[address]/route';
@@ -186,7 +188,111 @@ describe('requestView', () => {
     });
     expect(r.cells).toHaveLength(30);
     expect(r.failed.map((f) => f.id)).toEqual(['sf-maxWithdraw-honored', 'sf-maxRedeem-honored']);
+    expect(r.failed.map((f) => f.topic)).toEqual(['must', 'must']);
     expect(r.reproduce).toBe(`specfirst check ${UPSHIFT_CS} --standard erc4626 --block 109400000 --runs 16 --seed ${JSON.parse(await readFile(path.join(root, 'checks', '143', UPSHIFT, NEW_FILE), 'utf8')).seed}`);
+  });
+
+  describe('MUST and SHOULD levels, as the board reads them', () => {
+    // tyYIELD of test/fixtures/levels, three round trips off by 1 base unit, fulfilled as request 5.
+    const TY = '0xb4641064f64e2f3aaffc1b4b4a66be75c1c81408';
+    const TY_CS = '0xB4641064f64E2F3aAffc1b4b4A66BE75c1C81408';
+    const TY_FILE = '109195820-aabbccddeeff0011.json';
+    const statusFile = () => path.join(root, '.specfirst', 'worker', 'status.json');
+    let tyHash: string;
+    let workerStatus: string;
+
+    beforeAll(async () => {
+      const text = await readFile(path.join(here, 'fixtures/levels/143', TY, '109195820.json'), 'utf8');
+      tyHash = reportHashOf(JSON.parse(text));
+      await mkdir(path.join(root, 'checks', '143', TY), { recursive: true });
+      await writeFile(path.join(root, 'checks', '143', TY, TY_FILE), text);
+      workerStatus = await readFile(statusFile(), 'utf8');
+    });
+
+    afterEach(async () => {
+      await writeFile(statusFile(), workerStatus);
+    });
+
+    /** The desk worker's record of request 5, naming `reportPath`. */
+    async function workerNames(reportPath: string) {
+      const s = JSON.parse(workerStatus);
+      s['5'] = { stage: 'fulfilled', updatedAt: new Date((T0 + 240) * 1000).toISOString(), attestationId: '19', reportPath, txs: {} };
+      await writeFile(statusFile(), JSON.stringify(s));
+    }
+
+    /** The usual chain, with request 5 for tyYIELD whose attestation hashes `attested` (none when null). */
+    function withTy(attested: () => string | null): ContractReader {
+      const base = chain();
+      return {
+        readContract: vi.fn(async (a: { functionName: string; args?: readonly unknown[] }) => {
+          if (a.functionName === 'requestOf' && String(a.args![0]) === '5') return req(2, TY_CS, { attestationId: 19n });
+          if (a.functionName === 'attestationOf' && String(a.args![0]) === '19') {
+            const h = attested();
+            if (!h) throw Object.assign(new Error('reverted'), { cause: { data: { errorName: 'UnknownAttestation' } } });
+            return { ...attestation(h, [27, 3, 0, 0]), subject: TY_CS, blockNumber: 109195820n };
+          }
+          return base.readContract(a as never);
+        }),
+      } as ContractReader;
+    }
+
+    it('the attested report: each failure with its class, so the chip and the verdict read rounding', async () => {
+      reader.current = withTy(() => tyHash);
+      const v = await requestView(5n);
+      if ('error' in v) throw new Error(v.error);
+      const r = v.result!;
+      expect(r).toMatchObject({ status: 'mismatch', reportHash: tyHash, attestation: { id: '19', matchesReport: true } });
+      expect(r.failed.map((f) => [f.id, f.topic, f.delta])).toEqual([
+        ['RT-redeem-deposit', 'rounding', '1'],
+        ['RT-redeem-mint', 'rounding', '1'],
+        ['RT-withdraw-deposit', 'rounding', '1'],
+      ]);
+      expect(r.failed[0]!.finding).toMatch(/the round trip ended 1 base unit in the caller's favor/);
+      expect(r.failed[0]!.rule).toMatch(/That is a SHOULD, not a MUST/);
+      expect(vaultLabel(r.status, failureLevelOf(r.failed))).toBe('Rounding favors caller');
+      expect(verdictSentence(r.status, r.summary, r.blockNumber, r.failed)).toMatch(/^Rounding favors the caller: 3 round-trip properties fail .*, by at most 1 base unit, <0\.01% of the amount; no MUST sentence failed\.$/);
+    });
+
+    it('a report nobody named (the attestation hashes another, no worker record, not on the board): the ids alone, never rounding', async () => {
+      reader.current = withTy(() => newerHash);
+      const v = await requestView(5n);
+      if ('error' in v) throw new Error(v.error);
+      const r = v.result!;
+      expect(r).toMatchObject({ reportHash: tyHash, attestation: { matchesReport: false } });
+      expect(r.failed.map((f) => f.topic)).toEqual([undefined, undefined, undefined]);
+      expect(r.failed[0]!.rule).toBeNull();
+      expect(failureLevelOf(r.failed)).toBe('should');
+      expect(vaultLabel(r.status, failureLevelOf(r.failed))).toBe('Spec mismatch');
+    });
+
+    it("the desk worker's report, when no attestation was read: named, so its levels are read", async () => {
+      await workerNames(`checks/143/${TY}/${TY_FILE}`);
+      reader.current = withTy(() => null);
+      const v = await requestView(5n);
+      if ('error' in v) throw new Error(v.error);
+      expect(v.result).toMatchObject({ reportHash: tyHash });
+      expect(failureLevelOf(v.result!.failed)).toBe('rounding');
+    });
+
+    it("the desk worker's report under an attestation that hashes another: shown, but its levels are not read", async () => {
+      await workerNames(`checks/143/${TY}/${TY_FILE}`);
+      reader.current = withTy(() => newerHash);
+      const v = await requestView(5n);
+      if ('error' in v) throw new Error(v.error);
+      expect(v.result).toMatchObject({ reportHash: tyHash, attestation: { id: '19', matchesReport: false } });
+      expect(v.result!.failed.map((f) => f.topic)).toEqual([undefined, undefined, undefined]);
+      expect(vaultLabel(v.result!.status, failureLevelOf(v.result!.failed))).toBe('Spec mismatch');
+    });
+
+    it("a worker reportPath that names another vault's report is not this request's result", async () => {
+      await workerNames(`checks/143/${UPSHIFT}/${NEW_FILE}`);
+      reader.current = withTy(() => null);
+      const v = await requestView(5n);
+      if ('error' in v) throw new Error(v.error);
+      // The latest report of tyYIELD instead, a fallback nobody named.
+      expect(v.result).toMatchObject({ reportHash: tyHash, vaultPath: `/v/143/${TY}` });
+      expect(v.result!.failed.map((f) => f.topic)).toEqual([undefined, undefined, undefined]);
+    });
   });
 
   it('pending: where the worker is, and no result yet', async () => {
