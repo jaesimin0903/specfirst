@@ -1,0 +1,299 @@
+{
+  "schemaVersion": 3,
+  "chainId": 143,
+  "address": "0x2b5Cd47f236A546143636e37A511A67CE7901A0A",
+  "blockNumber": "111102186",
+  "standard": "erc4626",
+  "vaultKind": "erc4626",
+  "skipReason": null,
+  "upstream": {
+    "repo": "https://github.com/a16z/erc4626-tests",
+    "commit": "ac485460e014f22807c1ff687e0b4dc3af96ee40"
+  },
+  "harnessSha256": "0x5b48d421f2ac4cdaf2ddee727b2f51348aa00f899b40dcd3323c7d6a3aa08890",
+  "sfPropertiesSha256": "0x612e004770694c26092ccd557d619fcfff6605b538b463a070a4d4668a26991e",
+  "runs": 16,
+  "delta": "0",
+  "seed": "0x22928c379525e0a565bab7afffeb3c848fa287465f529fbbe1f102dbb6e486cc",
+  "sender": "0x410a2fca66FBDa7159fEC1D139E3f80B75cB82FD",
+  "toolchain": {
+    "forgeVersion": "forge Version: 1.5.1-Homebrew",
+    "forgeStd": {
+      "repo": "https://github.com/foundry-rs/forge-std",
+      "commit": "bf647bd6046f2f7da30d0c2bf435e5c76a780c1b"
+    },
+    "foundryTomlSha256": "0xee1cdf6abd473ff042b6385bd46833ed08053d608d0a5645ad159fc2cca1b9b3",
+    "maxTestRejects": 4096
+  },
+  "identity": {
+    "codeHash": "0x8330311cec1d2e987ce49a82fb33c8a7feac44b4547865f40259466b92da7532",
+    "metadataHash": "0x12202ce0c65ebaefa3f31efb9c4bd43a4153c742580cfb925b5bb3d63c66ed3a3876",
+    "maskedCodeHash": "0xd45a75db01976fa3a8c26d2646a37d281e220c49ce68724bc75b4b979c299c3f",
+    "codeSize": 802,
+    "proxy": {
+      "kind": "eip1967",
+      "implementation": "0x20d387F7BFB10f3fA402aaB48758fd30B7D5eA76"
+    },
+    "implementation": {
+      "address": "0x20d387F7BFB10f3fA402aaB48758fd30B7D5eA76",
+      "codeHash": "0x859224bb26e9d3209ca444374418968c42df803f9197e005a9a20e94c86d0da3",
+      "metadataHash": "0x1220f2417f0192c32033d5fb47ad1325e91dc5573c68016056c7d0d52b7ddec377da",
+      "maskedCodeHash": "0x5a7f68a07df5a0dfb7f9492fff29fc0be324b19819fd2c6d61a1a48706b5a34e"
+    },
+    "implementationKey": "0xb17fd90e5b761e5624599147b6db1543a8cb53302cc7be6107fdf6f4848fe0c6",
+    "implementationKeyKind": {
+      "of": "implementation",
+      "hash": "metadataHash+maskedCodeHash"
+    }
+  },
+  "results": [
+    {
+      "id": "asset",
+      "test": "test_asset",
+      "description": "asset() does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "totalAssets",
+      "test": "test_totalAssets",
+      "description": "totalAssets() does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "convertToShares",
+      "test": "test_convertToShares",
+      "description": "convertToShares gives the same result for any caller",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "convertToAssets",
+      "test": "test_convertToAssets",
+      "description": "convertToAssets gives the same result for any caller",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "maxDeposit",
+      "test": "test_maxDeposit",
+      "description": "maxDeposit does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "previewDeposit",
+      "test": "test_previewDeposit",
+      "description": "deposit mints at least the shares previewDeposit quoted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "deposit",
+      "test": "test_deposit",
+      "description": "deposit moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "maxMint",
+      "test": "test_maxMint",
+      "description": "maxMint does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "previewMint",
+      "test": "test_previewMint",
+      "description": "mint pulls at most the assets previewMint quoted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "mint",
+      "test": "test_mint",
+      "description": "mint moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "maxWithdraw",
+      "test": "test_maxWithdraw",
+      "description": "maxWithdraw does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "previewWithdraw",
+      "test": "test_previewWithdraw",
+      "description": "withdraw burns at most the shares previewWithdraw quoted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "withdraw",
+      "test": "test_withdraw",
+      "description": "withdraw burns owner shares, pays the receiver and spends share allowance",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "withdraw-zero-allowance",
+      "test": "test_withdraw_zero_allowance",
+      "description": "withdraw on behalf of an owner without allowance reverts",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "maxRedeem",
+      "test": "test_maxRedeem",
+      "description": "maxRedeem does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "previewRedeem",
+      "test": "test_previewRedeem",
+      "description": "redeem pays at least the assets previewRedeem quoted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "redeem",
+      "test": "test_redeem",
+      "description": "redeem burns owner shares, pays the receiver and spends share allowance",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "redeem-zero-allowance",
+      "test": "test_redeem_zero_allowance",
+      "description": "redeem on behalf of an owner without allowance reverts",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "RT-deposit-redeem",
+      "test": "test_RT_deposit_redeem",
+      "description": "redeem(deposit(a)) returns no more than a",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "RT-deposit-withdraw",
+      "test": "test_RT_deposit_withdraw",
+      "description": "withdraw(a) burns at least the shares deposit(a) minted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "RT-redeem-deposit",
+      "test": "test_RT_redeem_deposit",
+      "description": "deposit(redeem(s)) mints no more than s",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "RT-redeem-mint",
+      "test": "test_RT_redeem_mint",
+      "description": "mint(s) costs at least the assets redeem(s) paid",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "RT-mint-withdraw",
+      "test": "test_RT_mint_withdraw",
+      "description": "withdraw(mint(s)) burns at least s shares",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "RT-mint-redeem",
+      "test": "test_RT_mint_redeem",
+      "description": "redeem(s) pays no more than mint(s) cost",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "RT-withdraw-mint",
+      "test": "test_RT_withdraw_mint",
+      "description": "mint(withdraw(a)) costs at least a",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "RT-withdraw-deposit",
+      "test": "test_RT_withdraw_deposit",
+      "description": "deposit(a) mints no more than the shares withdraw(a) burned",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "sf-maxDeposit-honored",
+      "test": "test_sf_maxDeposit_honored",
+      "description": "deposit does not revert for amounts up to maxDeposit (EIP-4626: maxDeposit is the most deposit accepts without reverting)",
+      "status": "not_applicable",
+      "runs": 0,
+      "reason": "maxDeposit returned 0 for every test user; there is no max value to honor (EIP-4626 allows underestimating)"
+    },
+    {
+      "id": "sf-maxMint-honored",
+      "test": "test_sf_maxMint_honored",
+      "description": "mint does not revert for shares up to maxMint (EIP-4626: maxMint is the most mint accepts without reverting)",
+      "status": "not_applicable",
+      "runs": 0,
+      "reason": "maxMint returned 0 for every test user; there is no max value to honor (EIP-4626 allows underestimating)"
+    },
+    {
+      "id": "sf-maxWithdraw-honored",
+      "test": "test_sf_maxWithdraw_honored",
+      "description": "withdraw does not revert for assets up to maxWithdraw (EIP-4626: maxWithdraw MUST return 0 when withdrawals are disabled)",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    },
+    {
+      "id": "sf-maxRedeem-honored",
+      "test": "test_sf_maxRedeem_honored",
+      "description": "redeem does not revert for shares up to maxRedeem (EIP-4626: maxRedeem MUST return 0 when redemptions are disabled)",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "`vm.assume` rejected too many inputs (4096 allowed)"
+    }
+  ],
+  "summary": {
+    "pass": 0,
+    "fail": 0,
+    "inconclusive": 28,
+    "notApplicable": 2
+  },
+  "startedAt": "2026-10-06T17:52:05.400Z",
+  "durationMs": 193540
+}
