@@ -49,12 +49,15 @@ export function cellsOf(results: ReadonlyArray<Pick<ReportResultView, 'status'>>
   return results.map((r) => CELL[r.status]).join('');
 }
 
-/** The failed properties of a report, each with its class (lib/board/levels) from its reason and forge's logs. */
+/**
+ * The failed properties of a report, each with its class (lib/board/levels) from its reason and forge's logs. Only
+ * those are read: a report is kept as written, so a class key in it (topic, delta, amount) is never taken as given.
+ */
 export function failedPropertiesOf(results: ReadonlyArray<ReportResultView>): FailedProperty[] {
   return results
     .filter((x) => x.status === 'fail')
     .map((x) => {
-      const c = classifyFailure(x);
+      const c = classifyFailure({ id: x.id, reason: x.reason, counterexample: x.counterexample });
       return { id: x.id, reason: x.reason ?? '', topic: c.topic, ...(c.delta ? { delta: c.delta, amount: c.amount } : {}) };
     });
 }

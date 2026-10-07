@@ -1,4 +1,4 @@
-import { classifyFailure, failureLevelOf, roundTripDifference, type FailureClass, type FailureLevel, type FailureLike } from './levels.ts';
+import { classifyFailure, failureLevelOf, roundTripDifference, SHOULD_PROPERTIES, valuePairs, type FailureClass, type FailureLevel, type FailureLike } from './levels.ts';
 import type { PropertyStatus, ReasonCategory, ReportResultView, SkipReason, StatusCounts, VaultStatus, VaultTraitView } from './types';
 
 /*
@@ -76,11 +76,12 @@ export function vaultLabel(status: VaultStatus, failure: FailureLevel | null = n
   return status === 'mismatch' && failure === 'rounding' ? ROUNDING_LABEL : VAULT_STATUS_LABEL[status];
 }
 
-/** "0.05%", or "<0.01%" for less: delta as a share of amount. */
-export function percentOf(delta: string, amount: string): string {
+/** "0.05%", or "<0.01%" for less: delta as a share of amount, in hundredths of a percent rounded down (`up`: up). */
+export function percentOf(delta: string, amount: string, up = false): string {
   const a = BigInt(amount);
   if (a === 0n) return 'all';
-  const hundredths = (BigInt(delta) * 10_000n) / a;
+  const scaled = BigInt(delta) * 10_000n;
+  const hundredths = up ? (scaled + a - 1n) / a : scaled / a;
   if (hundredths === 0n) return '<0.01%';
   const whole = hundredths / 100n;
   const frac = (hundredths % 100n).toString().padStart(2, '0').replace(/0+$/, '');
@@ -199,7 +200,8 @@ export function describeFailure(reason: string | undefined, failure?: FailureLik
   const c = failure ? classifyFailure({ ...failure, reason: failure.reason ?? reason }) : null;
   const rule = c ? shouldRule(c) : null;
   const note = failure && (failure.id === 'withdraw' || failure.id === 'redeem') ? WITHDRAW_REDEEM_NOTE : null;
-  const d = roundTripDifference(failure?.counterexample?.logs);
+  // Only a round trip's logs are read as one: a withdraw or redeem failure must not take wording from a vault's logs.
+  const d = failure && SHOULD_PROPERTIES[failure.id] === 'rounding' ? roundTripDifference(failure.counterexample?.logs) : null;
   const finding = d
     ? `Forge found a counterexample: the round trip ended ${groupDigits(d.delta.toString())} base ${d.delta === 1n ? 'unit' : 'units'} in the caller's favor (${groupDigits(d.a.toString())} against ${groupDigits(d.b.toString())}).`
     : reason
@@ -397,11 +399,30 @@ function units(delta: string): string {
 }
 
 /**
+ * ", <0.01% of the amount" or ", at most 2% of the amount": the largest share of its amount any difference has, over
+ * every pair in the failures' logs, else each class's pair; empty when no amount is known. Not the share of the
+ * largest difference: 2 base units of 3 are a larger share than 13,080,554 of 10 ** 15.
+ */
+function shareText(failures: ReadonlyArray<FailureLike>, classes: ReadonlyArray<FailureClass>): string {
+  let best: { delta: bigint; amount: bigint } | null = null;
+  for (const [i, f] of failures.entries()) {
+    const pairs = valuePairs(f.counterexample?.logs).map((p) => ({ delta: p.delta, amount: p.a > p.b ? p.a : p.b }));
+    const c = classes[i]!;
+    if (pairs.length === 0 && c.delta && c.amount) pairs.push({ delta: BigInt(c.delta), amount: BigInt(c.amount) });
+    for (const p of pairs) if (p.amount > 0n && (!best || p.delta * best.amount > best.delta * p.amount)) best = p;
+  }
+  if (!best) return '';
+  const [delta, amount] = [best.delta.toString(), best.amount.toString()];
+  const down = percentOf(delta, amount);
+  return down === '<0.01%' ? `, ${down} of the amount` : `, at most ${percentOf(delta, amount, true)} of the amount`;
+}
+
+/**
  * The one-line verdict at the top of a vault page. A mismatch follows the classes of its failures (`failures`, with
  * their reasons and logs when known): any MUST keeps "contradicts an EIP-4626 MUST sentence"; round trips off by a
- * rounding-sized amount read as rounding, with the largest difference and its share of the amount; other SHOULD
- * failures say what went through and by how much. Without failures it reads as a MUST, so nothing is softened by
- * mistake.
+ * rounding-sized amount read as rounding, with the largest difference and the largest share of its amount any
+ * difference has; other SHOULD failures say what went through and by how much. Without failures it reads as a MUST,
+ * so nothing is softened by mistake.
  */
 export function verdictSentence(status: VaultStatus, summary: StatusCounts, blockNumber: string, failures: ReadonlyArray<FailureLike> = []): string {
   const total = summary.pass + summary.fail + summary.inconclusive + summary.notApplicable;
@@ -413,7 +434,7 @@ export function verdictSentence(status: VaultStatus, summary: StatusCounts, bloc
       const of = (t: FailureClass['topic']) => classes.filter((c) => c.topic === t);
       if (level === 'rounding') {
         const top = maxDelta(classes);
-        return `Rounding favors the caller: ${plural(classes.length, 'round-trip property fails', 'round-trip properties fail')} EIP-4626's SHOULD guidance (Security Considerations) at block ${block}${top ? `, by at most ${units(top.delta!)}${top.amount ? `, ${percentOf(top.delta!, top.amount)} of the amount` : ''}` : ''}; no MUST sentence failed.`;
+        return `Rounding favors the caller: ${plural(classes.length, 'round-trip property fails', 'round-trip properties fail')} EIP-4626's SHOULD guidance (Security Considerations) at block ${block}${top ? `, by at most ${units(top.delta!)}${shareText(failures, classes)}` : ''}; no MUST sentence failed.`;
       }
       if (level === 'should') {
         const parts: string[] = [];
