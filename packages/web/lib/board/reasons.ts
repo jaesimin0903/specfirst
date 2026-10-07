@@ -221,9 +221,9 @@ export function explainResult(result: Pick<ReportResultView, 'status' | 'reason'
       const m = MISSING_PRECOMPILE.exec(reason);
       const at = m?.[1] ? ` ${m[1]}` : '';
       if (m?.[2]) {
-        return `Not judged: ${m[2]} inputs reached Monad precompile${at}, which forge's EVM does not have, and behaved differently once it answered. A vault can tell such a stand-in from the real precompile, so a property with unjudged inputs never counts as a pass; no other input failed.`;
+        return `Not judged: ${m[2]} inputs reached Monad precompile${at}, which forge's EVM does not have, and reverted. The fork cannot tell whether such a revert needed the precompile's answer, so a property with unjudged inputs never counts as a pass; no other input failed.`;
       }
-      return `Not judged: every rejected input reached Monad precompile${at}, which forge's EVM does not have, and its call reverted on the fork only when that precompile gave no answer. These inputs were not judged.`;
+      return `Not judged: every rejected input reached Monad precompile${at}, which forge's EVM does not have, and its call reverted on the fork, which cannot tell whether the revert needed the precompile's answer. These inputs were not judged.`;
     }
     case 'rpc-error':
       return 'Never exercised: the RPC failed while the fork was reading chain state. This says nothing about the vault; a rerun on another RPC should settle it.';
@@ -275,7 +275,7 @@ export function explainSkip(skip: SkipReason): string {
     case 'asset-transfer-restricted':
       return 'No property applies. The asset only moves between allowed parties, so test users cannot be funded and moved around as both suites require. Nothing here is attributed to the vault.';
     case 'missing-precompile':
-      return "No property could be exercised. Every property ran out of inputs, and its vault calls needed the answer of a Monad precompile that forge's EVM does not have; those inputs were not judged. Nothing here says the vault is wrong or right.";
+      return "No property could be exercised. Every property ran out of inputs, and its vault calls reverted after reaching a Monad precompile that forge's EVM does not have; those inputs were not judged. Nothing here says the vault is wrong or right.";
     case 'setup-reverted':
       return 'No property applies. The suites could not start on this contract because setUp reverted. The reason is listed with each property below.';
   }
