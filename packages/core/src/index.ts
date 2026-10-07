@@ -322,6 +322,7 @@ export {
   vaultTraitSchema,
   missingPrecompilesOf,
   belowBoundNote,
+  unfundedBoundNote,
   missingPrecompileNote,
   setupPrecompileNote,
   maxZeroNote,

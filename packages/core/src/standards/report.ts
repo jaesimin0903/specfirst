@@ -356,6 +356,8 @@ export interface ParseStandardOptions {
   maxZeroEvents?: string;
   /** Content of the sf- suite's below-bound event file: one selector per input below the bound that was refused while the bound was accepted. */
   belowBoundEvents?: string;
+  /** Content of the sf- suite's bound-unfunded event file: one selector per input discarded because the bound could not be funded. */
+  unfundedBoundEvents?: string;
   /** Content of the missing-precompile event file both suites write: "<selector> <precompile>" per input not judged. */
   missingPrecompileEvents?: string;
   /** Content of the setup-precompile event file: the same per input discarded in a setup deposit (a rejected input). */
@@ -365,6 +367,11 @@ export interface ParseStandardOptions {
 /** Note on an sf- property whose drawn amounts below the bound min(max, cap) were refused while the bound itself went through. */
 export function belowBoundNote(n: number): string {
   return `${n} amounts below the bound were refused; the bound itself was accepted`;
+}
+
+/** Note on an sf- property with inputs whose bound could not be funded, so it was not tried there. */
+export function unfundedBoundNote(n: number): string {
+  return `the bound could not be funded in ${n} inputs; these inputs were discarded`;
 }
 
 /**
@@ -443,6 +450,12 @@ function withBelowBoundNote(r: StandardPropertyResult, n: number | undefined): S
   return { ...r, reason: r.reason ? `${r.reason}; ${note}` : note };
 }
 
+function withUnfundedBoundNote(r: StandardPropertyResult, n: number | undefined): StandardPropertyResult {
+  if (!n) return r;
+  const note = unfundedBoundNote(n);
+  return { ...r, reason: r.reason ? `${r.reason}; ${note}` : note };
+}
+
 /** Reason of an sf- property whose every discarded input had a max of 0. */
 export function maxZeroNote(maxName: string): string {
   return `${maxName} returned 0 for every test user; there is no max value to honor (EIP-4626 allows underestimating)`;
@@ -490,6 +503,7 @@ export function parseStandardForgeJson(
   const deposits = opts.depositRevertEvents ? depositRevertCounts(opts.depositRevertEvents, keys) : new Map<string, number>();
   const maxZero = opts.maxZeroEvents ? depositRevertCounts(opts.maxZeroEvents, keys) : new Map<string, number>();
   const belowBound = opts.belowBoundEvents ? depositRevertCounts(opts.belowBoundEvents, keys) : new Map<string, number>();
+  const unfundedBound = opts.unfundedBoundEvents ? depositRevertCounts(opts.unfundedBoundEvents, keys) : new Map<string, number>();
   const precompiles = opts.missingPrecompileEvents ? missingPrecompilesOf(opts.missingPrecompileEvents, keys) : new Map<string, { count: number; precompile: string }>();
   const setupPrecompiles = opts.setupPrecompileEvents ? missingPrecompilesOf(opts.setupPrecompileEvents, keys) : new Map<string, { count: number; precompile: string }>();
   return [...properties, ...extra].map((p): StandardPropertyResult => {
@@ -508,7 +522,7 @@ export function parseStandardForgeJson(
     if (!r) return { ...base, status: 'inconclusive', reason: 'no result in forge output' };
     // Each rule reads forge's own reason first, so the order matters: max-zero, then the precompile inputs, then the notes.
     const judged = withMissingPrecompile(withMaxZero(classify(p, r), maxZero.get(p.test)), precompiles.get(p.test), setupPrecompiles.get(p.test));
-    return withBelowBoundNote(withDepositNote(judged, deposits.get(p.test)), belowBound.get(p.test));
+    return withUnfundedBoundNote(withBelowBoundNote(withDepositNote(judged, deposits.get(p.test)), belowBound.get(p.test)), unfundedBound.get(p.test));
   });
 }
 

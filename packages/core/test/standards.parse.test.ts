@@ -20,6 +20,7 @@ import {
   setupPrecompileNote,
   maxZeroNote,
   belowBoundNote,
+  unfundedBoundNote,
   summarize,
   type StandardPropertyResult,
 } from '../src/index.js';
@@ -571,5 +572,17 @@ describe('refusals below the bound on sf- properties (below-bound events)', () =
     })!;
     expect(r!.status).toBe('fail');
     expect(r!.reason).toBe(`redeem(1) reverted with selector 0x03f7f64c while maxRedeem is 1; ${belowBoundNote(1)}`);
+  });
+
+  it('inputs whose bound could not be funded are counted after the other notes; the status is forge\'s', () => {
+    const sel = toFunctionSelector(depKey);
+    const [r] = parseStandardForgeJson(
+      doc({ status: 'Failure', reason: '`vm.assume` rejected too many inputs (4096 allowed)', counterexample: null }),
+      [sfDeposit],
+      { belowBoundEvents: sel, unfundedBoundEvents: `${sel}\n${sel}\n${sel}\n` },
+    )!;
+    expect(r!.status).toBe('inconclusive');
+    expect(r!.reason).toBe(`\`vm.assume\` rejected too many inputs (4096 allowed); ${belowBoundNote(1)}; ${unfundedBoundNote(3)}`);
+    expect(unfundedBoundNote(3)).toBe('the bound could not be funded in 3 inputs; these inputs were discarded');
   });
 });

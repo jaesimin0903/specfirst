@@ -24,6 +24,7 @@ import {
   missingPrecompileNote,
   maxZeroNote,
   belowBoundNote,
+  unfundedBoundNote,
   summarize,
   type StandardWorkspace,
 } from '../src/index.js';
@@ -537,6 +538,9 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000075', await code('MintSurchargeVault')]);
     await rpc('anvil_setCode', ['0x5f00000000000000000000000000000000000076', await code('MinDepositVault')]);
     await rpc('anvil_setCode', ['0x5f0000000000000000000000000000000000009b', await code('WithdrawFeeVault')]);
+    await rpc('anvil_setCode', ['0x5F0000000000000000000000000000000000009c', await code('PreviewDodgeVault')]);
+    await rpc('anvil_setCode', ['0x5F00000000000000000000000000000000000006', await code('ApproveCapToken')]);
+    await rpc('anvil_setCode', ['0x5f0000000000000000000000000000000000009d', await code('ApproveCapVault')]);
     await rpc('anvil_mine', ['0x1']);
     ws = await prepareErc4626Workspace({
       cacheDir: path.join(root, 'cache'),
@@ -563,6 +567,7 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
     const results = parseStandardForgeJson(String(p.stdout), SPECFIRST_ERC4626_PROPERTIES, {
       maxZeroEvents: await events('max-zero'),
       belowBoundEvents: await events('below-bound'),
+      unfundedBoundEvents: await events('bound-unfunded'),
       missingPrecompileEvents: await events('missing-precompile'),
       setupPrecompileEvents: await events('setup-precompile'),
     });
@@ -582,6 +587,33 @@ describe.skipIf(SKIP || SKIP_ANVIL)('Specfirst sf- properties on a local anvil f
       expect(m![1], seed).toBe(m![2]);
       for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored', 'sf-maxRedeem-honored']) expect(r.get(id)!.status, `${seed} ${id}`).toBe('pass');
     }
+  });
+
+  it('maxRedeem ignores illiquid assets and previewRedeem reverts at the bound (PreviewDodgeVault): sf-maxRedeem still fails at the bound', async () => {
+    for (const seed of ['0x1', '0x2', '0x3']) {
+      const r = await sf('0x5F0000000000000000000000000000000000009c', { seed, runs: 4 });
+      const x = r.get('sf-maxRedeem-honored')!;
+      expect(x.status, seed).toBe('fail');
+      const m = /^redeem\((\d+)\) reverted with selector 0x08c379a0 while maxRedeem is (\d+)$/.exec(x.reason ?? '');
+      expect(m, seed).not.toBeNull();
+      expect(m![1], seed).toBe(m![2]);
+      // maxWithdraw honours the illiquid part, so withdraw(maxWithdraw) goes through.
+      expect(r.get('sf-maxWithdraw-honored')!.status, seed).toBe('pass');
+    }
+  });
+
+  it('a bound the harness cannot fund (approve refuses the 1e6-token bound): the inputs are discarded and counted, never passed', async () => {
+    const r = await sf('0x5f0000000000000000000000000000000000009d');
+    for (const id of ['sf-maxDeposit-honored', 'sf-maxMint-honored']) {
+      const x = r.get(id)!;
+      expect(x.status, id).toBe('inconclusive');
+      const n = Number(/the bound could not be funded in (\d+) inputs/.exec(x.reason ?? '')?.[1]);
+      expect(n, id).toBeGreaterThan(0);
+      expect(x.reason, id).toContain(unfundedBoundNote(n));
+    }
+    // withdraw and redeem need no funding at the bound.
+    expect(r.get('sf-maxWithdraw-honored')!.status).toBe('pass');
+    expect(r.get('sf-maxRedeem-honored')!.status).toBe('pass');
   });
 
   it('(b) a vault that honours its max values: all four sf- properties pass', async () => {

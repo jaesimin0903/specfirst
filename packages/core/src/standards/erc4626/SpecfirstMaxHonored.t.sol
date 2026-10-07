@@ -230,7 +230,7 @@ contract SpecfirstMaxHonored is Test {
         _fund(u, a);
         (bool ok, bytes memory ret) = _callVaultThenRestore(u, abi.encodeCall(ISfVault.deposit, (a, u)));
         if (ok) {
-            if (a < hi && _quotes(abi.encodeCall(ISfVault.previewDeposit, (hi)), type(uint256).max)) {
+            if (a < hi && !_previewsZero(abi.encodeCall(ISfVault.previewDeposit, (hi)))) {
                 _requireBound(u, abi.encodeCall(ISfVault.deposit, (hi, u)), hi, "deposit", hi, "maxDeposit", max);
             }
             return;
@@ -294,7 +294,7 @@ contract SpecfirstMaxHonored is Test {
         vm.assume(_read(abi.encodeCall(ISfVault.previewRedeem, (s))) > 0);
         (bool ok, bytes memory ret) = _callVaultThenRestore(u, abi.encodeCall(ISfVault.redeem, (s, u, u)));
         if (ok) {
-            if (s < max && _quotes(abi.encodeCall(ISfVault.previewRedeem, (max)), type(uint256).max)) {
+            if (s < max && !_previewsZero(abi.encodeCall(ISfVault.previewRedeem, (max)))) {
                 _requireBound(u, abi.encodeCall(ISfVault.redeem, (max, u, u)), 0, "redeem", max, "maxRedeem", max);
             }
             return;
@@ -323,28 +323,41 @@ contract SpecfirstMaxHonored is Test {
     /// below it (a withdrawal fee that maxWithdraw ignores, as on sLVMON) is rarely drawn, so the action at the
     /// bound runs too: from the state the drawn one started in, inside a snapshot, funded the same way. A revert
     /// there fails the property with the bound as the amount; a revert that reached a missing precompile is not
-    /// judged (_callVault). The bound is tried only where the property's own premise holds (the preview quotes
-    /// more than 0, and for mint no more than twice the cap) and the funding can be given.
+    /// judged (_callVault). The bound is skipped only when its preview answers 0 (the property's premise); a
+    /// preview that reverts there does not skip it, since EIP-4626 lets a preview revert where the action would.
+    /// When the funding cannot be given, the input is discarded and counted (bound-unfunded), never passed
+    /// silently.
     function _requireBound(address u, bytes memory atBound, uint256 funding, string memory action, uint256 amount, string memory maxName, uint256 max) internal {
         uint256 snap = vm.snapshotState();
-        bool ok = true;
-        bytes memory ret;
-        if (funding == 0 || _tryFund(u, funding)) (ok, ret) = _callVault(u, atBound);
+        if (funding > 0 && !_tryFund(u, funding)) {
+            vm.revertToStateAndDelete(snap);
+            _discardUnfundedBound();
+        }
+        (bool ok, bytes memory ret) = _callVault(u, atBound);
         vm.revertToStateAndDelete(snap);
         if (!ok) _failMax(ret, action, amount, maxName, max);
     }
 
-    /// mint at the bound `hi`, funded like the drawn mint from what previewMint(hi) quotes.
+    /// mint at the bound `hi`, funded like the drawn mint from what previewMint(hi) quotes. A previewMint that
+    /// does not answer still leaves mint(hi) to be judged, funded as for the largest quote a drawn mint accepts.
     function _requireMintBound(address u, uint256 hi, uint256 max) internal {
         (bool quoted, uint256 need) = _tryRead(abi.encodeCall(ISfVault.previewMint, (hi)));
-        if (!quoted || need == 0 || need > 2 * cap) return;
+        if (quoted && need == 0) return;
+        if (!quoted) need = 2 * cap;
+        if (need > type(uint256).max / 4) _discardUnfundedBound();
         _requireBound(u, abi.encodeCall(ISfVault.mint, (hi, u)), _mintFunding(need), "mint", hi, "maxMint", max);
     }
 
-    /// True when the preview call answers more than 0 and at most `limit`.
-    function _quotes(bytes memory preview, uint256 limit) internal view returns (bool) {
+    /// True only when the preview call answers 0. A preview that reverts or answers short is not a 0.
+    function _previewsZero(bytes memory preview) internal view returns (bool) {
         (bool quoted, uint256 v) = _tryRead(preview);
-        return quoted && v > 0 && v <= limit;
+        return quoted && v == 0;
+    }
+
+    /// The bound could not be funded, so it was not tried: the input is discarded and counted.
+    function _discardUnfundedBound() internal {
+        _recordEvent("bound-unfunded");
+        vm.assume(false);
     }
 
     /// Discards the input when the reverted call reached a missing precompile (SfForkGaps.precompileCause),

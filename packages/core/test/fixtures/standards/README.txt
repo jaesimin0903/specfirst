@@ -115,6 +115,13 @@ shares) count as rejects of the property, not as unjudged inputs.
                                        tries the bound after the drawn amount, so sf-maxWithdraw-honored fails at
                                        the bound with every seed (sf-only runs, 4 runs, five seeds); the harness
                                        before passed it at 4 runs with each of ten seeds.
+  PreviewDodgeVault (0x5F..9c)         maxRedeem reports the whole balance while 0.05% is illiquid; previewRedeem and
+                                       redeem revert at the bound. A reverting preview does not skip the bound:
+                                       sf-maxRedeem-honored fails at maxRedeem with every seed, sf-maxWithdraw
+                                       (which honours the illiquid part) passes.
+  ApproveCapToken (0x5F..06), ApproveCapVault (0x5f..9d)  approve refuses more than 1,000 tokens, so the
+                                       1e6-token bound cannot be funded: sf-maxDeposit and sf-maxMint end
+                                       inconclusive with "the bound could not be funded in N inputs", never pass.
 Review PoCs (ported from the reviewer's Adv.sol, mock-vaults.sol "Review PoCs"), full checks, 16 runs where the
 fuzzer must reach a fee bug:
   FeeVault (0x5F..91), FeeTouchVault (0x5F..92)  fee withdraw (Panic 0x11 near maxWithdraw); FeeTouch adds an
