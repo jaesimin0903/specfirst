@@ -1,0 +1,6 @@
+# HTTPS for the site at $DOMAIN (deploy/.env). Caddy gets and renews the certificate itself; ports 80 and 443 must
+# reach this host and the DNS A (and AAAA) record must point here before the first start.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:3000
+}

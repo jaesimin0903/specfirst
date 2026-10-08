@@ -8,7 +8,7 @@ Specfirst checks ERC-4626 vaults on Monad mainnet against 30 third-party propert
 - `AllocationGate` is a demo integrator on Monad testnet: it deposits only into vaults whose latest attestation is compliant, and anyone can make it pull its money out once that changes.
 - A failed property is a mismatch with a sentence of EIP-4626, shown by a concrete call on a fork. It is not a claim that funds are at risk.
 
-Where to read more: `docs/submission.md` (what it does and what it found), `docs/board-results.md` (results and the vaults that fail, in Korean), `docs/adr/` (each design decision and its reviews), `docs/plan.md` (the original plan, with what changed at the top, in Korean).
+Where to read more: `docs/submission.md` (what it does and what it found), `docs/board-results.md` (results and the vaults that fail, in Korean), `docs/adr/` (each design decision and its reviews), `docs/plan.md` (the original plan, with what changed at the top, in Korean). Running the live system on one server with Docker Compose: `docs/deploy.md`.
 
 ## Keys
 
