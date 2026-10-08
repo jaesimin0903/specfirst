@@ -5,8 +5,11 @@
 # Neither image holds a key or reads .env: the CLI services get theirs from a compose secret at run time.
 # Runbook: docs/deploy.md.
 
-# The Node and pnpm the live services ran on (node --version on the Mac, packageManager in package.json).
+# The CLI runs on the Node the live services ran on (node --version on the Mac), so the signers behave as they did
+# there; the site, the part the internet talks to, runs on Node 24 LTS (tested: build-board, next start). pnpm is
+# packageManager in package.json.
 ARG NODE_VERSION=25.4.0
+ARG WEB_NODE_VERSION=24.21.0
 ARG PNPM_VERSION=10.28.1
 
 FROM node:${NODE_VERSION}-bookworm-slim AS base
@@ -66,8 +69,11 @@ RUN cd packages/web \
  && pnpm exec next build \
  && rm -rf .next/cache
 
-FROM base AS web
-ENV NODE_ENV=production
+FROM node:${WEB_NODE_VERSION}-bookworm-slim AS web
+ARG PNPM_VERSION
+ENV NEXT_TELEMETRY_DISABLED=1 NODE_ENV=production
+RUN npm install -g "pnpm@${PNPM_VERSION}" && npm cache clean --force
+WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/core/package.json packages/core/
 COPY packages/cli/package.json packages/cli/
@@ -78,7 +84,8 @@ RUN pnpm install --prod --frozen-lockfile --filter "@specfirst/web..." \
  && rm -rf /root/.local/share/pnpm /root/.cache
 COPY --from=web-build /app/packages/core/dist packages/core/dist
 COPY --from=web-build /app/packages/web/next.config.mjs packages/web/
-COPY --from=web-build /app/packages/web/.next packages/web/.next
+# next start writes the revalidated routes (/badge/<address>, /api/cert) under .next, so the node user owns it.
+COPY --from=web-build --chown=node:node /app/packages/web/.next packages/web/.next
 COPY --from=web-build /app/packages/web/public packages/web/public
 COPY --from=web-build /app/packages/web/data packages/web/data
 # The repository root is /app (two above packages/web), so the web finds .specfirst/watch, .specfirst/worker and
@@ -104,6 +111,7 @@ COPY packages/core/src/standards packages/core/src/standards
 COPY --from=build /app/packages/cli/dist packages/cli/dist
 COPY packages/cli/templates packages/cli/templates
 COPY examples/watch examples/watch
+COPY --chmod=0755 deploy/supervise.sh /usr/local/bin/specfirst-supervise
 # /app is the project directory of every CLI service (--project defaults to the working directory): .specfirst and
 # certs/checks are mounted here, the standards cache (the a16z harness checkout, issuer locks) at ~/.cache/specfirst.
 RUN mkdir -p .specfirst certs/checks /home/node/.cache/specfirst \

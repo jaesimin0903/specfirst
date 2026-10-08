@@ -4,6 +4,7 @@
 !.env.example
 !**/.env.example
 deploy/.env
+deploy/*.env
 
 .git
 **/node_modules

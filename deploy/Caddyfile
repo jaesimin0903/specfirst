@@ -2,5 +2,21 @@
 # reach this host and the DNS A (and AAAA) record must point here before the first start.
 {$DOMAIN} {
 	encode zstd gzip
+
+	# The largest body the site takes is the demo receiver's 64 KB; refuse anything far above that here.
+	request_body {
+		max_size 256KB
+	}
+
+	# The demo receiver keeps what is POSTed to it and shows it on /watch/demo-hook, so only the two watchers may
+	# post: their fixed addresses on the compose network ($WATCHER_IPS, docker-compose.yml). Not "private ranges":
+	# a connection Docker's userland proxy forwards (IPv6, say) arrives from the network's gateway, a private address.
+	@outside_hook {
+		method POST
+		path /api/v1/watch/demo-hook
+		not remote_ip {$WATCHER_IPS}
+	}
+	respond @outside_hook "The demo receiver takes deliveries from this site's watchers only." 403
+
 	reverse_proxy web:3000
 }
