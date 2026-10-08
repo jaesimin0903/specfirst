@@ -80,6 +80,8 @@ Bitmaps: bit i of `passedBitmap` is set when `results[i].status == "pass"`, of `
 
 Report copies and `reportURI`: before sending, `cert attest` copies the report to `certs/checks/<chainId>/<address lowercase>/<block>-<hash8>.json`, where hash8 is the first 8 bytes of reportHash in hex (16 digits), so two reports of one block never overwrite each other. `reportURI` is `<--report-base-url>/<chainId>/<address lowercase>/<block>-<hash8>.json`; the repository's own value is `https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks` (the README shows the command). Off anvil the option is required; on anvil the default is the repository-relative copy path.
 
+2026-10-08: the repository is github.com/jaesimin0903/specfirst and the value is now `https://raw.githubusercontent.com/jaesimin0903/specfirst/main/certs/checks`; attestations recorded before then keep their `jaesimin/specfirst` reportURI, a GitHub account that is not ours, and the web and MCP server link that exact prefix to the same file in jaesimin0903/specfirst, which still matches reportHash.
+
 ## What `isCompliant` means, and what it does not
 `isCompliant(subjectChainId, subject, standardId)` is true when the latest attestation of that subject and standard is Valid, has at least one pass, and no fail, inconclusive or not-applicable result. `isCompliantWith(subjectChainId, subject, standardId, suiteHash)` is the same with the latest attestation's suiteHash equal to the one given; integrators that rely on a specific suite (a forge version, a property table, a delta) should use it. Both mean only that this suite passed at this block for the code the issuer reported. They do not mean:
 - that the contract is safe or audited, or conforms to properties the suite does not have;

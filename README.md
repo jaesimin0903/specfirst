@@ -41,12 +41,14 @@ Each is a `*_EXIT_CODE` constant of `@specfirst/core`; `packages/core/test/exit-
 
 `specfirst check` results for contracts on any chain, Monad mainnet included, are recorded on testnet in `CheckAttestationRegistry` with `specfirst attest-registry deploy`, `specfirst cert attest <report.json>` and read back with `specfirst cert attestation <chainId> <address>`. See `docs/adr/0004-check-attestation-registry.md` for the trust model and what `isCompliant` does and does not mean.
 
-`cert attest` copies the report to `certs/checks/<chainId>/<address>/<block>-<hash8>.json` before it sends anything, and records `reportURI = <--report-base-url>/<chainId>/<address>/<block>-<hash8>.json`. Off anvil `--report-base-url` is required, so that anyone can fetch the report. Our reports are published from this repository (public once it is opened), so the value we use is:
+`cert attest` copies the report to `certs/checks/<chainId>/<address>/<block>-<hash8>.json` before it sends anything, and records `reportURI = <--report-base-url>/<chainId>/<address>/<block>-<hash8>.json`. Off anvil `--report-base-url` is required, so that anyone can fetch the report. Our reports are published from this repository, github.com/jaesimin0903/specfirst (public once it is opened), so the value we use is:
 
 ```
 node --env-file=.env packages/cli/dist/index.js cert attest <report.json> \
-  --report-base-url https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks
+  --report-base-url https://raw.githubusercontent.com/jaesimin0903/specfirst/main/certs/checks
 ```
+
+Attestations recorded before 2026-10-08 name `https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks/...`, a GitHub account that is not ours. A reportURI cannot change on chain, but the same files are in this repository and still match each attestation's reportHash, so the web and the MCP server link that prefix here instead (`reportLinkOf`) and keep the on-chain string next to the link.
 
 Commit and push the copy under `certs/checks/` so the URI resolves. `attest-registry deploy` makes the address of `ISSUER_PRIVATE_KEY` the issuer by default (the deployer when that key is unset); `attest-registry set-issuer <address> [--remove]` changes issuers later, signed by the owner (`DEPLOYER_PRIVATE_KEY`).
 

@@ -135,7 +135,7 @@ describe.skipIf(SKIP)('specfirst worker with forge (pinned cache present)', { ti
     const registry = new AttestationRegistryClient(getAddress(process.env.SPECFIRST_ATTEST_REGISTRY_31337!), clients.publicClient);
     const a = await registry.attestationOf(request.attestationId);
     expect(a).toMatchObject({ subject: PACKED_VAULT, subjectChainId: 31337n, passCount: 30, failCount: 0 });
-    expect(a.reportURI).toMatch(/^https:\/\/raw\.githubusercontent\.com\/jaesimin\/specfirst\/main\/certs\/checks\/31337\/0x5f0+21\/\d+-[0-9a-f]{16}\.json$/);
+    expect(a.reportURI).toMatch(/^https:\/\/raw\.githubusercontent\.com\/jaesimin0903\/specfirst\/main\/certs\/checks\/31337\/0x5f0+21\/\d+-[0-9a-f]{16}\.json$/);
     expect(await registry.isCompliant(31337n, PACKED_VAULT, a.standardId)).toBe(true);
     const status = workerStatusSchema.parse(JSON.parse(await readFile(path.join(dir, '.specfirst/worker/status.json'), 'utf8')));
     expect(status['0']).toMatchObject({ stage: 'fulfilled', attestationId: request.attestationId.toString() });

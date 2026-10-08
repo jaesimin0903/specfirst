@@ -119,6 +119,22 @@ export function isReport(value: unknown): value is Report {
   return r.specfirst === 1 && Array.isArray(r.invariants) && Array.isArray(r.unverified);
 }
 
+/** The reportURI prefix of attestations recorded before 2026-10-08: a GitHub account that is not ours. */
+export const LEGACY_REPORT_PREFIX = 'https://raw.githubusercontent.com/jaesimin/specfirst/';
+/** Where the same files are published: the public Specfirst repository. */
+export const REPORT_PREFIX = 'https://raw.githubusercontent.com/jaesimin0903/specfirst/';
+
+/**
+ * The URL to link, fetch or hash-check for a reportURI. Attestations recorded before 2026-10-08 name
+ * raw.githubusercontent.com/jaesimin/specfirst, a path we do not control; the same files are in
+ * jaesimin0903/specfirst, and the on-chain reportHash still binds their content. Only that exact prefix
+ * is rewritten; every other string comes back unchanged, so the host allowlist and the hash check
+ * apply to the result as before. Show the on-chain string next to any link built from this.
+ */
+export function reportLinkOf(reportURI: string): string {
+  return reportURI.startsWith(LEGACY_REPORT_PREFIX) ? REPORT_PREFIX + reportURI.slice(LEGACY_REPORT_PREFIX.length) : reportURI;
+}
+
 /**
  * Resolves reportURI (an on-chain, issuer-supplied string) against NEXT_PUBLIC_REPORT_BASE.
  * Returns '' whenever the result would not be safe to use as a fetch target or an href:
@@ -130,6 +146,7 @@ export function isReport(value: unknown): value is Report {
  *   - The resolved URL's scheme is not http: or https: (blocks javascript:, data:, file:, ...).
  * Uses the URL parser (never string concatenation) so a reportURI like "javascript:alert(1)" or
  * "//evil.example" can't be smuggled through as if it were a harmless relative path.
+ * The result goes through reportLinkOf, so a legacy jaesimin/specfirst URL comes back at jaesimin0903/specfirst.
  */
 export function resolveReportUrl(reportURI: string): string {
   if (!reportURI) return '';
@@ -150,5 +167,5 @@ export function resolveReportUrl(reportURI: string): string {
   }
   if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return '';
 
-  return resolved.toString();
+  return reportLinkOf(resolved.toString());
 }

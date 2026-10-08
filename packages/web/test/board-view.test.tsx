@@ -117,6 +117,15 @@ describe('vault page', () => {
     );
   });
 
+  it('links a legacy jaesimin/specfirst reportURI at jaesimin0903/specfirst and keeps the onchain string visible', () => {
+    render(<VaultView detail={detailOf(attested, STEAKHOUSE)} />);
+    const panel = screen.getByRole('region', { name: 'Onchain attestation' });
+    const link = within(panel).getByRole('link', { name: 'Report at the attested reportURI' });
+    expect(link).toHaveAttribute('href', 'https://raw.githubusercontent.com/jaesimin0903/specfirst/main/certs/checks/143/x.json');
+    expect(link).toHaveAttribute('title', 'reportURI on chain: https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks/143/x.json');
+    expect(within(panel).getByText(/On chain: the earlier path jaesimin\/specfirst, same file and hash\./)).toBeInTheDocument();
+  });
+
   it('a vault where nothing applies explains the skipReason first', () => {
     render(<VaultView detail={detailOf(unread, RESTRICTED)} />);
     expect(screen.getByText(/^No property applies\. The asset only moves between allowed parties/)).toBeInTheDocument();

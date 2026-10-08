@@ -27,7 +27,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: jaesimin/specfirst/action@main
+      - uses: jaesimin0903/specfirst/action@main
         with:
           spec: spec/staking-vault.spec.yaml
           mode: pr
@@ -42,7 +42,7 @@ jobs:
       ISSUER_PRIVATE_KEY: ${{ secrets.ISSUER_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - uses: jaesimin/specfirst/action@main
+      - uses: jaesimin0903/specfirst/action@main
         with:
           spec: spec/staking-vault.spec.yaml
           mode: release

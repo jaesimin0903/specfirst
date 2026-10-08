@@ -20,7 +20,7 @@ Why it might matter to you: after the 0x report on hook quote spoofing, exposure
 
 I can have the registry on testnet by Sep 30 and a sample certified vault by Oct 4. If you are open to trying it on a staging screen before Oct 8, I will adapt to whatever format you need.
 
-Repo (public): github.com/jaesimin/specfirst
+Repo (public): github.com/jaesimin0903/specfirst
 Thanks, Jaemin
 
 ## Log

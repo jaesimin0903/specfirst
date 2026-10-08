@@ -2,8 +2,8 @@ import { toFunctionSelector } from 'viem';
 import { describe, expect, it } from 'vitest';
 import { InputError, parseVaultAddress } from '../src/address.js';
 import { onBase } from '../src/api.js';
-import { clean, concernsOf, KNOWN_ERROR_SELECTORS, maxHonoredCall, reportHashOf } from '../src/verdict.js';
-import { ADDR, API_DOWN, fixture, NAMES, REPORT_FILE, verdictOf, vaultApi } from './helpers.js';
+import { clean, concernsOf, KNOWN_ERROR_SELECTORS, maxHonoredCall, reportHashOf, reportLinkOf } from '../src/verdict.js';
+import { ADDR, API_DOWN, chainRead, fixture, NAMES, REPORT_FILE, verdictOf, vaultApi } from './helpers.js';
 
 describe('vault_verdict on the fixtures', () => {
   it('Upshift: MUST mismatch with the concrete calls, the EIP sentences, the async trait and an attestation of an earlier block', () => {
@@ -111,6 +111,15 @@ describe('vault_verdict on the fixtures', () => {
     expect(verdictOf('morpho', { api: { ok: true, vault: api } }).report!.url).toBeNull();
   });
 
+  it('the attested reportURI stays as the chain stores it; reportLink maps the legacy jaesimin/specfirst prefix', () => {
+    const a = verdictOf('upshift').attestation;
+    expect(a.reportURI).toBe('https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks/143/0xd793c04b87386a6bb84ee61d98e0065fde7fda5e/109195820-2360d95c83b2c541.json');
+    expect(a.reportLink).toBe('https://raw.githubusercontent.com/jaesimin0903/specfirst/main/certs/checks/143/0xd793c04b87386a6bb84ee61d98e0065fde7fda5e/109195820-2360d95c83b2c541.json');
+    const other = verdictOf('upshift', { chain: chainRead('upshift', { reportURI: 'https://reports.example/143/x.json' }) }).attestation;
+    expect(other.reportLink).toBe('https://reports.example/143/x.json');
+    expect(verdictOf('upshift', { chain: chainRead('upshift', { reportURI: '' }) }).attestation.reportLink).toBeNull();
+  });
+
   it('report links are rebased onto the configured API, whatever host the API names', () => {
     const api = vaultApi('morpho');
     api.report = { ...api.report!, url: 'https://elsewhere.example/reports/143/x.json' };
@@ -160,6 +169,21 @@ describe('helpers', () => {
     expect(onBase(base, 'javascript:alert(1)')).toBeNull();
     expect(onBase('http://localhost:3417', 'x:0/r.json')).toBeNull();
     expect(onBase('https://specfirst.example/app', '/reports/a.json')).toBe('https://specfirst.example/app/reports/a.json');
+  });
+
+  it('reportLinkOf rewrites only the exact legacy prefix', () => {
+    expect(reportLinkOf('https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks/143/a/1-b.json')).toBe(
+      'https://raw.githubusercontent.com/jaesimin0903/specfirst/main/certs/checks/143/a/1-b.json',
+    );
+    for (const uri of [
+      'https://raw.githubusercontent.com/jaesimin0903/specfirst/main/x.json',
+      'https://raw.githubusercontent.com/jaesimin/specfirst-example-vault/main/x.json',
+      'http://raw.githubusercontent.com/jaesimin/specfirst/main/x.json',
+      'https://evil.example/https://raw.githubusercontent.com/jaesimin/specfirst/main/x.json',
+      'certs/checks/143/x.json',
+    ]) {
+      expect(reportLinkOf(uri)).toBe(uri);
+    }
   });
 
   it('text from a vault is one bounded line', () => {

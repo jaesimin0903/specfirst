@@ -163,7 +163,7 @@ describe.skipIf(SKIP_ANVIL)('specfirst cert attest on anvil', { timeout: 300_000
     const mainnetReport = path.join(FIXTURES, 'morpho-143-109061472.json');
     const noBase = await cli('cert', 'attest', mainnetReport, '--network', 'monad-testnet', '--rpc', NOWHERE, '--registry-attest', SUBJECT);
     expect(noBase.code).toBe(14);
-    expect(noBase.err).toMatch(/--report-base-url is required on monad-testnet.*https:\/\/raw\.githubusercontent\.com\/jaesimin\/specfirst\/main\/certs\/checks/);
+    expect(noBase.err).toMatch(/--report-base-url is required on monad-testnet.*https:\/\/raw\.githubusercontent\.com\/jaesimin0903\/specfirst\/main\/certs\/checks/);
     const badBase = await cli('cert', 'attest', mainnetReport, '--network', 'monad-testnet', '--rpc', NOWHERE, '--registry-attest', SUBJECT, '--report-base-url', 'ipfs://x');
     expect(badBase.code).toBe(14);
     expect(badBase.err).toMatch(/--report-base-url must be an http\(s\) URL/);

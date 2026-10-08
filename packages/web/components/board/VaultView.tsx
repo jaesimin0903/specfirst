@@ -12,6 +12,7 @@ import {
   verdictSentence,
 } from '../../lib/board/reasons';
 import { addressUrl, txUrl } from '../../lib/board/attestations';
+import { reportLinkOf } from '../../lib/report';
 import { shortAddress, shortHash } from '../../lib/format';
 import { LevelTag, PropertyChip, VaultChip } from './StatusChip';
 import { classifyFailure, failureLevelOf, propertyLevel } from '../../lib/board/levels';
@@ -161,7 +162,10 @@ function AttestationPanel({ a, detail }: { a: AttestationView; detail: VaultDeta
           </dl>
           {/^https:\/\//.test(a.reportURI) && (
             <p style={{ marginTop: 12 }}>
-              <a href={a.reportURI}>Report at the attested reportURI</a>
+              <a href={reportLinkOf(a.reportURI)} title={`reportURI on chain: ${a.reportURI}`}>
+                Report at the attested reportURI
+              </a>
+              {reportLinkOf(a.reportURI) !== a.reportURI && <span className="soft"> On chain: the earlier path jaesimin/specfirst, same file and hash.</span>}
             </p>
           )}
         </>

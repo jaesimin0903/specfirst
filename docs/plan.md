@@ -28,7 +28,7 @@
 ### 남은 일정 (마감 2026-10-13)
 
 - 웹 배포: 사용자가 맡는다. 배포 주소가 나오면 제출 문서의 자리표시자를 채운다.
-- GitHub 공개 push `jaesimin/specfirst`: 증명의 reportURI가 `https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks/...`를 가리키므로, push 전에는 등록부의 보고서 링크가 열리지 않는다. `certs/checks/` 사본을 함께 push한다.
+- GitHub 공개 push `jaesimin0903/specfirst`: 증명의 reportURI가 `https://raw.githubusercontent.com/jaesimin0903/specfirst/main/certs/checks/...`를 가리키므로, push 전에는 등록부의 보고서 링크가 열리지 않는다. `certs/checks/` 사본을 함께 push한다. 2026-10-08 메모: 그 전에 기록된 증명 29건의 reportURI는 `jaesimin/specfirst` 경로인데, 이 GitHub 계정은 우리 것이 아니다. 온체인 값은 바꿀 수 없지만 같은 파일이 `jaesimin0903/specfirst`에 있고 reportHash가 그대로 맞으므로, 웹과 MCP는 그 접두어만 새 저장소로 바꿔 연결하고 온체인 문자열을 함께 보여 준다.
 - 최종 녹화(`docs/demo-script.md`)와 제출: 2026-10-13까지.
 
 ---
