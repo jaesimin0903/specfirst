@@ -83,10 +83,10 @@ sudo mkdir -p .specfirst/watch .specfirst/worker
 sudo chown -R 1000:1000 .specfirst certs/checks
 ```
 
-Copy the state from the Mac now (Migration, step 1), so the board the web image builds includes the Mac's reports, then build and start the web and Caddy:
+Copy the state from the Mac now (Migration, step 1), so the board the web image builds includes the Mac's reports, then build both images (`--profile signers` builds the CLI image now, so the cutover does not wait for it) and start the web and Caddy:
 
 ```
-sudo docker compose -f deploy/docker-compose.yml build
+sudo docker compose -f deploy/docker-compose.yml --profile signers build
 sudo docker compose -f deploy/docker-compose.yml up -d
 ```
 
@@ -136,11 +136,11 @@ The watchers and the worker keep their place in `state.json`, `status.json`, `va
 
 5. Move the demo subscriber and re-register its webhook (Webhooks below).
 
-Lock files hold a pid and a lock whose pid is gone is taken over. Under `init: true` each CLI process runs under Docker's init with the same pid after every restart, so a restarted service takes its own stale lock back; the Mac's pids would not be alive on the server either, but step 1 leaves them behind anyway.
+Lock files hold a pid and a lock whose pid is gone is taken over. Under `init: true` each CLI process runs under Docker's init with the same pid after every restart, so a restarted service takes its own stale lock back; the Mac's pids would not be alive on the server either, but step 1 leaves them behind anyway. The same reuse means the issuer locks, which sit in the shared `standards-cache` volume, cannot tell two containers apart: the compose file gives each signer its own key, and that has to stay so.
 
 ### Rollback
 
-Stop the server's signers first (`sudo docker compose -f deploy/docker-compose.yml stop watch-143 watch-10143 worker gate-keeper` and remove `signers` from `COMPOSE_PROFILES`), copy the three directories back with the same `rsync` commands in the other direction, then run `restart-services.sh` on the Mac. A watcher of older code cannot read a `vaults.json` written by newer code (`lastCheck.reportHash`), so the Mac must run the same commit as the server, or a newer one. With both on the same commit this does not arise.
+Stop the server's signers first (`sudo docker compose -f deploy/docker-compose.yml stop watch-143 watch-10143 worker gate-keeper` and remove `signers` from `COMPOSE_PROFILES`), copy the three directories back with the same `rsync` commands in the other direction (`rsync -az --exclude '*.lock' root@<server>:/opt/specfirst/.specfirst/watch/ .specfirst/watch/`, and so on), rename `restart-services.sh.disabled` back and run it on the Mac. A watcher of older code cannot read a `vaults.json` written by newer code (`lastCheck.reportHash`), so the Mac must run the same commit as the server, or a newer one. With both on the same commit this does not arise.
 
 ## Webhooks
 
