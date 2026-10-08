@@ -1,0 +1,337 @@
+{
+ "chainId": 143,
+ "available": true,
+ "problem": null,
+ "events": [
+  {
+   "seq": 1031,
+   "at": "2026-10-08T01:58:00.000Z",
+   "kind": "changed",
+   "chainId": 143,
+   "subject": "0x2222222222222222222222222222222222222222",
+   "vaultPath": "/v/143/0x2222222222222222222222222222222222222222",
+   "label": {
+    "name": "Synthetic regressed vault",
+    "protocol": null,
+    "assetSymbol": "AUSD",
+    "onList": false,
+    "onBoard": false
+   },
+   "source": "deposit",
+   "sourceText": "first Deposit event from an unknown address",
+   "block": null,
+   "txHash": null,
+   "txUrl": null,
+   "factory": null,
+   "check": {
+    "block": "111484100",
+    "summary": {
+     "pass": 22,
+     "fail": 4,
+     "inconclusive": 4,
+     "notApplicable": 0
+    },
+    "failed": [
+     "previewDeposit",
+     "previewMint",
+     "previewWithdraw",
+     "previewRedeem"
+    ],
+    "status": "mismatch",
+    "implementationKey": "0xdd21af250ff5c7001b35031d24abc55fd472370cf156a4146fe35134139c1901",
+    "reportHash": "0x5404163612a021607ef2de4a80127e30c225d8f61e29d8072ccba356ac0b3785",
+    "durationMs": 85210,
+    "cells": "iiiiiiiiiiiiiiiiiiiiiiiiiiffii",
+    "reportUrl": "/api/v1/reports/143/0x2222222222222222222222222222222222222222/111484100-0123456789abcdef.json",
+    "reportMatches": true,
+    "failureLevel": "must"
+   },
+   "attestation": {
+    "id": "28",
+    "txHash": "0xabababababababababababababababababababababababababababababababab",
+    "txUrl": "https://testnet.monadscan.com/tx/0xabababababababababababababababababababababababababababababababab",
+    "supersedes": null
+   },
+   "change": {
+    "kind": "regressed",
+    "from": {
+     "summary": {
+      "pass": 26,
+      "fail": 0,
+      "inconclusive": 4,
+      "notApplicable": 0
+     },
+     "failed": [],
+     "status": "partial",
+     "failureLevel": null
+    },
+    "to": {
+     "summary": {
+      "pass": 22,
+      "fail": 4,
+      "inconclusive": 4,
+      "notApplicable": 0
+     },
+     "failed": [
+      "previewDeposit",
+      "previewMint",
+      "previewWithdraw",
+      "previewRedeem"
+     ],
+     "status": "mismatch",
+     "failureLevel": "must"
+    }
+   },
+   "alert": null,
+   "reason": "confirmed by a second check at block 111484100 after block 111483900; attested [fail]",
+   "found": {
+    "source": "backfill",
+    "block": "109195820",
+    "at": "2026-09-30T08:20:58.372Z",
+    "deployBlock": null,
+    "factory": null,
+    "firstDepositBlock": null
+   }
+  },
+  {
+   "seq": 1030,
+   "at": "2026-10-08T01:57:00.000Z",
+   "kind": "changed",
+   "chainId": 143,
+   "subject": "0xf26dC2F1FE883b11Dd56700db594DfC32Eee95Bf",
+   "vaultPath": "/v/143/0xf26dc2f1fe883b11dd56700db594dfc32eee95bf",
+   "label": {
+    "name": "EVK Vault eeUSD-4",
+    "protocol": "Euler EVK (eVault)",
+    "assetSymbol": "eUSD",
+    "onList": true,
+    "onBoard": true
+   },
+   "source": "sweep",
+   "sourceText": "scheduled re-check",
+   "block": null,
+   "txHash": null,
+   "txUrl": null,
+   "factory": null,
+   "check": null,
+   "attestation": null,
+   "change": {
+    "kind": "price-drop",
+    "fromAssetsPerShare": "1004200",
+    "toAssetsPerShare": "999984",
+    "dropBps": 41,
+    "fromBlock": "111483000",
+    "toBlock": "111483400"
+   },
+   "alert": null,
+   "reason": "share value fell, confirmed at a second block",
+   "found": {
+    "source": "backfill",
+    "block": "109195820",
+    "at": "2026-09-30T08:20:58.372Z",
+    "deployBlock": null,
+    "factory": null,
+    "firstDepositBlock": null
+   }
+  },
+  {
+   "seq": 1029,
+   "at": "2026-10-08T01:54:59.556Z",
+   "kind": "changed",
+   "chainId": 143,
+   "subject": "0xBeEFfB65df79Baac701307c9605b7aB207355Fdb",
+   "vaultPath": "/v/143/0xbeeffb65df79baac701307c9605b7ab207355fdb",
+   "label": {
+    "name": "Steakhouse High Yield USD1",
+    "protocol": "Morpho Vault V2",
+    "assetSymbol": "USD1",
+    "onList": true,
+    "onBoard": true
+   },
+   "source": "sweep",
+   "sourceText": "scheduled re-check",
+   "block": null,
+   "txHash": null,
+   "txUrl": null,
+   "factory": null,
+   "check": {
+    "block": "111483975",
+    "summary": {
+     "pass": 26,
+     "fail": 0,
+     "inconclusive": 0,
+     "notApplicable": 4
+    },
+    "failed": [],
+    "status": "partial",
+    "implementationKey": "0x8d799902b0635b2aa79f2f0b05f64fa8c43e6c19ab91658e72c3d9a5b3ce2662",
+    "reportHash": "0x5d4ebf59e6622761a7c428cb023e1b57270ffffb8e9857fab0358cbefffe5341",
+    "durationMs": 61497,
+    "cells": "ppppppppppppppppppppppppppnnnn",
+    "reportUrl": "/api/v1/reports/143/0xbeeffb65df79baac701307c9605b7ab207355fdb/111483975-5d4ebf59e6622761.json",
+    "reportMatches": true,
+    "failureLevel": null
+   },
+   "attestation": null,
+   "change": {
+    "kind": "changed",
+    "from": {
+     "summary": {
+      "pass": 0,
+      "fail": 0,
+      "inconclusive": 28,
+      "notApplicable": 2
+     },
+     "failed": [],
+     "status": "partial",
+     "failureLevel": null
+    },
+    "to": {
+     "summary": {
+      "pass": 26,
+      "fail": 0,
+      "inconclusive": 0,
+      "notApplicable": 4
+     },
+     "failed": [],
+     "status": "partial",
+     "failureLevel": null
+    }
+   },
+   "alert": null,
+   "reason": null,
+   "found": {
+    "source": "backfill",
+    "block": "109195820",
+    "at": "2026-09-30T08:23:53.318Z",
+    "deployBlock": null,
+    "factory": null,
+    "firstDepositBlock": null
+   }
+  },
+  {
+   "seq": 1024,
+   "at": "2026-10-08T01:35:34.574Z",
+   "kind": "changed",
+   "chainId": 143,
+   "subject": "0x8Be8883a707eAec04181993fdBb90948FEC7DA25",
+   "vaultPath": "/v/143/0x8be8883a707eaec04181993fdbb90948fec7da25",
+   "label": {
+    "name": null,
+    "protocol": null,
+    "assetSymbol": null,
+    "onList": false,
+    "onBoard": false
+   },
+   "source": "deposit",
+   "sourceText": "first Deposit event from an unknown address",
+   "block": "111479840",
+   "txHash": "0xa93654270973cf3101e8b67e62a3c58d8db95c0febc3d9ad90c7d0f1aa7895c0",
+   "txUrl": "https://monadscan.com/tx/0xa93654270973cf3101e8b67e62a3c58d8db95c0febc3d9ad90c7d0f1aa7895c0",
+   "factory": null,
+   "check": {
+    "block": "111479866",
+    "summary": {
+     "pass": 16,
+     "fail": 0,
+     "inconclusive": 12,
+     "notApplicable": 2
+    },
+    "failed": [],
+    "status": "partial",
+    "implementationKey": "0xf6de5707e13ca6f2464a6ffd35ce790a410ed06d3d0adc9940a108116fe7c213",
+    "reportHash": "0x816ff5bca71a0fbf56ad9eddd1db1a032de25110dced4312edfb4e66b4fe857a",
+    "durationMs": 136891,
+    "cells": "pppppppppppiippiipiiiiiiiippnn",
+    "reportUrl": "/api/v1/reports/143/0x8be8883a707eaec04181993fdbb90948fec7da25/111479866-816ff5bca71a0fbf.json",
+    "reportMatches": true,
+    "failureLevel": null
+   },
+   "attestation": null,
+   "change": {
+    "kind": "new",
+    "from": null,
+    "to": {
+     "summary": {
+      "pass": 16,
+      "fail": 0,
+      "inconclusive": 12,
+      "notApplicable": 2
+     },
+     "failed": [],
+     "status": "partial",
+     "failureLevel": null
+    }
+   },
+   "alert": null,
+   "reason": null,
+   "found": {
+    "source": "deposit",
+    "block": "111479840",
+    "at": "2026-10-08T01:33:12.011Z",
+    "deployBlock": null,
+    "factory": null,
+    "firstDepositBlock": "111479840"
+   }
+  },
+  {
+   "seq": 981,
+   "at": "2026-10-08T00:03:45.780Z",
+   "kind": "checked",
+   "chainId": 143,
+   "subject": "0xf26dC2F1FE883b11Dd56700db594DfC32Eee95Bf",
+   "vaultPath": "/v/143/0xf26dc2f1fe883b11dd56700db594dfc32eee95bf",
+   "label": {
+    "name": "EVK Vault eeUSD-4",
+    "protocol": "Euler EVK (eVault)",
+    "assetSymbol": "eUSD",
+    "onList": true,
+    "onBoard": true
+   },
+   "source": "sweep",
+   "sourceText": "scheduled re-check",
+   "block": null,
+   "txHash": null,
+   "txUrl": null,
+   "factory": null,
+   "check": {
+    "block": "111461783",
+    "summary": {
+     "pass": 0,
+     "fail": 2,
+     "inconclusive": 28,
+     "notApplicable": 0
+    },
+    "failed": [
+     "sf-maxDeposit-honored",
+     "sf-maxMint-honored"
+    ],
+    "status": "mismatch",
+    "implementationKey": "0xdd21af250ff5c7001b35031d24abc55fd472370cf156a4146fe35134139c1901",
+    "reportHash": "0x5404163612a021607ef2de4a80127e30c225d8f61e29d8072ccba356ac0b3785",
+    "durationMs": 85210,
+    "cells": "iiiiiiiiiiiiiiiiiiiiiiiiiiffii",
+    "reportUrl": "/api/v1/reports/143/0xf26dc2f1fe883b11dd56700db594dfc32eee95bf/111461783-5404163612a02160.json",
+    "reportMatches": true,
+    "failureLevel": "must"
+   },
+   "attestation": null,
+   "change": null,
+   "alert": null,
+   "reason": "not attested [unchanged]: unchanged since attestation 3",
+   "found": {
+    "source": "backfill",
+    "block": "109195820",
+    "at": "2026-09-30T08:20:58.372Z",
+    "deployBlock": null,
+    "factory": null,
+    "firstDepositBlock": null
+   }
+  }
+ ],
+ "latestSeq": 1031,
+ "hasOlder": false,
+ "gap": false,
+ "skipped": 0,
+ "readAt": "2026-10-08T01:58:23.223Z"
+}
