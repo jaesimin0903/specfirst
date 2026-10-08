@@ -1,6 +1,7 @@
 import { checkAttestationRegistryAbi, standardIdOf } from '@specfirst/core';
 import { checkSubscriptionsAbi } from '@specfirst/core/subs';
 import { createPublicClient, defineChain, http, type Address, type Hex } from 'viem';
+import { within } from './api.js';
 import { ATTEST_CHAIN_ID } from './config.js';
 
 /*
@@ -71,15 +72,6 @@ const monadTestnet = defineChain({
   nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
   rpcUrls: { default: { http: [] } },
 });
-
-/** `p`, or a rejection once `ms` have passed. */
-function within<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
-  });
-  return Promise.race([p, late]).finally(() => clearTimeout(timer));
-}
 
 export function createChainReader(o: { rpcUrl: string; registry: Address; subscriptions: Address; timeoutMs: number }): ChainReader {
   // ccipRead off: an OffchainLookup revert must not make this process fetch a URL the RPC chose (EIP-3668).

@@ -103,6 +103,7 @@ export const verdictOutput = z.object({
       verified: z.boolean().nullable(),
       matchesApiSummary: z.boolean().nullable(),
       coversAllProperties: z.boolean().nullable(),
+      fullStrength: z.boolean().nullable(),
       reproduce: z.string().nullable(),
     })
     .nullable(),

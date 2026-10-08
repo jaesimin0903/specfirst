@@ -179,6 +179,8 @@ describe('configuration', () => {
     expect(() => configFromEnv({ SPECFIRST_API_BASE: 'http://specfirst.example' })).toThrow(/https unless it is on this machine/);
     expect(() => configFromEnv({ SPECFIRST_API_BASE: 'https://user:pw@specfirst.example' })).toThrow(/credentials/);
     expect(() => configFromEnv({ SPECFIRST_API_BASE: 'https://specfirst.example/?x=1' })).toThrow(/query/);
+    // The web's links carry its origin only, so a base with a path would double that path in every link (re-review 8).
+    expect(() => configFromEnv({ SPECFIRST_API_BASE: 'https://specfirst.example/app' })).toThrow(/without a path/);
     // An RPC keeps a provider key in its path or query.
     expect(configFromEnv({ MONAD_TESTNET_RPC: 'https://rpc.example/v1/key?token=abc' }).rpcUrl).toBe('https://rpc.example/v1/key?token=abc');
   });

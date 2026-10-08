@@ -1,6 +1,7 @@
 import type { MoveCheck } from './decide.js';
 import type { Findings } from './findings.js';
 import type { Verdict } from './verdict.js';
+import { quote } from './verdict.js';
 import type { WatchGuide } from './watch.js';
 
 /*
@@ -19,7 +20,7 @@ const STATUS: Readonly<Record<Verdict['status'], string>> = {
 
 /** Names come from the vault or its deployer: quoted, and already cleaned to one bounded line (verdict.ts clean). */
 function vaultLine(v: { address: string; chainId: number; name: string | null; protocol: string | null }): string {
-  return `${v.name ? `"${v.name}"${v.protocol ? ` (${v.protocol})` : ''} ` : ''}${v.address} on chain ${v.chainId}`;
+  return `${v.name ? `${quote(v.name)}${v.protocol ? ` (${quote(v.protocol)})` : ''} ` : ''}${v.address} on chain ${v.chainId}`;
 }
 
 export function verdictText(v: Verdict): string {
@@ -105,7 +106,7 @@ export function findingsText(f: Findings): string {
   for (const c of f.changes) out.push(`- ${c.at} ${c.text}`);
   out.push(f.currentMismatches.length ? 'Current mismatches (latest check in the scanned events):' : 'No vault whose latest scanned check is a mismatch.');
   for (const m of f.currentMismatches) {
-    out.push(`- ${m.vault.name ? `"${m.vault.name}" ` : ''}${m.vault.address}: ${(m.level ?? 'must').toUpperCase()}, ${m.failed.join(', ')} at block ${m.block}${m.pending ? ' (waiting for its confirming check)' : ''}.`);
+    out.push(`- ${m.vault.name ? `${quote(m.vault.name)} ` : ''}${m.vault.address}: ${(m.level ?? 'must').toUpperCase()}, ${m.failed.join(', ')} at block ${m.block}${m.pending ? ' (waiting for its confirming check)' : ''}.`);
   }
   for (const p of f.problems) out.push(`Problem: ${p}`);
   out.push(`Feed: ${f.links.feed}`);

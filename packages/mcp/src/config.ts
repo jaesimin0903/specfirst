@@ -52,7 +52,7 @@ function positive(value: string | undefined, fallback: number, name: string): nu
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**
- * An https URL, or plain http to this machine (the local web, anvil). For the API no credentials, query or fragment:
+ * An https URL, or plain http to this machine (the local web, anvil). For the API an origin, no credentials, query or fragment:
  * what is configured is a place, and the links the API returns are resolved on it. An RPC (`asGiven`) may carry a
  * provider's key in its credentials or query; it is used as given and only its origin is ever shown.
  */
@@ -69,7 +69,9 @@ function httpUrl(value: string | undefined, fallback: string, name: string, asGi
   if (asGiven) return v;
   if (u.username || u.password) throw new ConfigError(`${name} must not carry credentials`);
   if (u.hash || u.search) throw new ConfigError(`${name} must not carry a ${u.hash ? 'fragment' : 'query'}`);
-  return `${u.origin}${u.pathname}`.replace(/\/+$/, '');
+  // The web builds its links from its origin, so the API is an origin too: a path would be doubled in every link.
+  if (u.pathname !== '/') throw new ConfigError(`${name} must be an origin such as https://specfirst.example, without a path`);
+  return u.origin;
 }
 
 /**

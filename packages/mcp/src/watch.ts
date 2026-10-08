@@ -3,6 +3,7 @@ import { formatEther, type Address } from 'viem';
 import type { SpecfirstApi, WatchVault } from './api.js';
 import { ERC4626_STANDARD_ID, type ChainReader } from './chain.js';
 import { ATTEST_CHAIN_ID, TESTNET_EXPLORER } from './config.js';
+import { clean } from './verdict.js';
 
 /*
  * how_to_watch: how a person or an agent subscribes to alerts about one vault (CheckSubscriptions, ADR 0006).
@@ -61,7 +62,7 @@ export async function howToWatch(deps: WatchDeps, address: Address, chainId: num
       feePerDayWei: fee.read === 'ok' ? fee.feePerDayWei.toString() : null,
       feePerDayMon: fee.read === 'ok' ? formatEther(fee.feePerDayWei) : null,
       fee: fee.read === 'ok' ? 'chain' : 'unread',
-      reason: fee.read === 'unread' ? fee.reason : null,
+      reason: fee.read === 'unread' ? clean(fee.reason, 200) : null,
       call: 'subscribe(uint64 subjectChainId, address subject, bytes32 standardId, uint32 days_) payable returns (uint256 id)',
       args: { subjectChainId: chainId, subject: address, standardId: ERC4626_STANDARD_ID, days: `1 to ${MAX_SUBSCRIPTION_DAYS}` },
       value: 'feePerDay x days, in testnet MON (wei), sent with the call',
@@ -84,7 +85,13 @@ export async function howToWatch(deps: WatchDeps, address: Address, chainId: num
       delivery: `POST with JSON; v stays 1 and grows by adding fields, so ignore kinds and fields you do not know. Up to ${DEFAULT_WEBHOOK_ATTEMPTS} attempts, at most ${DEFAULT_WEBHOOK_MAX_TARGETS} subscribers and ${DEFAULT_WEBHOOK_DEADLINE_MS / 1000} seconds per event. Every alert also lands in the inbox at ${base}/watch/inbox.`,
     },
     watcher: watch
-      ? { knows: watch.watched, foundBy: watch.found?.source ?? null, lastCheckBlock: watch.lastCheck?.block ?? null, lastCheckAt: watch.lastCheck?.at ?? null, lastAttestationId: watch.lastAttestationId }
+      ? {
+          knows: watch.watched,
+          foundBy: watch.found ? clean(watch.found.source, 40) : null,
+          lastCheckBlock: watch.lastCheck && /^\d+$/.test(watch.lastCheck.block) ? watch.lastCheck.block : null,
+          lastCheckAt: watch.lastCheck ? clean(watch.lastCheck.at, 40) : null,
+          lastAttestationId: watch.lastAttestationId && /^\d+$/.test(watch.lastAttestationId) ? watch.lastAttestationId : null,
+        }
       : null,
     notes: [
       'Informational only: this server never signs or sends a transaction. Subscribe from the vault page ("Watch this vault") with a browser wallet, or send the call above from your own wallet.',

@@ -1,4 +1,4 @@
-import { checkReportHash } from '@specfirst/core';
+import { checkReportHash, ERC4626_UPSTREAM, propertiesHash, STANDARD_PROPERTY_TABLES, suiteHash, suiteOf } from '@specfirst/core';
 import type { Address } from 'viem';
 import { ApiError, onBase, type ReportJson, type SpecfirstApi, type VaultApi, type WatchVault } from './api.js';
 import type { ChainAttestation, ChainReader, LatestRead } from './chain.js';
@@ -86,8 +86,13 @@ export interface ReportView {
   verified: boolean | null;
   /** The API's summary, status and failed ids agree with the verified file; null without a verified file. */
   matchesApiSummary: boolean | null;
-  /** The file's results are exactly the 30 properties of the table, in order. */
+  /** The file's results are exactly the 30 properties of a published property table (ids, tests and descriptions), in order. */
   coversAllProperties: boolean | null;
+  /**
+   * The check ran at full strength: the pinned a16z/erc4626-tests commit, at least 16 fuzz runs a property and a delta
+   * of 0, and its suite hash (core suiteOf) is the one the API names. A check with fewer runs or a tolerance passes more.
+   */
+  fullStrength: boolean | null;
   /** The `specfirst check` command that replays the verified file; null without one. */
   reproduce: string | null;
 }
@@ -141,8 +146,18 @@ export function concernsOf(id: string): Action[] {
 
 /** Text that came from a vault, a deployer or the API, made safe to put in a line an LLM reads: one line, bounded. */
 export function clean(s: string | null | undefined, max = 300): string {
-  const one = (s ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // Control and line separator characters become spaces; zero-width and bidi controls are dropped.
+  const one = (s ?? '')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   return one.length > max ? `${one.slice(0, max)}...` : one;
+}
+
+/** A quoted form of text from a vault or a deployer: JSON quoting, so an inner quote cannot close it. */
+export function quote(s: string): string {
+  return JSON.stringify(s);
 }
 
 function cleanOrNull(s: string | null | undefined, max = 80): string | null {
@@ -228,6 +243,11 @@ function findingOf(r: ReportJson['results'][number]): string {
   return r.reason ? `Forge found a counterexample: ${clean(r.reason)}` : 'Forge found a counterexample.';
 }
 
+/** Unix seconds as an ISO time; null for a value no Date can hold (a registry answer this code cannot use). */
+function isoOfSeconds(seconds: bigint): string | null {
+  return seconds >= 0n && seconds <= 8_640_000_000_000n ? new Date(Number(seconds) * 1000).toISOString() : null;
+}
+
 /** Hours since an ISO time; null when unknown or more than five minutes in the future. */
 function hoursSince(from: string | null, now: Date): number | null {
   if (from === null) return null;
@@ -287,7 +307,7 @@ function attestationView(o: {
   if (o.chain.read === 'none') return { ...v, read: 'none', isCompliant: false, serverAgrees: o.server && o.server.state !== 'unread' ? o.server.state === 'none' : null };
   const a: ChainAttestation = o.chain.attestation;
   const failed = idsOfBitmap(a.failedBitmap);
-  const issuedAt = new Date(Number(a.issuedAt) * 1000).toISOString();
+  const issuedAt = isoOfSeconds(a.issuedAt);
   const id = a.id.toString();
   const rel = o.reportBlock === null ? null : BigInt(o.reportBlock) === a.blockNumber ? 'same-block' : a.blockNumber < BigInt(o.reportBlock) ? 'earlier-block' : 'later-block';
   return {
@@ -357,6 +377,10 @@ function statusOf(s: { pass: number; fail: number; inconclusive: number; notAppl
   return 'partly-checked';
 }
 
+/** What a check must have run with for this server to vouch for a pass: the 16 runs a property the watcher and the desk use. */
+export const MIN_RUNS = 16;
+const TABLE_HASHES: readonly string[] = (STANDARD_PROPERTY_TABLES.erc4626 ?? []).map((t) => propertiesHash(t).toLowerCase());
+
 const API_STATUS = { mismatch: 'mismatch', complete: 'all-passed', partial: 'partly-checked', not_applicable: 'not-applicable' } as const;
 
 export function buildVerdict(i: VerdictInput): Verdict {
@@ -407,6 +431,7 @@ export function buildVerdict(i: VerdictInput): Verdict {
   let notJudged: Verdict['notJudged'] = [];
   let matchesApiSummary: boolean | null = null;
   let coversAllProperties: boolean | null = null;
+  let fullStrength: boolean | null = null;
 
   if (apiReport && detail) {
     basis = 'report';
@@ -416,7 +441,19 @@ export function buildVerdict(i: VerdictInput): Verdict {
     status = statusOf(summary);
     blockChecked = detail.blockNumber;
     checkedAt = detail.startedAt;
-    coversAllProperties = results.length === PROPERTY_IDS.length && results.every((r, k) => r.id === PROPERTY_IDS[k]);
+    coversAllProperties =
+      results.length === PROPERTY_IDS.length && results.every((r, k) => r.id === PROPERTY_IDS[k]) && TABLE_HASHES.includes(propertiesHash(results).toLowerCase());
+    fullStrength =
+      detail.runs >= MIN_RUNS &&
+      detail.delta === '0' &&
+      detail.upstream.repo === ERC4626_UPSTREAM.repo &&
+      detail.upstream.commit === ERC4626_UPSTREAM.commit &&
+      suiteHash(suiteOf(detail)).toLowerCase() === apiReport.suiteHash.toLowerCase();
+    if (!fullStrength) {
+      problems.push(
+        `The check ran with ${detail.runs} fuzz runs a property, delta ${clean(detail.delta, 40)} and ${clean(detail.upstream.repo, 80)} at ${clean(detail.upstream.commit, 40)}, or its suite hash is not the one the API names; this server vouches only for ${MIN_RUNS} runs or more, delta 0 and the pinned suite.`,
+      );
+    }
     const findingFromApi = new Map(apiReport.failed.map((f) => [f.id, f.finding]));
     const classes: FailureClass[] = [];
     failed = results
@@ -482,6 +519,7 @@ export function buildVerdict(i: VerdictInput): Verdict {
   } else {
     basis = 'none';
     status = api && !api.checked ? 'unchecked' : 'unknown';
+    if (api?.checked) problems.push('The API says the vault was checked but names no report for it.');
     level = null;
   }
 
@@ -500,7 +538,7 @@ export function buildVerdict(i: VerdictInput): Verdict {
     notJudged,
     traits,
     report: apiReport
-      ? { url: onBase(base, apiReport.url), reportHash: apiReport.reportHash, verified, matchesApiSummary, coversAllProperties, reproduce: detail ? reproduceOf(detail) : null }
+      ? { url: onBase(base, apiReport.url), reportHash: apiReport.reportHash, verified, matchesApiSummary, coversAllProperties, fullStrength, reproduce: detail ? reproduceOf(detail) : null }
       : null,
     attestation,
     freshness: {
@@ -564,10 +602,22 @@ export async function gatherVerdict(deps: VerdictDeps, address: Address, chainId
     staleHours: deps.staleHours,
     now: (deps.now ?? (() => new Date()))(),
   };
+  return verdictOrFallback(input);
+}
+
+/**
+ * buildVerdict, and when an answer of either source cannot be used, the same without it: first without the API's,
+ * then without the registry's too. An unusable answer is an unreadable source, never a tool error.
+ */
+export function verdictOrFallback(input: VerdictInput): Verdict {
   try {
     return buildVerdict(input);
   } catch (err) {
-    // An API answer this code cannot use is an unreadable source, not a tool error: the registry still answers.
-    return buildVerdict({ ...input, api: { ok: false, reason: `The Specfirst API answer could not be used (${(err as Error).message})` }, report: null, watch: null });
+    const api: ApiRead = { ok: false, reason: `The Specfirst API answer could not be used (${clean((err as Error).message, 200)})` };
+    try {
+      return buildVerdict({ ...input, api, report: null, watch: null });
+    } catch (err2) {
+      return buildVerdict({ ...input, api, report: null, watch: null, chain: { read: 'unread', reason: `The registry answer could not be used (${clean((err2 as Error).message, 200)})` } });
+    }
   }
 }

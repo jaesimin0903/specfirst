@@ -1,9 +1,9 @@
 import { getAddress } from 'viem';
-import { ApiError, onBase, type FeedEvent, type SpecfirstApi, type WatchStatus } from './api.js';
+import { ApiError, onBase, within, type FeedEvent, type SpecfirstApi, type WatchStatus } from './api.js';
 import { shortAddress } from './address.js';
 import { propertyLevel } from './levels.js';
 import { TESTNET_EXPLORER } from './config.js';
-import { clean, MEANING } from './verdict.js';
+import { clean, MEANING, quote } from './verdict.js';
 
 /*
  * recent_findings: what the watcher found without being asked, read from its feed (GET /api/v1/watch/feed, ADR 0006).
@@ -104,7 +104,7 @@ function vaultOf(e: FeedEvent, base: string): FindingVault {
 }
 
 function named(v: FindingVault): string {
-  return `${v.name ? `"${v.name}"${v.protocol ? ` (${v.protocol})` : ''} ` : ''}${shortAddress(v.address)}`;
+  return `${v.name ? `${quote(v.name)}${v.protocol ? ` (${quote(v.protocol)})` : ''} ` : ''}${shortAddress(v.address)}`;
 }
 
 /** basis points as a percent with two decimals: 41 -> "0.41%". */
@@ -158,40 +158,56 @@ export function changeOf(e: FeedEvent, base: string): Change | null {
 
 export interface FindingsDeps {
   api: SpecfirstApi;
+  /** All pages together, so a slow feed ends in what was read so far rather than a host's tool timeout. */
+  deadlineMs: number;
   now?: () => Date;
+}
+
+function problemOf(what: string, err: unknown): string {
+  return `${what}: ${clean(err instanceof ApiError ? err.message : (err as Error).message, 200)}`;
 }
 
 export async function recentFindings(deps: FindingsDeps, chainId: number, limit: number): Promise<Findings> {
   const base = deps.api.base;
   const problems: string[] = [];
-  const statusP = deps.api.watchStatus(chainId).catch((err: unknown): WatchStatus | null => {
-    problems.push(`Watcher status: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+  const stopAt = Date.now() + deps.deadlineMs;
+  const statusP = within(deps.api.watchStatus(chainId), deps.deadlineMs).catch((err: unknown): WatchStatus | null => {
+    problems.push(problemOf('Watcher status', err));
     return null;
   });
   const events: FeedEvent[] = [];
   let latestSeq: number | null = null;
   let reachedStart = false;
   let before: number | undefined;
+  let skipped = 0;
+  let read = 0;
   try {
-    while (events.length < MAX_SCAN_EVENTS) {
-      const page = await deps.api.feed(chainId, { limit: FEED_PAGE, ...(before !== undefined ? { before } : {}) });
+    while (read < MAX_SCAN_EVENTS) {
+      const left = stopAt - Date.now();
+      if (left <= 0) {
+        problems.push(`Stopped reading the watcher feed after ${Math.round(deps.deadlineMs / 1000)} s; the lists cover what was read.`);
+        break;
+      }
+      const page = await within(deps.api.feed(chainId, { limit: FEED_PAGE, ...(before !== undefined ? { before } : {}) }), left);
       if (!page.available) {
-        problems.push(`The watcher feed for chain ${chainId} is not available${page.problem ? `: ${page.problem}` : ''}.`);
+        problems.push(`The watcher feed for chain ${chainId} is not available${page.problem ? `: ${clean(page.problem, 200)}` : ''}.`);
         reachedStart = true;
         break;
       }
       latestSeq ??= page.latestSeq;
       events.push(...page.events);
-      const oldest = page.events.at(-1);
-      if (!page.hasOlder || !oldest) {
+      skipped += page.skipped;
+      read += page.events.length + page.skipped;
+      if (!page.hasOlder || page.oldestSeq === null) {
         reachedStart = true;
         break;
       }
-      before = oldest.seq;
+      before = page.oldestSeq;
     }
   } catch (err) {
-    problems.push(`Watcher feed: ${err instanceof ApiError ? err.message : (err as Error).message}`);
+    problems.push(problemOf('Watcher feed', err));
   }
+  if (skipped > 0) problems.push(`${skipped} feed events were not in the expected shape and were left out.`);
   const status = await statusP;
 
   const changes: Change[] = [];
@@ -223,7 +239,7 @@ export async function recentFindings(deps: FindingsDeps, chainId: number, limit:
       ? {
           running: status.running,
           stale: status.stale,
-          problem: status.problem,
+          problem: status.problem ? clean(status.problem, 200) : null,
           head: status.head,
           behindBlocks: status.behindBlocks,
           updatedAt: status.updatedAt,
@@ -234,7 +250,7 @@ export async function recentFindings(deps: FindingsDeps, chainId: number, limit:
       : null,
     changes,
     currentMismatches: mismatches,
-    scanned: { events: events.length, oldestSeq: oldest?.seq ?? null, oldestAt: oldest?.at ?? null, latestSeq, reachedStart },
+    scanned: { events: read, oldestSeq: oldest?.seq ?? null, oldestAt: oldest?.at ?? null, latestSeq, reachedStart },
     links: { feed: `${base}/watch` },
     problems,
     meaning: [...MEANING],

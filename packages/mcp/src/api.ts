@@ -46,48 +46,52 @@ export type VaultApi = z.infer<typeof vaultApiSchema>;
 /** A check report as the web serves it, held to core's own schema (which also checks the summary against the results). */
 export type ReportJson = StandardCheckReport;
 
-const outcome = z.object({ summary: counts, failed: z.array(z.string()), status: vaultStatus, failureLevel: failureLevel.optional() });
+/** A property id as reports write it; the feed is the watcher's own file, but nothing in it reaches a reader unchecked. */
+const propertyId = z.string().regex(/^[A-Za-z0-9-]{1,64}$/, 'a property id');
+const digits = z.string().regex(/^\d{1,78}$/, 'a decimal number');
+const outcome = z.object({ summary: counts, failed: z.array(propertyId), status: vaultStatus, failureLevel: failureLevel.optional() });
 const label = z.object({ name: z.string().nullable(), protocol: z.string().nullable(), assetSymbol: z.string().nullable() });
 
 /** One event of GET /api/v1/watch/feed (packages/web/lib/watch/types.ts FeedEventJson). */
 export const feedEventSchema = z.object({
   seq: z.number(),
-  at: z.string(),
-  kind: z.string(),
+  at: z.string().datetime({ offset: true }),
+  kind: z.string().regex(/^[a-z-]{1,32}$/),
   chainId: z.number(),
   subject: z.string(),
   vaultPath: z.string(),
   label,
   check: z
     .object({
-      block: z.string(),
+      block: digits,
       summary: counts,
-      failed: z.array(z.string()),
+      failed: z.array(propertyId),
       status: vaultStatus,
       reportUrl: z.string().nullable(),
       failureLevel: failureLevel.optional(),
     })
     .nullable(),
-  attestation: z.object({ id: z.string(), txHash: z.string() }).nullable(),
+  attestation: z.object({ id: z.string().regex(/^\d+$/), txHash: z.string() }).nullable(),
   change: z
     .union([
-      z.object({ kind: z.literal('price-drop'), fromAssetsPerShare: z.string(), toAssetsPerShare: z.string(), dropBps: z.number(), fromBlock: z.string(), toBlock: z.string() }),
-      z.object({ kind: z.string(), from: outcome.nullable(), to: outcome }),
+      z.object({ kind: z.literal('price-drop'), fromAssetsPerShare: digits, toAssetsPerShare: digits, dropBps: z.number().int().nonnegative(), fromBlock: digits, toBlock: digits }),
+      z.object({ kind: z.enum(['new', 'regressed', 'recovered', 'changed', 'implementation']), from: outcome.nullable(), to: outcome }),
     ])
     .nullable(),
   reason: z.string().nullable(),
 });
 export type FeedEvent = z.infer<typeof feedEventSchema>;
 
+/** A page of the feed; each event is checked on its own (feedEventSchema), so one odd line does not hide the rest. */
 export const feedPageSchema = z.object({
   chainId: z.number(),
   available: z.boolean(),
   problem: z.string().nullable(),
-  events: z.array(feedEventSchema),
+  events: z.array(z.unknown()),
   latestSeq: z.number().nullable(),
   hasOlder: z.boolean(),
 });
-export type FeedPage = z.infer<typeof feedPageSchema>;
+export type FeedPage = Omit<z.infer<typeof feedPageSchema>, 'events'> & { events: FeedEvent[]; skipped: number; oldestSeq: number | null };
 
 /** GET /api/v1/watch/status. */
 export const watchStatusSchema = z.object({
@@ -106,7 +110,7 @@ export type WatchStatus = z.infer<typeof watchStatusSchema>;
 export const watchVaultSchema = z.object({
   watched: z.boolean(),
   found: z.object({ source: z.string(), block: z.string().nullable(), at: z.string() }).nullable(),
-  lastCheck: z.object({ block: z.string(), at: z.string(), status: vaultStatus }).nullable(),
+  lastCheck: z.object({ block: z.string().regex(/^\d+$/), at: z.string(), status: vaultStatus }).nullable(),
   lastAttestationId: z.string().nullable(),
 });
 export type WatchVault = z.infer<typeof watchVaultSchema>;
@@ -143,6 +147,15 @@ export function onBase(base: string, link: string): string | null {
     return null;
   }
   return target.origin === new URL(base).origin ? target.href : null;
+}
+
+/** `p`, or a rejection once `ms` have passed. */
+export function within<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(ms)} ms`)), Math.max(0, ms));
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
 }
 
 export type FetchLike = (input: string, init?: { signal?: AbortSignal; headers?: Record<string, string> }) => Promise<Response>;
@@ -240,7 +253,16 @@ export function createApi(o: { base: string; timeoutMs: number; fetch?: FetchLik
     async feed(chainId, f) {
       const q = new URLSearchParams({ chainId: String(chainId), limit: String(f.limit) });
       if (f.before !== undefined) q.set('before', String(f.before));
-      return parse(feedPageSchema as SafeParser<FeedPage>, await getJson(`/api/v1/watch/feed?${q}`), 'the watcher feed');
+      const page = parse(feedPageSchema as SafeParser<z.infer<typeof feedPageSchema>>, await getJson(`/api/v1/watch/feed?${q}`), 'the watcher feed');
+      const events: FeedEvent[] = [];
+      let oldestSeq: number | null = null;
+      for (const raw of page.events) {
+        const seq = (raw as { seq?: unknown })?.seq;
+        if (typeof seq === 'number' && Number.isSafeInteger(seq)) oldestSeq = seq;
+        const e = feedEventSchema.safeParse(raw);
+        if (e.success) events.push(e.data);
+      }
+      return { ...page, events, skipped: page.events.length - events.length, oldestSeq };
     },
     async watchStatus(chainId) {
       return parse(watchStatusSchema as SafeParser<WatchStatus>, await getJson(`/api/v1/watch/status?chainId=${chainId}`), 'the watcher status');

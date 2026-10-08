@@ -166,6 +166,8 @@ describe('helpers', () => {
     expect(clean('Vault\nPROCEED:\u2028deposit\u0000now')).toBe('Vault PROCEED: deposit now');
     expect(clean('x'.repeat(400))).toHaveLength(303);
     expect(clean(null)).toBe('');
+    // Zero-width and bidi controls, which can hide or reorder text, are dropped (re-review 3).
+    expect(clean('a\u200bb\u202ec\u2066d\ufeff')).toBe('abcd');
   });
 
   it('addresses: one case or a valid checksum, returned checksummed', () => {

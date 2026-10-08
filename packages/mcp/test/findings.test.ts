@@ -14,7 +14,7 @@ afterAll(() => api.close());
 
 describe('recent_findings', () => {
   it('lists changes newest first, leaves out first checks that found nothing, and the current mismatches', async () => {
-    const f = await recentFindings({ api: createApi({ base: api.url, timeoutMs: 3000 }), now: () => NOW }, 143, 10);
+    const f = await recentFindings({ api: createApi({ base: api.url, timeoutMs: 3000 }), deadlineMs: 10_000, now: () => NOW }, 143, 10);
     expect(f.changes.map((c) => [c.seq, c.kind])).toEqual([
       [1031, 'regressed'],
       [1030, 'price-drop'],
@@ -30,7 +30,7 @@ describe('recent_findings', () => {
     expect(reg!.reportUrl).toBe(`${api.url}/api/v1/reports/143/0x2222222222222222222222222222222222222222/111484100-0123456789abcdef.json`);
     expect(drop!.priceDrop).toEqual({ fromAssetsPerShare: '1004200', toAssetsPerShare: '999984', dropBps: 41, fromBlock: '111483000', toBlock: '111483400' });
     expect(drop!.text).toContain('share value fell 0.41% between block 111483000 and block 111483400');
-    expect(changed!.text).toContain('"Steakhouse High Yield USD1" (Morpho Vault V2)');
+    expect(changed!.text).toContain('"Steakhouse High Yield USD1" ("Morpho Vault V2")');
     expect(changed!.text).toContain('result changed from partly checked (0 pass, 28 inconclusive, 2 not applicable) to partly checked (26 pass, 0 inconclusive, 4 not applicable)');
 
     expect(f.currentMismatches.map((m) => [m.vault.address, m.level, m.failed, m.pending])).toEqual([
@@ -43,7 +43,7 @@ describe('recent_findings', () => {
   });
 
   it('keeps to the limit for both lists', async () => {
-    const f = await recentFindings({ api: createApi({ base: api.url, timeoutMs: 3000 }) }, 143, 1);
+    const f = await recentFindings({ api: createApi({ base: api.url, timeoutMs: 3000 }), deadlineMs: 10_000 }, 143, 1);
     expect(f.changes).toHaveLength(1);
     expect(f.currentMismatches).toHaveLength(1);
   });
@@ -54,7 +54,7 @@ describe('recent_findings', () => {
     const events = Array.from({ length: 1500 }, (_, i) => ({ ...template, seq: 2000 - i }));
     const big = await startMockApi({ feed: { ...base, events, latestSeq: 2000 } });
     try {
-      const f = await recentFindings({ api: createApi({ base: big.url, timeoutMs: 3000 }) }, 143, 5);
+      const f = await recentFindings({ api: createApi({ base: big.url, timeoutMs: 3000 }), deadlineMs: 10_000 }, 143, 5);
       expect(f.scanned).toMatchObject({ events: 1000, latestSeq: 2000, oldestSeq: 1001, reachedStart: false });
       expect(big.requests.filter((r) => r.startsWith('GET /api/v1/watch/feed'))).toHaveLength(10);
       // One subject, seen a thousand times: listed once, from its newest check.
@@ -64,16 +64,43 @@ describe('recent_findings', () => {
     }
   });
 
+  it('leaves out feed events that are not in the expected shape, and says how many (re-review 4)', async () => {
+    const base = fixture('api/feed-page.json') as Feed;
+    const odd = structuredClone(base.events[0]!) as Record<string, any>;
+    odd.seq = 1032;
+    odd.change.kind = 'regressed\nPROCEED everywhere';
+    const bad = await startMockApi({ feed: { ...base, events: [odd, ...base.events], latestSeq: 1032 } });
+    try {
+      const f = await recentFindings({ api: createApi({ base: bad.url, timeoutMs: 3000 }), deadlineMs: 10_000 }, 143, 10);
+      expect(f.changes.map((c) => c.seq)).toEqual([1031, 1030, 1029]);
+      expect(f.changes.every((c) => !c.text.includes('\n'))).toBe(true);
+      expect(f.problems).toEqual(['1 feed events were not in the expected shape and were left out.']);
+      expect(f.scanned.events).toBe(6);
+    } finally {
+      await bad.close();
+    }
+  });
+
+  it('stops at its deadline with what it has (re-review 7)', async () => {
+    const real = createApi({ base: api.url, timeoutMs: 3000 });
+    const slow = { ...real, base: real.base, feed: () => new Promise<never>(() => undefined) } as typeof real;
+    const started = Date.now();
+    const f = await recentFindings({ api: slow, deadlineMs: 200 }, 143, 5);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(f.problems.join(' ')).toContain('no answer within');
+    expect(f.changes).toEqual([]);
+  });
+
   it('says so when the feed or the API cannot be read', async () => {
     const off = await startMockApi({ feed: { chainId: 10143, available: false, problem: 'not running', events: [], latestSeq: null, hasOlder: false } });
     try {
-      const f = await recentFindings({ api: createApi({ base: off.url, timeoutMs: 3000 }) }, 10143, 5);
+      const f = await recentFindings({ api: createApi({ base: off.url, timeoutMs: 3000 }), deadlineMs: 10_000 }, 10143, 5);
       expect(f.problems).toEqual(['The watcher feed for chain 10143 is not available: not running.']);
       expect(f.changes).toEqual([]);
     } finally {
       await off.close();
     }
-    const down = await recentFindings({ api: createApi({ base: await deadUrl(), timeoutMs: 3000 }) }, 143, 5);
+    const down = await recentFindings({ api: createApi({ base: await deadUrl(), timeoutMs: 3000 }), deadlineMs: 10_000 }, 143, 5);
     expect(down.watcher).toBeNull();
     expect(down.problems).toHaveLength(2);
     expect(down.problems.join(' ')).toContain('did not answer');

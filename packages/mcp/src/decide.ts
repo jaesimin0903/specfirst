@@ -1,5 +1,5 @@
 import { PROPERTY_IDS, propertyLevel } from './levels.js';
-import { concernsOf, MEANING, SIDE, type Action, type FailedProperty, type Verdict } from './verdict.js';
+import { concernsOf, MEANING, MIN_RUNS, quote, SIDE, type Action, type FailedProperty, type Verdict } from './verdict.js';
 
 /*
  * check_before_moving_funds: refuse, caution or proceed for one action on one vault, from a Verdict. Pure, so the
@@ -22,6 +22,7 @@ export const REASON_CODES = [
   'unchecked',
   'api-unavailable',
   'report-unverified',
+  'weaker-check',
   'stale-result',
   'async-redeem',
   'no-attestation',
@@ -92,7 +93,7 @@ function list(ids: readonly string[]): string {
 }
 
 function quoted(v: Verdict): string {
-  return v.vault.name ? `"${v.vault.name}"${v.vault.protocol ? ` (${v.vault.protocol})` : ''} ${v.vault.address}` : v.vault.address;
+  return v.vault.name ? `${quote(v.vault.name)}${v.vault.protocol ? ` (${quote(v.vault.protocol)})` : ''} ${v.vault.address}` : v.vault.address;
 }
 
 function failureLine(f: FailedProperty): string {
@@ -156,7 +157,8 @@ export function decide(v: Verdict, action: Action, amount: string | null = null,
     const watcher = w?.knows
       ? ` The watcher knows it (found by ${w.foundBy ?? 'a signal'}${w.lastCheckBlock ? `, last checked at block ${w.lastCheckBlock}` : ', not checked yet'}).`
       : ' The watcher has not found it yet; it finds vaults by itself from factory events, first deposits and upgrades.';
-    add('unchecked', 'caution', `Specfirst has not checked this vault, so nothing is known about it either way.${watcher} A paid request on the desk checks it now: ${v.links.requestCheck}`);
+    const known = a.read === 'ok' ? 'Specfirst has no report of this vault, though the registry holds an attestation of it (its reasons are listed here).' : 'Specfirst has not checked this vault, so nothing is known about it either way.';
+    add('unchecked', 'caution', `${known}${watcher} A paid request on the desk checks it now: ${v.links.requestCheck}`);
   }
   if (v.basis !== 'none' && v.summary) {
     const inc = v.summary.inconclusive;
@@ -172,7 +174,7 @@ export function decide(v: Verdict, action: Action, amount: string | null = null,
       add(
         'api-unavailable',
         'caution',
-        `The Specfirst API could not be read${v.problems[0] ? ` (${v.problems[0]})` : ''}. ${v.basis === 'attestation' ? 'This decision rests on the registry alone; the report behind it, its freshness and its details were not seen.' : 'Nothing about the vault could be read from it.'}`,
+        `No usable result came from the Specfirst API${v.problems[0] ? ` (${v.problems[0]})` : ''}. ${v.basis === 'attestation' ? 'This decision rests on the registry alone; the report behind it, its freshness and its details were not seen.' : 'Nothing about the vault could be read from it.'}`,
       );
     }
   } else if (v.report?.verified !== true || v.report.matchesApiSummary !== true || v.report.coversAllProperties !== true) {
@@ -183,6 +185,8 @@ export function decide(v: Verdict, action: Action, amount: string | null = null,
           ? "disagrees with the API's summary of it; the file is used"
           : 'does not cover exactly the 30 properties of the table';
     add('report-unverified', 'caution', `The latest report file ${why}.`);
+  } else if (v.report.fullStrength !== true) {
+    add('weaker-check', 'caution', `The latest check did not run at full strength (at least ${MIN_RUNS} fuzz runs a property, delta 0, the pinned suite whose hash the API names), so a pass in it is weaker than this server vouches for.`);
   }
   if (v.freshness.stale) {
     add(
@@ -236,10 +240,12 @@ export function decide(v: Verdict, action: Action, amount: string | null = null,
     v.report?.verified === true &&
     v.report.matchesApiSummary === true &&
     v.report.coversAllProperties === true &&
+    v.report.fullStrength === true &&
     v.freshness.stale === false &&
     a.read === 'ok' &&
     a.status === 'Valid' &&
     a.isCompliant === true &&
+    a.issuedAt !== null &&
     a.failedProperties.length === 0 &&
     a.counts !== null &&
     a.counts.pass === n &&

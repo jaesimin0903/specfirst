@@ -3,11 +3,11 @@ import { parseVaultAddress } from './address.js';
 import { createApi, type SpecfirstApi } from './api.js';
 import { createChainReader, type ChainReader } from './chain.js';
 import { configFromEnv, type McpConfig } from './config.js';
-import { decide } from './decide.js';
+import { decide, type MoveCheck } from './decide.js';
 import { recentFindings } from './findings.js';
 import { findingsInput, findingsOutput, moveInput, moveOutput, verdictInput, verdictOutput, watchInput, watchOutput } from './schemas.js';
 import { findingsText, moveText, verdictText, watchText } from './text.js';
-import { gatherVerdict } from './verdict.js';
+import { clean, gatherVerdict, verdictOrFallback } from './verdict.js';
 import { howToWatch } from './watch.js';
 
 export { configFromEnv, type McpConfig } from './config.js';
@@ -84,14 +84,34 @@ export function createSpecfirstServer(deps: ServerDeps): McpServer {
     {
       title: 'Check a vault before moving funds',
       description:
-        "Call this before you deposit into, mint from, withdraw from or redeem from an ERC-4626 vault on Monad, and before you size an amount from the vault's maxDeposit, maxMint, maxWithdraw, maxRedeem or preview answers. Returns decision: refuse when an EIP-4626 MUST sentence that concerns this action failed in the latest check or in the registry's latest attestation (for deposit and mint the exits count too, since the money has to come out); caution for anything short of proof either way (only SHOULD or rounding failures, a MUST failure that does not concern this action, properties not judged, no or a revoked attestation, a check older than the stale limit (48 hours by default), asynchronous redemption, a vault Specfirst never checked, or the Specfirst API or the registry RPC could not be read); proceed only when all 30 properties passed in a fresh report file that hashes to its reportHash and the registry's latest attestation, read on chain, is compliant, from a current issuer and about the same code. Each reason has a code and a sentence, and sizing says which max function not to trust. A proceed means no counterexample found at that block, not a guarantee; a refuse is a spec mismatch, not a claim that funds were lost. This tool never signs or sends anything.",
+        "Call this before you deposit into, mint from, withdraw from or redeem from an ERC-4626 vault on Monad, and before you size an amount from the vault's maxDeposit, maxMint, maxWithdraw, maxRedeem or preview answers. Returns decision: refuse when an EIP-4626 MUST sentence that concerns this action failed in the latest check or in the registry's latest attestation (for deposit and mint the exits count too when both withdraw and redeem fail one, since the money has to come out; one broken exit is a caution); caution for anything short of proof either way (only SHOULD or rounding failures, a MUST failure that does not concern this action, one broken exit, properties not judged, a check with fewer than 16 fuzz runs or a tolerance, no or a revoked attestation, a check older than the stale limit (48 hours by default), asynchronous redemption, a vault Specfirst never checked, or the Specfirst API or the registry RPC could not be read); proceed only when all 30 properties passed in a fresh report file that hashes to its reportHash and the registry's latest attestation, read on chain, is compliant, from a current issuer and about the same code. Each reason has a code and a sentence, and sizing says which max function not to trust. A proceed means no counterexample found at that block, not a guarantee; a refuse is a spec mismatch, not a claim that funds were lost. This tool never signs or sends anything.",
       inputSchema: moveInput,
       outputSchema: moveOutput,
       annotations: READ_ONLY,
     },
     async ({ address, chainId, action, amount }) => {
-      const v = await gatherVerdict(verdictDeps, parseVaultAddress(address), chainId);
-      const m = decide(v, action, amount ?? null, now());
+      const vault = parseVaultAddress(address);
+      let m: MoveCheck;
+      try {
+        m = decide(await gatherVerdict(verdictDeps, vault, chainId), action, amount ?? null, now());
+      } catch (err) {
+        // Whatever went wrong past the input, the answer is a caution that says so, never a bare tool error.
+        const reason = `this answer could not be put together (${clean((err as Error).message, 200)})`;
+        const v = verdictOrFallback({
+          address: vault,
+          chainId,
+          api: { ok: false, reason },
+          report: null,
+          chain: { read: 'unread', reason },
+          watch: null,
+          apiBase: deps.api.base,
+          registry: config.registry,
+          rpcUrl: config.rpcUrl,
+          staleHours: config.staleHours,
+          now: now(),
+        });
+        m = decide(v, action, amount ?? null, now());
+      }
       return result(m, moveText(m));
     },
   );
@@ -107,7 +127,7 @@ export function createSpecfirstServer(deps: ServerDeps): McpServer {
       annotations: READ_ONLY,
     },
     async ({ chainId, limit }) => {
-      const f = await recentFindings({ api: deps.api, now }, chainId, limit);
+      const f = await recentFindings({ api: deps.api, deadlineMs: 3 * config.timeoutMs, now }, chainId, limit);
       return result(f, findingsText(f));
     },
   );
