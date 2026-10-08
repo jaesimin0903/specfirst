@@ -29,7 +29,7 @@ The callers that rely on these answers are the ones that move money into vaults 
 2. **Checks each one against 30 properties.** 26 come from a16z/erc4626-tests, a public third-party suite, so the vault team does not write the test that grades it. 4 are Specfirst's own and ask whether `maxDeposit`, `maxMint`, `maxWithdraw` and `maxRedeem` are honored when called with exactly that amount. The check runs on a fork of the live state at a fixed block and takes a few seconds to about a minute.
 3. **Records the result on chain.** `CheckAttestationRegistry` on Monad testnet stores the report hash, the suite hash, the vault's code hash and the block. A contract reads it with one call, `isCompliant`. The board shows every vault with the sentence of EIP-4626 it contradicts and the concrete call that shows it.
 4. **Alerts when a vault gets worse.** A subscription costs 0.05 MON a day. Subscribers get a webhook and an inbox entry when a re-check changes the result, when an upgrade changes the code, and when the value of a share falls.
-5. **Lets contracts act on it.** `AllocationGate` is a demo integrator. It deposits only into vaults whose latest attestation is compliant, and once that changes anyone can make it pull the money out.
+5. **Lets contracts and agents act on it.** `AllocationGate` is a demo integrator contract. It deposits only into vaults whose latest attestation is compliant, and once that changes anyone can make it pull the money out. For AI agents, an MCP server answers `check_before_moving_funds` with refuse, caution or proceed and the reasons, reading the report and the on-chain attestation itself.
 
 Results stay free and public. The service sells delivery and freshness: alert subscriptions, and a request desk for an immediate re-check.
 
@@ -39,7 +39,7 @@ Results stay free and public. The service sells delivery and freshness: alert su
 
 ### On mainnet
 
-The board covers 402 ERC-4626 vaults on Monad mainnet. 285 came from a hand-made list built from Morpho, Euler, Curvance, Neverland, DefiLlama and protocol docs. The other 117 were found on chain by the watcher; they were not on that list.
+On October 8 the board covered 459 ERC-4626 vaults on Monad mainnet. 285 came from a hand-made list built from Morpho, Euler, Curvance, Neverland, DefiLlama and protocol docs. The other 174 were found on chain by the watcher; they were not on that list, and the number grows as it runs.
 
 Each failure is labeled with its level in EIP-4626. A MUST failure contradicts a MUST sentence. A SHOULD failure only goes against guidance, for example rounding that favors the caller by a unit.
 
@@ -73,6 +73,10 @@ The whole loop ran on Monad testnet with real transactions and no person between
 
 From the bug to the money being out took 3 minutes 24 seconds, and no one with the owner's key acted.
 
+### An AI agent asking first, October 8
+
+Claude Code was given the Specfirst MCP server and asked to put 50,000 into one of two vaults, Upshift earnAUSD or Steakhouse High Yield USDC, and to check first. It called `check_before_moving_funds` four times and got refuse for both deposit and withdraw on Upshift, because `withdraw` reverts below what `maxWithdraw` reports and attestation #15 is not compliant, and proceed for both on Steakhouse, which passed all 30 properties with attestation #17 compliant. It chose Steakhouse and noted that a pass is not a safety guarantee.
+
 ---
 
 ## Who pays, and the numbers so far
@@ -102,8 +106,8 @@ The service loses money today, and we show it that way on the desk page. The wat
 | AllocationGate | `0xEE966282544FF5e0429e754856197A13b8340C8A` |
 | DemoVaultFactory | `0xE1FC8fa26Cb7496A68DD4e0ba896Ed8CAE2238FB` |
 
-- **Tests.** forge 195, core 569, cli 115, web 318, all passing. `scripts/check-chars.sh` runs with them.
-- **Decisions.** `docs/adr/` records each design decision and what changed after review: third-party properties in 0003, the registry in 0004, the desk in 0005, the watcher and subscriptions in 0006, the gate in 0007.
+- **Tests.** forge 195, core 569, cli 115, web 323, mcp 117, all passing. `scripts/check-chars.sh` runs with them.
+- **Decisions.** `docs/adr/` records each design decision and what changed after review: third-party properties in 0003, the registry in 0004, the desk in 0005, the watcher and subscriptions in 0006, the gate in 0007, the MCP server in 0008.
 
 ---
 
@@ -128,6 +132,8 @@ The service loses money today, and we show it that way on the desk page. The wat
 | `specfirst worker` | fulfils paid desk requests without a person |
 | Web | the board, a page per vault, the watcher's live feed, the alerts inbox, the desk with revenue and gas, the gate |
 | API and badge | JSON per vault and an SVG badge for integrators |
+| `@specfirst/mcp` | an MCP server for AI agents: `check_before_moving_funds`, `vault_verdict`, `recent_findings`, `how_to_watch`. It holds no keys, only reads |
+| Deploy bundle | Docker Compose for one server running the web and every worker, with HTTPS through Caddy |
 
 ---
 
