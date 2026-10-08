@@ -100,6 +100,17 @@ describe('GET /api/cert/[address]', () => {
     expect(body.invariantSetHash).toMatch(/^0x[0-9a-f]{64}$/);
   });
 
+  it('names SPECFIRST_PUBLIC_ORIGIN in certificateUrl behind a proxy, where next start reports http://localhost:3000', async () => {
+    vi.mocked(publicClient).mockReturnValue(mockClient({ latest: 'valid' }) as never);
+    vi.stubEnv('SPECFIRST_PUBLIC_ORIGIN', 'https://specfirst.example.org');
+    try {
+      const body = await (await GET(new Request(`http://localhost:3000/api/cert/${TARGET}`), { params: Promise.resolve({ address: TARGET }) })).json();
+      expect(body.certificateUrl).toBe(`https://specfirst.example.org/c/${TARGET}`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('returns status "none" and certified:false when no certificate exists', async () => {
     vi.mocked(publicClient).mockReturnValue(mockClient({ latest: 'none' }) as never);
     const res = await callRoute(TARGET);
