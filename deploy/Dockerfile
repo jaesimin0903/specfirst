@@ -5,9 +5,9 @@
 # Neither image holds a key or reads .env: the CLI services get theirs from a compose secret at run time.
 # Runbook: docs/deploy.md.
 
-# The CLI runs on the Node the live services ran on (node --version on the Mac), so the signers behave as they did
-# there; the site, the part the internet talks to, runs on Node 24 LTS (tested: build-board, next start). pnpm is
-# packageManager in package.json.
+# The CLI, and the shared build stage that also makes the board data and runs next build, use the Node the live
+# services ran on (node --version on the Mac), so the signers behave as they did there. next start, the part the
+# internet talks to, runs on Node 24 LTS. pnpm is packageManager in package.json.
 ARG NODE_VERSION=25.4.0
 ARG WEB_NODE_VERSION=24.21.0
 ARG PNPM_VERSION=10.28.1

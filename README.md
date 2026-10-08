@@ -189,7 +189,7 @@ Environment of the web server (all optional; nothing here is a key):
 | `SPECFIRST_CHECKS_DIR` | `<repo>/certs/checks` | Where requested reports are read from. |
 | `NEXT_PUBLIC_MONAD_FAUCET_URL` | `https://faucet.monad.xyz` | Linked from the burner card. |
 | `SPECFIRST_REPO_ROOT` | two directories above `packages/web` | Base for the relative paths above. |
-| `SPECFIRST_PUBLIC_ORIGIN` | the request's origin | Origin of the absolute links in `/api/v1/vaults` answers. Behind a proxy `next start` reports its own `http://localhost:3000`, so a deployment sets the site's origin (`deploy/docker-compose.yml` does). |
+| `SPECFIRST_PUBLIC_ORIGIN` | the request's origin | Origin of the absolute links in `/api/v1/vaults` answers. Behind a proxy `next start` names its own host and port (`https://localhost:3000` behind an https proxy), so a deployment sets the site's origin (`deploy/docker-compose.yml` does). |
 
 The desk ABI comes from `@specfirst/core/desk`; `packages/web/lib/desk/contract.ts` re-exports it next to the web's lenient status.json readers.
 

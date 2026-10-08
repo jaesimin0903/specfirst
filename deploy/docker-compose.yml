@@ -2,6 +2,7 @@
 # AllocationGate keeper, with Caddy in front for HTTPS. Runbook: docs/deploy.md. From a checkout on the server:
 #
 #   cp deploy/.env.example deploy/.env    # then fill it in
+#   mkdir -p .specfirst/watch .specfirst/worker && sudo chown -R 1000:1000 .specfirst certs/checks
 #   docker compose -f deploy/docker-compose.yml up -d --build
 #
 # Profiles keep the signing services off until they are asked for: "https" starts Caddy, "signers" starts the
@@ -61,8 +62,8 @@ services:
       NEXT_PUBLIC_SPECFIRST_DESK_10143: ${SPECFIRST_DESK_10143:-}
       NEXT_PUBLIC_SPECFIRST_SUBS_10143: ${SPECFIRST_SUBS_10143:-}
       NEXT_PUBLIC_SPECFIRST_GATE_10143: ${SPECFIRST_GATE_10143:-}
-      # Visitors reach the site as https://DOMAIN through Caddy while next start sees http://localhost:3000; the
-      # absolute links of /api/v1/vaults take this origin.
+      # Visitors reach the site as https://DOMAIN through Caddy, while next start names its own host in request.url
+      # (https://localhost:3000, the scheme from X-Forwarded-Proto); the absolute links of /api/v1/vaults take this.
       SPECFIRST_PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-https://${DOMAIN}}
       # Only for a site served over plain http: the demo receiver at https://DOMAIN needs no exception.
       SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS: ${SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS:-}

@@ -1,7 +1,8 @@
 /*
  * The origin of the absolute links an API answer carries. `next start` builds request.url from its own host and
- * port, so behind Caddy (deploy/docker-compose.yml), where visitors use https://DOMAIN, the request still names
- * http://localhost:3000; the deployment sets SPECFIRST_PUBLIC_ORIGIN to https://DOMAIN instead. Server only.
+ * port and takes only the scheme from X-Forwarded-Proto, so behind Caddy (deploy/docker-compose.yml), where visitors
+ * use https://DOMAIN, the request names https://localhost:3000; the deployment sets SPECFIRST_PUBLIC_ORIGIN to
+ * https://DOMAIN instead. Server only.
  */
 
 export const PUBLIC_ORIGIN_ENV = 'SPECFIRST_PUBLIC_ORIGIN';
