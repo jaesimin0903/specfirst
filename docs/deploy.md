@@ -28,7 +28,7 @@ Both images run as the `node` user, uid 1000. The checkout's state directories o
 
 ## Server
 
-- 4 vCPU, 8 GB RAM, 80 GB SSD, Ubuntu 24.04 LTS, x86_64 (arm64 works too: the Dockerfile picks the forge build for the machine). The worker (16 fuzz runs per property) and both watchers can each run a forge check on a fork at the same time, and `next build` takes about 2 GB of memory while the web image builds. With 4 GB of RAM, add swap.
+- 2 vCPU and 4 GB RAM with 4 GB of swap is enough; the live system runs on a GCP e2-medium. Measured on the Mac: one check, node and forge together, peaks at about 370 MB and spends most of its time waiting on the RPC (87 s wall, 6.5 s CPU), so three checks at once plus the web and the idle services come to about 2.3 GB. `next build` takes about 2 GB while the web image builds, which the swap covers. Ubuntu 24.04 LTS, x86_64 (arm64 works too: the Dockerfile picks the forge build for the machine), 40 GB disk. Add the swap before the first build: `sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile`, and a `/swapfile none swap sw 0 0` line in `/etc/fstab`.
 - Disk: the images take about 2 GB and every rebuild leaves build cache behind (Board shows the prune), the testnet demo watcher writes about 15 MB of reports a day, logs are capped at 100 MB per service.
 - Open ports 22, 80 and 443. The web listens only on 127.0.0.1 of the host; the outside reaches it through Caddy.
 - A domain name whose A record (and AAAA, if the server has IPv6) points at the server.
@@ -112,13 +112,13 @@ The watchers and the worker keep their place in `state.json`, `status.json`, `va
 
 **The rule: stop the Mac's signing services before the server's start, and never let both sign.** Two processes signing with one key send transactions with the same nonces, so one of each pair fails or replaces the other, and two watchers on the same chain attest the same signal twice. The issuer locks in `~/.cache/specfirst/locks` and the `watch.lock` and `worker.lock` files only stop a second process on the same machine. The `signers` profile keeps the server's signers off until step 5.
 
-1. First copy, while the Mac still runs. From the Mac (the trailing slashes matter; the lock files hold Mac pids and stay behind):
+1. First copy, while the Mac still runs. From the Mac (the trailing slashes matter; the lock files hold Mac pids and stay behind, and the `.*.tmp-*` files are atomic writes in flight that vanish mid-copy and would stop rsync with code 23):
 
    ```
    cd ~/Developer/Personal/specfirst-batch
-   rsync -az --exclude '*.lock' .specfirst/watch/ <user>@<server>:/opt/specfirst/.specfirst/watch/
-   rsync -az --exclude '*.lock' .specfirst/worker/ <user>@<server>:/opt/specfirst/.specfirst/worker/
-   rsync -az certs/checks/ <user>@<server>:/opt/specfirst/certs/checks/
+   rsync -az --exclude '*.lock' --exclude '.*.tmp-*' .specfirst/watch/ <user>@<server>:/opt/specfirst/.specfirst/watch/
+   rsync -az --exclude '*.lock' --exclude '.*.tmp-*' .specfirst/worker/ <user>@<server>:/opt/specfirst/.specfirst/worker/
+   rsync -az --exclude '.*.tmp-*' certs/checks/ <user>@<server>:/opt/specfirst/certs/checks/
    ssh <user>@<server> sudo chown -R 1000:1000 /opt/specfirst/.specfirst /opt/specfirst/certs/checks
    ```
 
@@ -190,7 +190,7 @@ A restarted service takes its own stale lock back for the same reason (same pid)
 ### Rollback
 
 1. Make sure the server signs nothing, before anything starts on the Mac: `sudo docker compose -f deploy/docker-compose.yml rm -sf watch-143 watch-10143 worker gate-keeper`, and remove `signers` from `COMPOSE_PROFILES` in `deploy/.env`. If the server cannot be reached, power it off or detach its public IP in the provider's console first. When it comes back, its signers stay stopped (`restart: "no"`); remove them before anything runs `up -d` there.
-2. Copy the three directories back with the same `rsync` commands in the other direction (`rsync -az --exclude '*.lock' <user>@<server>:/opt/specfirst/.specfirst/watch/ .specfirst/watch/`, and so on).
+2. Copy the three directories back with the same `rsync` commands in the other direction (`rsync -az --exclude '*.lock' --exclude '.*.tmp-*' <user>@<server>:/opt/specfirst/.specfirst/watch/ .specfirst/watch/`, and so on).
 3. Rename `restart-services.sh.disabled` back and run it on the Mac (and `run-watch-10143.sh` if it is not started from there).
 4. Register the demo webhook on the Mac's web again. The copied-back `webhooks.json` holds the server's `https://<DOMAIN>/api/v1/watch/demo-hook`, which the Mac's watchers would try to reach over the internet while the server is down. Open `http://localhost:3417/watch/inbox` in the browser profile that holds the burner and register the URL the page shows; the Mac's web allows its own origin (`SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS=1`) and its watchers deliver to it (`--webhook-local-origin http://localhost:3417`).
 
