@@ -102,9 +102,11 @@ function failureLine(f: FailedProperty): string {
 
 const exitOf = (id: string): 'withdraw' | 'redeem' | null => (SIDE.withdraw.includes(id) ? 'withdraw' : SIDE.redeem.includes(id) ? 'redeem' : null);
 
-export function decide(v: Verdict, action: Action, amount: string | null = null, now: Date = new Date()): MoveCheck {
+/** `incomplete`: what kept the caller from reading everything, each an incomplete-evidence caution. */
+export function decide(v: Verdict, action: Action, amount: string | null = null, now: Date = new Date(), incomplete: readonly string[] = []): MoveCheck {
   const reasons: Reason[] = [];
   const add = (code: ReasonCode, effect: Reason['effect'], text: string) => reasons.push({ code, effect, text });
+  for (const text of incomplete) add('incomplete-evidence', 'caution', text);
   const a = v.attestation;
   const entry = action === 'deposit' || action === 'mint';
 
@@ -218,6 +220,7 @@ export function decide(v: Verdict, action: Action, amount: string | null = null,
   if (a.read === 'ok') {
     if (a.issuerCurrent === false) add('issuer-removed', 'caution', `The issuer of attestation #${a.id}, ${a.issuer}, is no longer an issuer of the registry.`);
     if (a.issuerCurrent === null) add('issuer-unread', 'caution', `Whether ${a.issuer}, the issuer of attestation #${a.id}, is still an issuer could not be read.`);
+    if (a.issuedAt === null) add('incomplete-evidence', 'caution', `The time of attestation #${a.id} as the registry answered it is not a time, so its age is unknown.`);
     if (a.sameImplementationAsReport === false) {
       add('other-implementation', 'caution', `Attestation #${a.id} is about another implementation than the latest report: the vault's code changed between block ${a.blockNumber} and block ${v.blockChecked}.`);
     }

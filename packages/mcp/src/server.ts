@@ -110,7 +110,7 @@ export function createSpecfirstServer(deps: ServerDeps): McpServer {
           staleHours: config.staleHours,
           now: now(),
         });
-        m = decide(v, action, amount ?? null, now());
+        m = decide(v, action, amount ?? null, now(), [`This answer could not be put together from what was read (${clean((err as Error).message, 200)}); it is a caution, not a verdict.`]);
       }
       return result(m, moveText(m));
     },
@@ -127,7 +127,7 @@ export function createSpecfirstServer(deps: ServerDeps): McpServer {
       annotations: READ_ONLY,
     },
     async ({ chainId, limit }) => {
-      const f = await recentFindings({ api: deps.api, deadlineMs: 3 * config.timeoutMs, now }, chainId, limit);
+      const f = await recentFindings({ api: deps.api, deadlineMs: 2 * config.timeoutMs, now }, chainId, limit);
       return result(f, findingsText(f));
     },
   );

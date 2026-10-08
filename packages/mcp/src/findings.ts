@@ -1,7 +1,7 @@
 import { getAddress } from 'viem';
 import { ApiError, onBase, within, type FeedEvent, type SpecfirstApi, type WatchStatus } from './api.js';
 import { shortAddress } from './address.js';
-import { propertyLevel } from './levels.js';
+import { PROPERTY_IDS, propertyLevel } from './levels.js';
 import { TESTNET_EXPLORER } from './config.js';
 import { clean, MEANING, quote } from './verdict.js';
 
@@ -82,8 +82,14 @@ function levelOf(o: { failed: string[]; failureLevel?: Level | null | undefined 
   return o.failed.some((id) => propertyLevel(id) === 'must') ? 'must' : 'should';
 }
 
+/** Only ids of the 30-property table reach a reader; anything else is named as an unknown property (a MUST, so never softer). */
+function knownIds(ids: readonly string[]): string[] {
+  return ids.map((id) => (PROPERTY_IDS.includes(id) ? id : 'unknown-property'));
+}
+
 function outcomeOf(o: { status: string; failed: string[]; summary: Outcome['summary']; failureLevel?: Level | null | undefined }): Outcome {
-  return { status: o.status, level: levelOf(o), failed: [...o.failed], summary: { ...o.summary } };
+  const failed = knownIds(o.failed);
+  return { status: o.status, level: levelOf({ ...o, failed }), failed, summary: { ...o.summary } };
 }
 
 function describeOutcome(o: Outcome): string {
@@ -226,8 +232,8 @@ export async function recentFindings(deps: FindingsDeps, chainId: number, limit:
       vault: vaultOf(e, base),
       block: e.check.block,
       at: e.at,
-      level: levelOf(e.check),
-      failed: [...e.check.failed],
+      level: levelOf({ ...e.check, failed: knownIds(e.check.failed) }),
+      failed: knownIds(e.check.failed),
       pending: (e.reason ?? '').startsWith('pending confirmation'),
       reportUrl: e.check.reportUrl ? onBase(base, e.check.reportUrl) : null,
     });

@@ -370,13 +370,36 @@ describe('a check weaker than the one this server vouches for (re-review 1)', ()
 });
 
 describe('answers that cannot be used (re-review 2)', () => {
-  it('an attestation time no Date can hold gives no time and no proceed, not an error', () => {
+  it('an attestation time no Date can hold gives no time and no proceed, and says why, not an error', () => {
     const v = verdictOf('morpho', { chain: chainRead('morpho', { issuedAt: 10n ** 16n }) });
     expect(v.attestation).toMatchObject({ issuedAt: null, ageHours: null });
+    expect(v.problems).toEqual(['The registry answered a time for attestation #17 that is not a time; it is not used.']);
+    const m = decide(v, 'deposit', null, NOW);
+    expect(m.decision).toBe('caution');
+    expect(m.reasons.find((r) => r.code === 'incomplete-evidence')!.text).toContain('is not a time');
+  });
+
+  it('a registry answer that cannot be used keeps the API answer', () => {
+    const v = verdictOrFallback({
+      address: ADDR.morpho,
+      chainId: 143,
+      api: { ok: true, vault: vaultApi('morpho') },
+      report: reportRead('morpho'),
+      chain: chainRead('morpho', { failedBitmap: 'not a bitmap' as never }),
+      watch: null,
+      apiBase: 'http://localhost:3417',
+      registry: REGISTRY,
+      rpcUrl: 'https://testnet-rpc.monad.xyz',
+      staleHours: 48,
+      now: NOW,
+    });
+    expect(v.basis).toBe('report');
+    expect(v.status).toBe('all-passed');
+    expect(v.attestation.read).toBe('unread');
     expect(decide(v, 'deposit', null, NOW).decision).toBe('caution');
   });
 
-  it('a verdict that cannot be built falls back to the registry, then to nothing', () => {
+  it('a verdict that cannot be built falls back to whichever source is usable', () => {
     const api = vaultApi('upshift');
     api.report = { ...api.report!, blockNumber: 'x' };
     const base = { address: ADDR.upshift, chainId: 143, report: null, watch: null, apiBase: 'http://localhost:3417', registry: REGISTRY, rpcUrl: 'https://testnet-rpc.monad.xyz', staleHours: 48, now: NOW };
@@ -385,8 +408,10 @@ describe('answers that cannot be used (re-review 2)', () => {
     expect(v.problems[0]).toContain('could not be used');
     expect(decide(v, 'withdraw', null, NOW).decision).toBe('refuse');
     const none = verdictOrFallback({ ...base, api: { ok: true, vault: api }, chain: chainRead('upshift', { failedBitmap: 'not a bitmap' as never }) });
+    // The registry part breaks too: the API part is kept, and its MUST failures still refuse a withdraw.
     expect(none.attestation.read).toBe('unread');
-    expect(decide(none, 'withdraw', null, NOW).decision).toBe('caution');
+    expect(none.basis).toBe('report');
+    expect(decide(none, 'withdraw', null, NOW).decision).toBe('refuse');
   });
 });
 

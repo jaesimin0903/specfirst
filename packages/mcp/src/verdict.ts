@@ -421,6 +421,8 @@ export function buildVerdict(i: VerdictInput): Verdict {
     server: api?.attestation ?? null,
   });
 
+  if (attestation.read === 'ok' && attestation.issuedAt === null) problems.push(`The registry answered a time for attestation #${attestation.id} that is not a time; it is not used.`);
+
   let failed: FailedProperty[] = [];
   let status: VerdictStatus;
   let level: VaultLevel | null;
@@ -606,18 +608,25 @@ export async function gatherVerdict(deps: VerdictDeps, address: Address, chainId
 }
 
 /**
- * buildVerdict, and when an answer of either source cannot be used, the same without it: first without the API's,
- * then without the registry's too. An unusable answer is an unreadable source, never a tool error.
+ * buildVerdict, and when an answer cannot be used, the same without it: without the API's answer, else without the
+ * registry's, else without both, so whichever source is usable is kept. An unusable answer is an unreadable source,
+ * never a tool error.
  */
 export function verdictOrFallback(input: VerdictInput): Verdict {
   try {
     return buildVerdict(input);
   } catch (err) {
-    const api: ApiRead = { ok: false, reason: `The Specfirst API answer could not be used (${clean((err as Error).message, 200)})` };
+    const why = clean((err as Error).message, 200);
+    const api: ApiRead = { ok: false, reason: `The Specfirst API answer could not be used (${why})` };
+    const chain: LatestRead = { read: 'unread', reason: `The registry answer could not be used (${why})` };
     try {
       return buildVerdict({ ...input, api, report: null, watch: null });
-    } catch (err2) {
-      return buildVerdict({ ...input, api, report: null, watch: null, chain: { read: 'unread', reason: `The registry answer could not be used (${clean((err2 as Error).message, 200)})` } });
+    } catch {
+      try {
+        return buildVerdict({ ...input, chain });
+      } catch {
+        return buildVerdict({ ...input, api, report: null, watch: null, chain });
+      }
     }
   }
 }

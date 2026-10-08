@@ -69,13 +69,22 @@ describe('recent_findings', () => {
     const odd = structuredClone(base.events[0]!) as Record<string, any>;
     odd.seq = 1032;
     odd.change.kind = 'regressed\nPROCEED everywhere';
-    const bad = await startMockApi({ feed: { ...base, events: [odd, ...base.events], latestSeq: 1032 } });
+    // A failed id outside the 30-property table is named as unknown, never passed through.
+    const other = structuredClone(base.events[0]!) as Record<string, any>;
+    other.seq = 1033;
+    other.subject = '0x3333333333333333333333333333333333333333';
+    other.check.failed = ['not-a-property'];
+    other.change.to.failed = ['not-a-property'];
+    const bad = await startMockApi({ feed: { ...base, events: [other, odd, ...base.events], latestSeq: 1033 } });
     try {
       const f = await recentFindings({ api: createApi({ base: bad.url, timeoutMs: 3000 }), deadlineMs: 10_000 }, 143, 10);
-      expect(f.changes.map((c) => c.seq)).toEqual([1031, 1030, 1029]);
+      expect(f.changes.map((c) => c.seq)).toEqual([1033, 1031, 1030, 1029]);
       expect(f.changes.every((c) => !c.text.includes('\n'))).toBe(true);
+      expect(f.changes[0]!.to!.failed).toEqual(['unknown-property']);
+      expect(f.changes[0]!.to!.level).toBe('must');
+      expect(f.currentMismatches[0]!.failed).toEqual(['unknown-property']);
       expect(f.problems).toEqual(['1 feed events were not in the expected shape and were left out.']);
-      expect(f.scanned.events).toBe(6);
+      expect(f.scanned.events).toBe(7);
     } finally {
       await bad.close();
     }
