@@ -8,7 +8,7 @@ Specfirst checks ERC-4626 vaults on Monad mainnet against 30 third-party propert
 - `AllocationGate` is a demo integrator on Monad testnet: it deposits only into vaults whose latest attestation is compliant, and anyone can make it pull its money out once that changes.
 - A failed property is a mismatch with a sentence of EIP-4626, shown by a concrete call on a fork. It is not a claim that funds are at risk.
 
-Where to read more: `docs/submission.md` (what it does and what it found), `docs/board-results.md` (results and the vaults that fail, in Korean), `docs/adr/` (each design decision and its reviews), `docs/plan.md` (the original plan, with what changed at the top, in Korean).
+Where to read more: `docs/submission.md` (what it does and what it found), `docs/board-results.md` (results and the vaults that fail, in Korean), `docs/adr/` (each design decision and its reviews), `docs/plan.md` (the original plan, with what changed at the top, in Korean), `packages/mcp/README.md` (the MCP server for AI agents).
 
 ## Keys
 
@@ -207,6 +207,15 @@ JSON: `GET /api/v1/watch/status`, `/api/v1/watch/feed?after=<seq>|before=<seq>`,
 | `NEXT_PUBLIC_SPECFIRST_GATE_10143` | unset | AllocationGate on Monad testnet, shown at `/watch/gate` (ADR 0007). Unset: the page says no gate is deployed. |
 
 The web takes the file schemas from `@specfirst/core/watch` and the CheckSubscriptions ABI, day accounting and webhook verification from `@specfirst/core/subs` (`packages/web/lib/watch/core.ts` and `lib/subs/core.ts` re-export them; both are browser-safe), and the `webhooks.json` store from the Node-only `@specfirst/core/webhooks` in server code (`lib/watch/webhooks.ts`), so the web and the watcher's alert sink write and read one file the same way. It never imports the package root.
+
+## MCP server for agents
+
+`packages/mcp` (`@specfirst/mcp`, bin `specfirst-mcp`) lets an AI agent ask Specfirst about a vault before it moves money, over stdio for Claude Code, Claude Desktop and other MCP hosts. `check_before_moving_funds` answers refuse, caution or proceed for a deposit, mint, withdraw or redeem, with reasons and which max function not to size from; `vault_verdict`, `recent_findings` and `how_to_watch` give the details, the watcher's findings and the way to subscribe. It reads the web API (`SPECFIRST_API_BASE`) and the registry on Monad testnet itself (`MONAD_TESTNET_RPC`), and holds no key. Setup, the tools and the decision rules are in `packages/mcp/README.md`, the reasoning in `docs/adr/0008-mcp-server.md`.
+
+```
+pnpm --filter @specfirst/mcp build
+claude mcp add specfirst -e SPECFIRST_API_BASE=http://localhost:3417 -- node "$PWD/packages/mcp/dist/index.js"
+```
 
 ## License
 

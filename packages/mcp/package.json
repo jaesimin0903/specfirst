@@ -1,0 +1,36 @@
+{
+  "name": "@specfirst/mcp",
+  "version": "0.0.1",
+  "description": "MCP server that lets AI agents ask Specfirst about an ERC-4626 vault before they move money",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "specfirst-mcp": "./dist/index.js"
+  },
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "tsc -p tsconfig.build.json && vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.3.1",
+    "@specfirst/core": "workspace:*",
+    "viem": "^2.21.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
