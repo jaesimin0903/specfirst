@@ -154,9 +154,9 @@ Jaemin Lee, solo. Background in Web3 financial infrastructure, DAO treasury prot
 
 ## Links
 
-- **Board:** <PLACEHOLDER_WEB_HOST>
-- **Watcher feed:** <PLACEHOLDER_WEB_HOST>/watch
-- **Allocation gate:** <PLACEHOLDER_WEB_HOST>/watch/gate
+- **Board:** https://specfirst.jaesimin.xyz
+- **Watcher feed:** https://specfirst.jaesimin.xyz/watch
+- **Allocation gate:** https://specfirst.jaesimin.xyz/watch/gate
 - **Repository:** github.com/jaesimin/specfirst
 - **Demo video:** <PLACEHOLDER_VIDEO_LINK>
 
