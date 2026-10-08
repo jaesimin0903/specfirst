@@ -1,0 +1,32 @@
+# Build context of deploy/Dockerfile (the repository root). Keys never enter an image: every .env file is left out.
+.env*
+**/.env*
+!.env.example
+!**/.env.example
+deploy/.env
+deploy/*.env
+
+.git
+**/node_modules
+**/dist
+**/out
+**/cache
+**/.next
+**/*.tsbuildinfo
+**/*.log
+**/.DS_Store
+
+# Run state; the services get it through mounts, never through an image.
+.specfirst
+.ultrafuzz
+**/broadcast
+
+# Generated in the image: the ABI copies, and the board data from the reports in certs/checks.
+packages/cli/src/abi/*.json
+packages/web/lib/abi/*.json
+packages/web/data/board.json
+packages/web/data/vaults
+packages/web/public/reports
+
+# The watcher's testnet demo reports are not board material and grow by the hour.
+certs/checks/10143

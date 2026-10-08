@@ -1,0 +1,171 @@
+# Specfirst on one Linux host: the web, the Monad mainnet watcher, the testnet demo watcher, the desk worker and the
+# AllocationGate keeper, with Caddy in front for HTTPS. Runbook: docs/deploy.md. From a checkout on the server:
+#
+#   cp deploy/.env.example deploy/.env    # then fill it in
+#   mkdir -p .specfirst/watch .specfirst/worker && sudo chown -R 1000:1000 .specfirst certs/checks
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# Profiles keep the signing services off until they are asked for: "https" starts Caddy, "signers" starts the
+# watchers, the worker and the keeper. deploy/.env sets COMPOSE_PROFILES. Never run the signers here while the same
+# keys sign anywhere else (docs/deploy.md, Migration and Rollback).
+#
+# The web and Caddy restart with Docker (unless-stopped). The signers do not: they have restart: "no" and run under
+# specfirst-supervise, which restarts a crashed process 30 seconds later, so a server that reboots, or comes back
+# after an outage, starts no signer until someone runs `up -d` again.
+#
+# State lives in the checkout, as on the Mac: .specfirst/watch, .specfirst/worker and certs/checks are bind mounts,
+# owned by uid 1000 (the node user of both images). Keys reach only the CLI services, as a secret file read with
+# node --env-file; the web gets the non-secret variables listed under web.environment and nothing else.
+
+name: specfirst
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "5"
+
+x-cli: &cli
+  image: specfirst-cli:local
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+    target: cli
+  profiles: [signers]
+  init: true
+  restart: "no"
+  depends_on: [web]
+  working_dir: /app
+  entrypoint: [specfirst-supervise, node, --env-file=/run/secrets/specfirst_env, /app/packages/cli/dist/index.js, --json]
+  secrets: [specfirst_env]
+  volumes:
+    - ../.specfirst:/app/.specfirst
+    - ../certs/checks:/app/certs/checks
+    - standards-cache:/home/node/.cache/specfirst
+  networks: [specfirst]
+  logging: *logging
+
+services:
+  web:
+    image: specfirst-web:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: web
+      args:
+        SPECFIRST_BOARD_RPC: ${SPECFIRST_BOARD_RPC:-https://rpc.ankr.com/monad_testnet}
+    init: true
+    restart: unless-stopped
+    # Everything the web reads, nothing more. The NEXT_PUBLIC_ addresses are read per request (not inlined at
+    # build), so changing one needs `up -d web`, not a rebuild.
+    environment:
+      NEXT_PUBLIC_SPECFIRST_DESK_10143: ${SPECFIRST_DESK_10143:-}
+      NEXT_PUBLIC_SPECFIRST_SUBS_10143: ${SPECFIRST_SUBS_10143:-}
+      NEXT_PUBLIC_SPECFIRST_GATE_10143: ${SPECFIRST_GATE_10143:-}
+      # Visitors reach the site as https://DOMAIN through Caddy, while next start names its own host in request.url
+      # (https://localhost:3000, the scheme from X-Forwarded-Proto); the absolute links of /api/v1/vaults take this.
+      SPECFIRST_PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-https://${DOMAIN}}
+      # Only for a site served over plain http: the demo receiver at https://DOMAIN needs no exception.
+      SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS: ${SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS:-}
+    volumes:
+      # The web writes webhooks.json and demo-hook.json here; the rest it only reads.
+      - ../.specfirst/watch:/app/.specfirst/watch
+      - ../.specfirst/worker:/app/.specfirst/worker:ro
+      - ../certs/checks:/app/certs/checks:ro
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/about').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    networks: [specfirst]
+    logging: *logging
+
+  caddy:
+    image: caddy:2.11.7-alpine
+    profiles: [https]
+    restart: unless-stopped
+    depends_on: [web]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
+      # The only addresses the demo receiver takes a POST from: the two watchers (Caddyfile).
+      WATCHER_IPS: ${SPECFIRST_NET:-172.30.17}.11 ${SPECFIRST_NET:-172.30.17}.12
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      specfirst:
+        # Inside the network the site's own name leads to Caddy, so a watcher delivers the demo webhook
+        # (https://DOMAIN/api/v1/watch/demo-hook) without leaving the host.
+        aliases: ["${DOMAIN}"]
+    logging: *logging
+
+  # Monad mainnet, the built-in sources. Attests on testnet with WATCH_ISSUER_PRIVATE_KEY.
+  watch-143:
+    <<: *cli
+    command:
+      - watch
+      - --network=monad-testnet
+      - --subject-chain=143
+      - --subject-rpc=https://rpc1.monad.xyz
+      - --subject-rpc=https://rpc.monad.xyz
+      - --webhook-local-origin=${PUBLIC_ORIGIN:-https://${DOMAIN}}
+    networks:
+      specfirst:
+        ipv4_address: ${SPECFIRST_NET:-172.30.17}.11
+
+  # The testnet demo (examples/watch/sources-demo.json), signing with WATCH_DEMO_ISSUER_PRIVATE_KEY.
+  watch-10143:
+    <<: *cli
+    command:
+      - watch
+      - --subject-chain=10143
+      - --subject-rpc=https://testnet-rpc.monad.xyz
+      - --sources=examples/watch/sources-demo.json
+      - --network=monad-testnet
+      - --issuer-key-env=WATCH_DEMO_ISSUER_PRIVATE_KEY
+      - --subscribed-minutes=1
+      - --poll=5
+      - --min-balance=0.05
+      - --webhook-local-origin=${PUBLIC_ORIGIN:-https://${DOMAIN}}
+    networks:
+      specfirst:
+        ipv4_address: ${SPECFIRST_NET:-172.30.17}.12
+
+  # The request desk's worker: checks paid requests, attests with ISSUER_PRIVATE_KEY and fulfils them.
+  worker:
+    <<: *cli
+    command: [worker, --network=monad-testnet, --subject-rpc=https://rpc.monad.xyz, --runs=16, --poll=15]
+
+  # Exits AllocationGate positions whose verdict opened exit, signing with KEEPER_PRIVATE_KEY (else REQUESTER_PRIVATE_KEY).
+  # Keeps no files.
+  gate-keeper:
+    <<: *cli
+    command: [watch, demo, gate, keep, --network=monad-testnet, --poll=10]
+    volumes: []
+
+secrets:
+  specfirst_env:
+    # The signers' keys, the contract addresses and the RPCs (deploy/server.env.example), readable by uid 1000 only.
+    file: ${SPECFIRST_ENV_FILE:-/etc/specfirst/specfirst.env}
+
+volumes:
+  standards-cache:
+  caddy-data:
+  caddy-config:
+
+networks:
+  specfirst:
+    ipam:
+      config:
+        # The watchers have fixed addresses below .128 (Caddy lets only them POST to the demo receiver); every other
+        # container gets one from the upper half.
+        - subnet: ${SPECFIRST_NET:-172.30.17}.0/24
+          ip_range: ${SPECFIRST_NET:-172.30.17}.128/25

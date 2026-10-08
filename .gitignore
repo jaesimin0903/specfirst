@@ -18,3 +18,5 @@ packages/web/.next/
 packages/web/data/board.json
 packages/web/data/vaults/
 packages/web/public/reports/
+# A filled copy of deploy/server.env.example or deploy/.env.example kept next to them
+deploy/*.env

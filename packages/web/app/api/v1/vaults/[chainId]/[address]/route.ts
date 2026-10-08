@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { describeReadError } from '../../../../../../lib/board/attestations';
 import { buildVaultApi } from '../../../../../../lib/desk/vaultApi';
 import { liveAttestation, resolveVault } from '../../../../../../lib/desk/vault';
+import { publicOrigin } from '../../../../../../lib/origin';
 import type { LiveAttestation } from '../../../../../../lib/desk/registry';
 
 export const dynamic = 'force-dynamic';
@@ -19,8 +20,7 @@ export async function GET(request: Request, context: { params: Promise<{ chainId
   if (!CHAIN_RE.test(chainId) || !ADDRESS_RE.test(address)) {
     return NextResponse.json({ error: 'expected /api/v1/vaults/<chainId>/<0x address>' }, { status: 400 });
   }
-  const url = new URL(request.url);
-  const origin = `${url.protocol}//${url.host}`;
+  const origin = publicOrigin(request.url);
   const resolved = await resolveVault(chainId, address);
   const live: LiveAttestation = await liveAttestation(Number(chainId), address.toLowerCase()).catch((err) => ({ kind: 'unread' as const, reason: describeReadError(err) }));
   const body = buildVaultApi({ resolved, live, origin });

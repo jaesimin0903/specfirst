@@ -3,6 +3,7 @@ import type { Address, Hex } from 'viem';
 import { CHAIN_ID, getRegistryAddress, publicClient } from '../../../../lib/chain';
 import { fetchCertLookup, ZERO_ADDRESS } from '../../../../lib/certStatus';
 import { resolveReportUrl } from '../../../../lib/report';
+import { publicOrigin } from '../../../../lib/origin';
 
 export const revalidate = 60;
 
@@ -51,7 +52,7 @@ export async function GET(request: Request, context: { params: Promise<{ address
   });
 
   const cert = lookup.certificate;
-  const origin = `${url.protocol}//${url.host}`;
+  const origin = publicOrigin(request.url);
 
   const body: CertApiResponse = {
     address: lookup.address,
