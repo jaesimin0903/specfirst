@@ -64,6 +64,8 @@ services:
       SPECFIRST_GATE_10143: ${SPECFIRST_GATE_10143:-}
       MONAD_TESTNET_RPC: ${MONAD_TESTNET_RPC:-https://testnet-rpc.monad.xyz}
       MONAD_TESTNET_RPC_FALLBACKS: ${MONAD_TESTNET_RPC_FALLBACKS:-}
+      # The origin of the absolute links /api/v1/vaults returns; next start alone would say http://localhost:3000.
+      SPECFIRST_PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-https://${DOMAIN}}
       # Only for a site served over plain http: the demo receiver at https://DOMAIN needs no exception.
       SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS: ${SPECFIRST_ALLOW_LOCAL_HTTP_WEBHOOKS:-}
     volumes:

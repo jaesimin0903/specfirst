@@ -391,6 +391,18 @@ describe('GET /api/v1/vaults/<chainId>/<address>', () => {
     expect(body).toMatchObject({ checked: false, report: null, maxHonored: { maxDeposit: null }, attestation: { state: 'none', isCompliant: false }, badge: { state: 'not-attested' } });
     expect((await call('143', '0x12')).status).toBe(400);
   });
+
+  it('names SPECFIRST_PUBLIC_ORIGIN in its links behind a proxy, where next start reports http://localhost:3000', async () => {
+    vi.stubEnv('SPECFIRST_PUBLIC_ORIGIN', 'https://specfirst.example.org');
+    try {
+      const res = await vaultApi(new Request(`http://localhost:3000/api/v1/vaults/143/${UPSHIFT}`), { params: Promise.resolve({ chainId: '143', address: UPSHIFT }) });
+      const body = vaultApiResponseSchema.parse(await res.json());
+      expect(body.links.page).toBe(`https://specfirst.example.org/v/143/${UPSHIFT}`);
+      expect(body.badge.url).toBe(`https://specfirst.example.org/badge/check/143/${UPSHIFT}.svg`);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe('badge and runtime report routes', () => {

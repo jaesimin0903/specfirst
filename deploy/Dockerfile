@@ -72,7 +72,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/core/package.json packages/core/
 COPY packages/cli/package.json packages/cli/
 COPY packages/web/package.json packages/web/
+# pnpm installs the musl builds of next's swc and sharp next to the glibc ones; this image is glibc (Debian).
 RUN pnpm install --prod --frozen-lockfile --filter "@specfirst/web..." \
+ && find node_modules/.pnpm -maxdepth 1 -name '*linux*musl*' -exec rm -rf {} + \
  && rm -rf /root/.local/share/pnpm /root/.cache
 COPY --from=web-build /app/packages/core/dist packages/core/dist
 COPY --from=web-build /app/packages/web/next.config.mjs packages/web/
