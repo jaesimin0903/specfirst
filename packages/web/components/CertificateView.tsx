@@ -157,7 +157,7 @@ export function CertificateView({
           {issuanceTx ? 'issuance transaction' : 'view on explorer'}
         </a>
         {reportUrl && (
-          <a className="btn" href={reportUrl} target="_blank" rel="noreferrer">
+          <a className="btn" href={reportUrl} target="_blank" rel="noreferrer" title={reportUrl !== cert.reportURI ? `reportURI on chain: ${cert.reportURI}` : undefined}>
             report.json
           </a>
         )}

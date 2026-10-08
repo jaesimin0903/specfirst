@@ -62,6 +62,7 @@ const attestation = z.object({
   issuerCurrent: z.boolean().nullable(),
   reportHash: z.string().nullable(),
   reportURI: z.string().nullable(),
+  reportLink: z.string().nullable(),
   counts: counts.nullable(),
   failedProperties: z.array(z.string()),
   failedLevel: z.enum(['must', 'should', 'none']).nullable(),

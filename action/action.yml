@@ -36,7 +36,7 @@ inputs:
     default: '64'
   tool-ref:
     description: >-
-      specfirst CLI 소스를 가져올 jaesimin/specfirst 저장소의 ref. 비우면 이 액션
+      specfirst CLI 소스를 가져올 jaesimin0903/specfirst 저장소의 ref. 비우면 이 액션
       자신이 호출된 ref(github.action_ref)를 쓴다. 자기 저장소 안에서 액션을 호출하는
       경우에는 비워 둔다.
     required: false
@@ -76,7 +76,7 @@ runs:
     - name: specfirst 툴 소스 체크아웃
       uses: actions/checkout@v4
       with:
-        repository: jaesimin/specfirst
+        repository: jaesimin0903/specfirst
         ref: ${{ inputs['tool-ref'] != '' && inputs['tool-ref'] || github.action_ref }}
         path: .specfirst-tool
 

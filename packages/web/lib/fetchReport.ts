@@ -1,4 +1,4 @@
-import { isReport, type Report } from './report';
+import { isReport, reportLinkOf, type Report } from './report';
 
 const MAX_REPORT_BYTES = 2 * 1024 * 1024; // 2MB
 const FETCH_TIMEOUT_MS = 10_000;
@@ -88,13 +88,15 @@ async function readBounded(res: Response, maxBytes: number): Promise<string | nu
  * host on the allowlist can't 302 this server to one that isn't), a response over 2MB, a network
  * error or timeout, or JSON that doesn't look like a report. Callers that need to tell "host not
  * allowed" apart from the rest should call isAllowedReportUrl themselves before calling this.
+ * A legacy jaesimin/specfirst URL is fetched at jaesimin0903/specfirst (reportLinkOf), still under the allowlist.
  */
 export async function fetchReport(url: string, init?: RequestInit): Promise<Report | null> {
   if (!url) return null;
-  if (!isAllowedReportUrl(url)) return null;
+  const target = reportLinkOf(url);
+  if (!isAllowedReportUrl(target)) return null;
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch(target, {
       ...init,
       redirect: 'error',
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),

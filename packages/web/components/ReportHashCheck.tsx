@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { computeReportHash } from '../lib/report';
+import { computeReportHash, reportLinkOf } from '../lib/report';
 
 type CheckState = { kind: 'loading' } | { kind: 'match'; computed: string } | { kind: 'mismatch'; computed: string } | { kind: 'error'; message: string };
 
@@ -22,7 +22,7 @@ export function ReportHashCheck({ reportUrl, onChainHash }: { reportUrl: string 
     }
     (async () => {
       try {
-        const res = await fetch(reportUrl);
+        const res = await fetch(reportLinkOf(reportUrl));
         if (!res.ok) throw new Error(`report fetch failed: ${res.status}`);
         const json: unknown = await res.json();
         const computed = computeReportHash(json);

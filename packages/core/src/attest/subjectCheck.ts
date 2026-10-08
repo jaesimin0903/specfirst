@@ -21,7 +21,7 @@ import { attestationReportPath, checkReportHash, parseCheckReport } from './para
 export { isContractAnswer };
 
 /** The repository's own public copy of certs/checks, used as the default reportURI base. */
-export const DEFAULT_REPORT_BASE_URL = 'https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks';
+export const DEFAULT_REPORT_BASE_URL = 'https://raw.githubusercontent.com/jaesimin0903/specfirst/main/certs/checks';
 export const REPORT_BASE_URL_ENV = 'SPECFIRST_REPORT_BASE_URL';
 /** The check runs this many blocks below the subject chain's latest block, so every RPC already serves its state. */
 export const DEFAULT_BLOCK_LAG = 10n;

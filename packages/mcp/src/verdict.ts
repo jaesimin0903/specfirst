@@ -62,7 +62,10 @@ export interface AttestationView {
   /** The issuer is still an issuer of the registry (removing one leaves its attestations Valid, ADR 0004); null when not read. */
   issuerCurrent: boolean | null;
   reportHash: string | null;
+  /** The reportURI string as the registry stores it. */
   reportURI: string | null;
+  /** Where to open that report: reportURI with the legacy jaesimin/specfirst prefix mapped to jaesimin0903/specfirst (reportLinkOf). This server does not fetch it. */
+  reportLink: string | null;
   counts: { pass: number; fail: number; inconclusive: number; notApplicable: number } | null;
   /** Ids whose bits are set in the attestation's failedBitmap; a bit past the 30-property table is "bit <i>". */
   failedProperties: string[];
@@ -153,6 +156,19 @@ export function clean(s: string | null | undefined, max = 300): string {
     .replace(/\s+/g, ' ')
     .trim();
   return one.length > max ? `${one.slice(0, max)}...` : one;
+}
+
+/** The reportURI prefix of attestations recorded before 2026-10-08: a GitHub account that is not ours. */
+const LEGACY_REPORT_PREFIX = 'https://raw.githubusercontent.com/jaesimin/specfirst/';
+/** Where the same files are published: the public Specfirst repository. */
+const REPORT_PREFIX = 'https://raw.githubusercontent.com/jaesimin0903/specfirst/';
+
+/**
+ * The link to give for an attested reportURI, as packages/web/lib/report.ts reportLinkOf does: only the exact legacy
+ * prefix is rewritten, every other string comes back unchanged. The on-chain reportHash still binds the file.
+ */
+export function reportLinkOf(reportURI: string): string {
+  return reportURI.startsWith(LEGACY_REPORT_PREFIX) ? REPORT_PREFIX + reportURI.slice(LEGACY_REPORT_PREFIX.length) : reportURI;
 }
 
 /** A quoted form of text from a vault or a deployer: JSON quoting, so an inner quote cannot close it. */
@@ -294,6 +310,7 @@ function attestationView(o: {
     issuerCurrent: null,
     reportHash: null,
     reportURI: null,
+    reportLink: null,
     counts: null,
     failedProperties: [],
     failedLevel: null,
@@ -310,6 +327,7 @@ function attestationView(o: {
   const issuedAt = isoOfSeconds(a.issuedAt);
   const id = a.id.toString();
   const rel = o.reportBlock === null ? null : BigInt(o.reportBlock) === a.blockNumber ? 'same-block' : a.blockNumber < BigInt(o.reportBlock) ? 'earlier-block' : 'later-block';
+  const reportURI = a.reportURI ? clean(a.reportURI, 512) : null;
   return {
     ...v,
     read: 'ok',
@@ -322,7 +340,8 @@ function attestationView(o: {
     issuer: a.issuer,
     issuerCurrent: o.chain.issuerCurrent,
     reportHash: a.reportHash,
-    reportURI: a.reportURI ? clean(a.reportURI, 512) : null,
+    reportURI,
+    reportLink: reportURI ? reportLinkOf(reportURI) : null,
     counts: { pass: a.passCount, fail: a.failCount, inconclusive: a.inconclusiveCount, notApplicable: a.notApplicableCount },
     failedProperties: failed,
     failedLevel: failed.length === 0 ? 'none' : failed.some((f) => propertyLevel(f) === 'must') ? 'must' : 'should',

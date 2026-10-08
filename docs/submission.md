@@ -95,7 +95,7 @@ The service loses money today, and we show it that way on the desk page. The wat
 
 ## How to check our work
 
-- **Every result reproduces.** Each report under `certs/checks/<chainId>/<address>/` names its block, seed and senders. `specfirst check <address> --standard erc4626 --block <block> --runs 16 --seed <seed>` runs the same check. The keccak256 of the report in canonical JSON, keys sorted and no whitespace, equals the `reportHash` on chain, and each vault page recomputes it in the browser.
+- **Every result reproduces.** Each report under `certs/checks/<chainId>/<address>/` names its block, seed and senders. `specfirst check <address> --standard erc4626 --block <block> --runs 16 --seed <seed>` runs the same check. The keccak256 of the report in canonical JSON, keys sorted and no whitespace, equals the `reportHash` on chain, and each vault page recomputes it in the browser. Attestations recorded before October 8 name raw.githubusercontent.com/jaesimin/specfirst, a path we do not control; the same files are in this repository and match the on-chain reportHash.
 - **Contracts on Monad testnet, chain 10143.**
 
 | Contract | Address |
@@ -157,7 +157,7 @@ Jaemin Lee, solo. Background in Web3 financial infrastructure, DAO treasury prot
 - **Board:** https://specfirst.jaesimin.xyz
 - **Watcher feed:** https://specfirst.jaesimin.xyz/watch
 - **Allocation gate:** https://specfirst.jaesimin.xyz/watch/gate
-- **Repository:** github.com/jaesimin/specfirst
+- **Repository:** github.com/jaesimin0903/specfirst
 - **Demo video:** <PLACEHOLDER_VIDEO_LINK>
 
 Submitted October 13, 2026.

@@ -30,10 +30,10 @@ CLI 옵션은 3.10 기준이다. `deploy`, `verify`, `cert`는 exec-deploy가 �
 | `runs` | 아니오 | `64` | 캠페인당 불변식 실행 횟수 |
 | `tool-ref` | 아니오 | 빈 값 | specfirst 소스를 가져올 ref. 비우면 액션 자신의 ref |
 
-액션은 `jaesimin/specfirst` 저장소에서 CLI 소스를 따로 체크아웃해 빌드한 뒤, 호출한
+액션은 `jaesimin0903/specfirst` 저장소에서 CLI 소스를 따로 체크아웃해 빌드한 뒤, 호출한
 워크플로가 체크아웃해 둔 대상 프로젝트(스펙과 컨트랙트가 있는 저장소) 위에서 실행한다.
-그래서 다른 저장소에서도 `uses: jaesimin/specfirst/action@main`으로 참조할 수 있다.
-이 체크아웃은 기본 `GITHUB_TOKEN`으로 하므로 `jaesimin/specfirst`가 공개 저장소여야
+그래서 다른 저장소에서도 `uses: jaesimin0903/specfirst/action@main`으로 참조할 수 있다.
+이 체크아웃은 기본 `GITHUB_TOKEN`으로 하므로 `jaesimin0903/specfirst`가 공개 저장소여야
 한다(계획서 머리말대로 저장소는 공개가 기본값이다). `tool-ref`를 비워 두면 이 액션
 자신이 호출된 ref를 그대로 쓴다.
 
@@ -55,7 +55,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: jaesimin/specfirst/action@main
+      - uses: jaesimin0903/specfirst/action@main
         with:
           spec: spec/staking-vault.spec.yaml
           mode: pr
@@ -79,7 +79,7 @@ jobs:
       ISSUER_PRIVATE_KEY: ${{ secrets.ISSUER_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - uses: jaesimin/specfirst/action@main
+      - uses: jaesimin0903/specfirst/action@main
         with:
           spec: spec/staking-vault.spec.yaml
           mode: release
@@ -137,5 +137,5 @@ report를 Specfirst가 운영하는 발급 서비스에 제출한다. 서비스�
 
 세 검증 모두 통과했다. 실제 GitHub Actions 러너에서의 종단 실행(pnpm/Foundry 설치,
 `specfirst run` 실제 호출, PR 코멘트 작성)은 이 로컬 환경에서 재현하지 않았다.
-`jaesimin/specfirst` 저장소가 GitHub에 푸시된 뒤 실제 PR에서 한 번 더 확인이
+`jaesimin0903/specfirst` 저장소가 GitHub에 푸시된 뒤 실제 PR에서 한 번 더 확인이
 필요하다.

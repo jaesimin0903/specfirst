@@ -47,7 +47,7 @@ import { cont, stage } from '../lib/runLog.js';
 import { runStage } from '../lib/stageRunner.js';
 
 /** Where our own report copies are published; the README names it as the --report-base-url to use. */
-export const EXAMPLE_REPORT_BASE_URL = 'https://raw.githubusercontent.com/jaesimin/specfirst/main/certs/checks';
+export const EXAMPLE_REPORT_BASE_URL = 'https://raw.githubusercontent.com/jaesimin0903/specfirst/main/certs/checks';
 
 interface WriteOptions {
   network: string;
