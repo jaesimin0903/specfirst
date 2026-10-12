@@ -109,13 +109,7 @@ export function WatchLive({ initialStatus, initialFeed }: { initialStatus: Watch
             {state === 'live' ? 'Running' : state === 'stale' ? 'No update lately' : 'Not running'}
           </span>
           <span className="sw-now-n">{s.head ? blockText(s.head) : 'n/a'}</span>
-          <span className="sw-now-note">
-            {s.running
-              ? `head block of ${s.chainName}, status written ${s.updatedAgoSec !== null ? `${formatDuration(s.updatedAgoSec)} ago` : 'at an unknown time'}`
-              : s.problem === 'not running'
-                ? `no watcher files under ${s.dir}/${s.chainId}`
-                : (s.problem ?? 'status unavailable')}
-          </span>
+          <span className="sw-now-note">{stateNote(s)}</span>
         </div>
         <div className="sw-now-cell">
           <span className="sw-now-label">Behind the head</span>
@@ -310,6 +304,17 @@ export function WatchLive({ initialStatus, initialFeed }: { initialStatus: Watch
       </div>
     </>
   );
+}
+
+/**
+ * The note under the watcher's state. status.json is not rewritten while a step runs, so while a step is under way and
+ * not stale the note names it: "status written 4 min ago; checking <vault> for 4 min".
+ */
+export function stateNote(s: WatchStatusJson): string {
+  if (!s.running) return s.problem === 'not running' ? `no watcher files under ${s.dir}/${s.chainId}` : (s.problem ?? 'status unavailable');
+  const written = `head block of ${s.chainName}, status written ${s.updatedAgoSec !== null ? `${formatDuration(s.updatedAgoSec)} ago` : 'at an unknown time'}`;
+  if (!s.now || s.stale) return written;
+  return `${written}; ${STAGE_LABEL[s.now.stage].toLowerCase()} ${s.now.label.name ?? shortAddress(s.now.subject)} for ${formatDuration(s.now.forSec)}`;
 }
 
 /** The note under "Changed": results that moved, and apart from them the share value drops when the watcher counts them. */

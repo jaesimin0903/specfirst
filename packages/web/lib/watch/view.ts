@@ -16,6 +16,12 @@ import type { ChangeJson, FeedEventJson, FoundJson, OutcomeJson, VaultLabelJson,
 export const SECONDS_PER_BLOCK = 0.4;
 /** status.json is rewritten after every step; this long without a rewrite and the page says the watcher may be stopped. */
 export const STALE_AFTER_SEC = 180;
+/**
+ * status.json is not rewritten while a step runs, and a check can take 1 to 6 minutes on mainnet, mostly waiting on
+ * the RPC. While status.json names a step (running) that started less than this long ago, an old status is that step,
+ * not a stopped watcher; past it the status is stale again. Generous on purpose: well above the slowest check seen.
+ */
+export const STEP_STALE_AFTER_SEC = 20 * 60;
 
 /** The board's protocol labels for the factories of ADR 0006, keyed by lowercase factory address. */
 export const FACTORY_PROTOCOL: Readonly<Record<string, string>> = {
@@ -279,6 +285,7 @@ export function statusJson(i: StatusInput): WatchStatusJson {
   const s = i.status;
   const behind = s ? Math.max(0, Number(BigInt(s.head) - BigInt(s.cursor))) : null;
   const updatedAgo = s ? secondsBetween(s.updatedAt, i.now) : null;
+  const stepSec = s?.running ? secondsBetween(s.running.startedAt, i.now) : null;
   return {
     chainId: i.chainId,
     chainName: chainName(i.chainId),
@@ -294,7 +301,7 @@ export function statusJson(i: StatusInput): WatchStatusJson {
     startedAt: s?.startedAt ?? null,
     updatedAt: s?.updatedAt ?? null,
     updatedAgoSec: updatedAgo,
-    stale: updatedAgo !== null && updatedAgo > STALE_AFTER_SEC,
+    stale: updatedAgo !== null && updatedAgo > STALE_AFTER_SEC && (stepSec === null || stepSec > STEP_STALE_AFTER_SEC),
     now: s?.running
       ? {
           subject: checksum(s.running.subject),
@@ -303,7 +310,7 @@ export function statusJson(i: StatusInput): WatchStatusJson {
           source: s.running.source,
           stage: s.running.stage,
           startedAt: s.running.startedAt,
-          forSec: secondsBetween(s.running.startedAt, i.now),
+          forSec: stepSec ?? 0,
         }
       : null,
     queue: (s?.queue ?? []).slice(0, i.queueShown ?? 8).map((q) => ({

@@ -121,7 +121,10 @@ export interface WatchStatusJson {
   startedAt: string | null;
   updatedAt: string | null;
   updatedAgoSec: number | null;
-  /** No status update for more than STALE_AFTER_SEC: the watcher may have stopped. */
+  /**
+   * No status update for more than STALE_AFTER_SEC, and no step (now) that started less than STEP_STALE_AFTER_SEC
+   * ago: the watcher may have stopped. A long check writes nothing until it ends, so it is not stale by itself.
+   */
   stale: boolean;
   now: { subject: string; vaultPath: string; label: VaultLabelJson; source: string; stage: WatchStage; startedAt: string; forSec: number } | null;
   queue: QueueItemJson[];
