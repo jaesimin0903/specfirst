@@ -86,10 +86,10 @@ Claude Code was given the Specfirst MCP server and asked to put 50,000 into one 
 | Earned, request desk fees | 0.20 |
 | Earned, subscription days started | 0.05 |
 | Desk worker gas | 0.1243 |
-| Watcher gas, both chains | 0.3521 |
-| **Net** | **-0.2265** |
+| Watcher gas, both chains | 1.0488 |
+| **Net** | **-0.9232** |
 
-The service loses money today, and we show it that way on the desk page. The watcher only spends gas on attestations. They are capped at 15 a day at about 0.05 MON each, so the worst case is about 0.75 MON a day, which 15 subscription days cover. Every check result is free; what a subscriber pays for is being told first.
+These are the figures of October 12. The service loses money today, and we show it that way on the desk page. The watcher only spends gas on attestations. They are capped at 15 a day at about 0.05 MON each, so the worst case is about 0.75 MON a day, which 15 subscription days cover. Every check result is free; what a subscriber pays for is being told first.
 
 ---
 
