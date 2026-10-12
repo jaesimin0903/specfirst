@@ -17,7 +17,7 @@ const VIDEOS = [
   },
   {
     id: 'pitch',
-    title: 'Pitch, 98 seconds',
+    title: 'Pitch, under 2 minutes',
     note: 'The team, the problem, why we are building it, what runs today and what comes next.',
     src: '/media/specfirst-pitch.mp4',
     poster: '/media/specfirst-pitch.jpg',
@@ -31,7 +31,7 @@ export default function VideoPage() {
         <h1 className="sb-claim" style={{ maxWidth: '14em' }}>
           Videos
         </h1>
-        <p className="sb-sub">Captions only, no voice. Every number on screen comes from the live system or from transactions on Monad.</p>
+        <p className="sb-sub">Narrated, with captions on screen. Every number shown comes from the live system or from transactions on Monad. The narration voice is synthetic, made with ElevenLabs.</p>
       </header>
       {VIDEOS.map((v) => (
         <section key={v.id} id={v.id} className="sb-section" aria-labelledby={`${v.id}-h`}>
