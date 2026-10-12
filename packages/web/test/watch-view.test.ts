@@ -7,7 +7,9 @@ import { filterRows, ALL } from '../lib/board/view';
 import { inboxEntries } from '../lib/watch/inbox';
 import { mergeOverlay, mergedProtocols } from '../lib/watch/overlay';
 import { parseFeedText, parseWatchStatus } from '../lib/watch/read';
-import { countFound, eventJson, foundOf, indexFeed, labelFor, pageOf, sourceText, statusJson, type LabelContext } from '../lib/watch/view';
+import type { WatchStatus } from '../lib/watch/core';
+import { countFound, eventJson, foundOf, indexFeed, labelFor, pageOf, sourceText, STALE_AFTER_SEC, statusJson, STEP_STALE_AFTER_SEC, type LabelContext } from '../lib/watch/view';
+import { stateNote } from '../components/watch/WatchLive';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIR = path.join(here, 'fixtures/watch/143');
@@ -93,7 +95,7 @@ describe('status', () => {
       chainId: 143,
       chains: [],
       dir: 'd',
-      status,
+      status: { ...status!, running: null },
       problem: null,
       gasCostWei: 5n,
       ctx,
@@ -118,6 +120,88 @@ describe('status', () => {
       now: at,
     });
     expect(off).toMatchObject({ running: false, problem: 'not running', behindBlocks: null, now: null, queue: [] });
+  });
+
+  describe('a long check is not a stopped watcher', () => {
+    // status.json is written when a check starts and not again until it ends; on mainnet a sweep re-check was seen
+    // 240 to 272 s into its run with the page saying stale.
+    const t0 = Date.parse(status!.updatedAt);
+    const checking: WatchStatus = { ...status!, running: { ...status!.running!, source: 'sweep', startedAt: status!.updatedAt } };
+    const idle: WatchStatus = { ...status!, running: null };
+    const at = (sec: number, s: WatchStatus) =>
+      statusJson({
+        chainId: 143,
+        chains: [143],
+        dir: 'd',
+        status: s,
+        problem: null,
+        gasCostWei: null,
+        ctx,
+        found: { watched: 0, notOnList: 0, notOnBoard: 0, listSize: 0 },
+        feed: { available: true, problem: null, events: 0, latestSeq: null, skipped: 0 },
+        vaultsFile: { available: true, problem: null, skipped: 0 },
+        now: new Date(t0 + sec * 1000),
+      });
+
+    it('a check younger than STEP_STALE_AFTER_SEC is not stale, and the note names it', () => {
+      expect(STEP_STALE_AFTER_SEC).toBeGreaterThan(STALE_AFTER_SEC);
+      const s = at(272, checking);
+      expect(s).toMatchObject({ running: true, stale: false, updatedAgoSec: 272, queueLength: 2 });
+      expect(s.now).toMatchObject({ stage: 'checking', source: 'sweep', forSec: 272 });
+      expect(stateNote(s)).toBe('head block of Monad mainnet, status written 4 min ago; checking 0xFEEd...0007 for 4 min');
+      expect(at(STEP_STALE_AFTER_SEC, checking).stale).toBe(false);
+    });
+
+    it('a check older than STEP_STALE_AFTER_SEC is stale, counted from the check start, and the note no longer names it', () => {
+      const s = at(STEP_STALE_AFTER_SEC + 1, checking);
+      expect(s.stale).toBe(true);
+      expect(s.now).toMatchObject({ stage: 'checking', forSec: STEP_STALE_AFTER_SEC + 1 });
+      expect(stateNote(s)).toBe('head block of Monad mainnet, status written 20 min ago');
+      // When status.json was written again after the check started, the bound still runs from the check's start.
+      const early: WatchStatus = { ...checking, running: { ...checking.running!, startedAt: new Date(t0 - (STEP_STALE_AFTER_SEC - 100) * 1000).toISOString() } };
+      expect(at(STALE_AFTER_SEC + 1, early)).toMatchObject({ stale: true, updatedAgoSec: STALE_AFTER_SEC + 1 });
+      expect(at(STALE_AFTER_SEC, early).stale).toBe(false);
+    });
+
+    it('an old status with no step running is stale as before', () => {
+      expect(at(STALE_AFTER_SEC, idle)).toMatchObject({ stale: false, now: null });
+      const s = at(STALE_AFTER_SEC + 1, idle);
+      expect(s).toMatchObject({ stale: true, now: null });
+      expect(stateNote(s)).toBe('head block of Monad mainnet, status written 3 min ago');
+      expect(stateNote(at(10, idle))).toBe('head block of Monad mainnet, status written 10 s ago');
+    });
+
+    it('a status.json of an older watcher (no priceDrops24h, budget details or gasCostWei) reads and follows the same rule', () => {
+      const raw = JSON.parse(readFileSync(path.join(DIR, 'status.json'), 'utf8'));
+      delete raw.gasCostWei;
+      expect(raw.counts.priceDrops24h).toBeUndefined();
+      expect(raw.attestBudget.unsolicitedPerDay).toBeUndefined();
+      const old = parseWatchStatus(raw);
+      expect(old.detail).toBeNull();
+      // Its check started 56 s before its last write.
+      const s = at(600, old.status!);
+      expect(s).toMatchObject({ stale: false, updatedAgoSec: 600, now: { stage: 'checking', forSec: 656 } });
+      expect(at(STEP_STALE_AFTER_SEC - 56 + 1, old.status!).stale).toBe(true);
+      expect(at(600, { ...old.status!, running: null }).stale).toBe(true);
+    });
+
+    it('with no status.json the note still says why, never stale', () => {
+      const off = statusJson({
+        chainId: 143,
+        chains: [],
+        dir: 'd',
+        status: null,
+        problem: 'not running',
+        gasCostWei: null,
+        ctx,
+        found: { watched: 0, notOnList: 0, notOnBoard: 0, listSize: 0 },
+        feed: { available: false, problem: null, events: 0, latestSeq: null, skipped: 0 },
+        vaultsFile: { available: false, problem: null, skipped: 0 },
+        now: new Date(t0 + 3_600_000),
+      });
+      expect(off).toMatchObject({ running: false, stale: false, now: null });
+      expect(stateNote(off)).toBe('no watcher files under d/143');
+    });
   });
 });
 

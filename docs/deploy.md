@@ -241,7 +241,7 @@ sudo docker compose -f deploy/docker-compose.yml logs watch-143 | grep superviso
 jq -r .updatedAt .specfirst/watch/143/status.json .specfirst/watch/10143/status.json
 ```
 
-`stale: true` or an `updatedAt` minutes old means a watcher stopped; `docker compose ps` shows whether its container runs, and its logs say why.
+`stale: true` means a watcher stopped: no status written for 3 minutes, and no step in `now` that started less than 20 minutes ago (status.json is not rewritten while a check runs, 1 to 6 minutes on mainnet, so an `updatedAt` minutes old with `now` set is that check, and the page says "checking <vault> for N min"). `docker compose ps` shows whether its container runs, and its logs say why.
 
 Check from outside too, since the signers stay down after a reboot or a restart of `dockerd` and nothing on the server says so unless someone looks. Point an uptime monitor (any service that polls a URL, or cron on another machine) at the status API of both watchers and alert when one is not running, is stale or has not written for 15 minutes:
 
