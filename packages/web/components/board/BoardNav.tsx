@@ -22,6 +22,9 @@ export function BoardNav() {
       <a href="/about" aria-current={path === '/about' ? 'page' : undefined}>
         Method
       </a>
+      <a href="/video" aria-current={path === '/video' ? 'page' : undefined}>
+        Video
+      </a>
       <ThemeToggle />
     </nav>
   );

@@ -5,6 +5,6 @@ set -u
 cd "$(dirname "$0")/.."
 pattern=$(printf '\xe2\x80\x94\\|\xc2\xb7\\|\xe3\x86\x8d')
 # Only the vendored Solidity libraries are skipped by path; a blanket "lib" exclude used to hide packages/web/lib.
-hits=$(LC_ALL=C grep -rn --exclude-dir={node_modules,out,.git,cache,.specfirst,.ultrafuzz,dist,.next} -e "$pattern" . | grep -v "^\./packages/contracts/lib/" || true)
+hits=$(LC_ALL=C grep -rIn --exclude-dir={node_modules,out,.git,cache,.specfirst,.ultrafuzz,dist,.next} -e "$pattern" . | grep -v "^\./packages/contracts/lib/" || true)
 if [ -n "$hits" ]; then echo "forbidden characters found:"; echo "$hits"; exit 1; fi
 echo "check:chars ok"

@@ -39,7 +39,7 @@ Results stay free and public. The service sells delivery and freshness: alert su
 
 ### On mainnet
 
-On October 8 the board covered 459 ERC-4626 vaults on Monad mainnet. 285 came from a hand-made list built from Morpho, Euler, Curvance, Neverland, DefiLlama and protocol docs. The other 174 were found on chain by the watcher; they were not on that list, and the number grows as it runs.
+On October 8 the board covered 459 ERC-4626 vaults on Monad mainnet. 285 came from a hand-made list built from Morpho, Euler, Curvance, Neverland, DefiLlama and protocol docs. The other 174 were found on chain by the watcher; they were not on that list, and the number grows as it runs. By October 12 the watcher had taken it to 672 vaults, and the board flags 14 of them. The 7 below were investigated by hand; the others, four Neverland wrappers and three vaults the watcher found, are listed on the board with their counterexamples and have not been reviewed by a person yet.
 
 Each failure is labeled with its level in EIP-4626. A MUST failure contradicts a MUST sentence. A SHOULD failure only goes against guidance, for example rounding that favors the caller by a unit.
 
@@ -148,7 +148,7 @@ The service loses money today, and we show it that way on the desk page. The wat
 
 ## Team
 
-Jaemin Lee, solo. Background in Web3 financial infrastructure, DAO treasury protocols and multi-chain deployment.
+Jaemin Choi, solo. Background in Web3 financial infrastructure, DAO treasury protocols and multi-chain deployment.
 
 ---
 
@@ -158,6 +158,7 @@ Jaemin Lee, solo. Background in Web3 financial infrastructure, DAO treasury prot
 - **Watcher feed:** https://specfirst.jaesimin.xyz/watch
 - **Allocation gate:** https://specfirst.jaesimin.xyz/watch/gate
 - **Repository:** github.com/jaesimin0903/specfirst
-- **Demo video:** <PLACEHOLDER_VIDEO_LINK>
+- **Demo video:** https://specfirst.jaesimin.xyz/video#demo
+- **Pitch video:** https://specfirst.jaesimin.xyz/video#pitch
 
 Submitted October 13, 2026.
