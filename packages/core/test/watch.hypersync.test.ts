@@ -79,33 +79,60 @@ describe('HyperSync logs (docs/adr/0009)', () => {
     expect(await at({ body: { data: [] } })).toMatchObject({ message: 'HyperSync answered without data or next_block' });
   });
 
-  it('H4: logsWithFallback asks the RPC when HyperSync fails or is far behind, and says when HyperSync serves again', async () => {
+  it('H4: logsWithFallback reads from the RPC when HyperSync fails or is behind, leaves HyperSync alone for a doubling cooldown, and says when it serves again', async () => {
     const events: string[] = [];
+    let t = 0;
     let primary: () => Promise<SignalLog[]> = async () => {
       throw new HypersyncError('HyperSync failed (HTTP 502)', 502);
     };
     const rpcLogs: SignalLog[] = [{ address: '0x00000000000000000000000000000000000000a1', topics: [T0], data: '0x', blockNumber: 5n, transactionHash: TX, logIndex: 0 }];
     const read = logsWithFallback(
-      () => primary(),
-      async (f, t) => {
-        events.push(`rpc ${f}-${t}`);
+      () => {
+        events.push('hypersync');
+        return primary();
+      },
+      async (f, to) => {
+        events.push(`rpc ${f}-${to}`);
         return rpcLogs;
       },
-      { maxBehindBlocks: 10n, onFallback: (e) => events.push(`fallback ${(e as Error).message}`), onRecover: () => events.push('recovered') },
+      { now: () => t, onFallback: (e, _f, _t, cd) => events.push(`fallback ${cd / 1000}s: ${(e as Error).message}`), onRecover: () => events.push('recovered') },
     );
     expect(await read(1n, 20n, [T0])).toBe(rpcLogs);
+    t = 59_000;
+    expect(await read(21n, 30n, [T0])).toBe(rpcLogs);
+    t = 61_000;
+    expect(await read(21n, 30n, [T0])).toBe(rpcLogs);
+    t = 190_000;
     primary = async () => [];
-    expect(await read(21n, 30n, [T0])).toEqual([]);
     expect(await read(31n, 40n, [T0])).toEqual([]);
     primary = async () => {
       throw new LogsNodeBehindError(45n);
     };
-    await expect(read(41n, 50n, [T0])).rejects.toEqual(new LogsNodeBehindError(45n));
-    primary = async () => {
-      throw new LogsNodeBehindError(30n);
-    };
     expect(await read(41n, 50n, [T0])).toBe(rpcLogs);
-    expect(events).toEqual(['fallback HyperSync failed (HTTP 502)', 'rpc 1-20', 'recovered', 'fallback the getLogs node is at block 30, behind the requested range', 'rpc 41-50']);
+    expect(events).toEqual([
+      'hypersync',
+      'fallback 60s: HyperSync failed (HTTP 502)',
+      'rpc 1-20',
+      'rpc 21-30',
+      'hypersync',
+      'fallback 120s: HyperSync failed (HTTP 502)',
+      'rpc 21-30',
+      'hypersync',
+      'recovered',
+      'hypersync',
+      'fallback 60s: the getLogs node is at block 45, behind the requested range',
+      'rpc 41-50',
+    ]);
+  });
+
+  it('H6: an archive that ends inside the range stops the read there even when next_block says more, and a refusal never shows the token', async () => {
+    const s = stubFetch([{ body: { data: [{ logs: [log(100, 0)] }], next_block: 201, archive_height: 150 } }]);
+    const read = hypersyncLogsReader({ url: 'https://143.hypersync.xyz', token: 'tok', fetch: s.fetch });
+    await expect(read(100n, 200n, [T0])).rejects.toEqual(new LogsNodeBehindError(149n));
+    expect(s.sent).toHaveLength(1);
+    const echo = stubFetch([{ status: 500, body: { error: 'bad bearer tok-secret-1' } }]);
+    const err = await hypersyncLogsReader({ url: 'https://143.hypersync.xyz', token: 'tok-secret-1', fetch: echo.fetch })(1n, 2n, [T0]).catch((e: unknown) => e as Error);
+    expect(err.message).toBe('HyperSync failed (HTTP 500): {"error":"bad bearer [token]"}');
   });
 
   it('H5: hypersyncFirstEmitters keeps the first block of each emitter across pages and asks only for address and block', async () => {
@@ -119,6 +146,11 @@ describe('HyperSync logs (docs/adr/0009)', () => {
       '0x00000000000000000000000000000000000000aa': 3n,
       '0x00000000000000000000000000000000000000bb': 4n,
       '0x00000000000000000000000000000000000000cc': 12n,
+    });
+    expect(Object.fromEntries(r.counts)).toEqual({
+      '0x00000000000000000000000000000000000000aa': 2,
+      '0x00000000000000000000000000000000000000bb': 1,
+      '0x00000000000000000000000000000000000000cc': 1,
     });
     expect([r.logs, r.reachedTo, pages]).toEqual([4, 20n, [2, 3]]);
     expect(s.sent[0]!.body.field_selection).toEqual({ log: ['block_number', 'address'] });

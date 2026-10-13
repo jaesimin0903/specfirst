@@ -521,19 +521,21 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           const seeded = await seedKnownVaults(ctx.projectDir, store);
           for (const s of seeded.skipped) console.error(pc.yellow(`specfirst watch: warning: skipped ${s}`));
           if (fromBlock !== null) store.state.cursor = fromBlock.toString();
-          // HyperSync first, the subject RPC when it fails: said once when it starts, then at most every 10 minutes while it lasts.
-          let warnedAt = 0;
+          // HyperSync first (10 s a request), the subject RPC when it fails; each message at most every 10 minutes, so a flapping HyperSync cannot flood the log.
+          const QUIET_MS = 10 * 60_000;
+          let warnedAt = -QUIET_MS;
+          let recoveredAt = -QUIET_MS;
           const getLogs = hypersync
-            ? logsWithFallback(hypersyncLogsReader(hypersync), batchedLogsReader(urls), {
-                onFallback: (err, f, t) => {
-                  const now = Date.now();
-                  if (warnedAt !== 0 && now - warnedAt < 10 * 60_000) return;
-                  warnedAt = now;
-                  console.error(pc.yellow(`specfirst watch: warning: HyperSync did not serve blocks ${f} to ${t} (${errorText(err)}); reading logs from the subject RPC`));
-                  emitEvent(ctx, { type: 'watch-logs', via: 'rpc', fromBlock: f.toString(), toBlock: t.toString(), error: errorText(err) });
+            ? logsWithFallback(hypersyncLogsReader({ ...hypersync, timeoutMs: 10_000 }), batchedLogsReader(urls), {
+                onFallback: (err, f, t, cooldownMs) => {
+                  if (Date.now() - warnedAt < QUIET_MS) return;
+                  warnedAt = Date.now();
+                  console.error(pc.yellow(`specfirst watch: warning: HyperSync did not serve blocks ${f} to ${t} (${errorText(err)}); logs from the subject RPC for ${Math.round(cooldownMs / 1000)}s`));
+                  emitEvent(ctx, { type: 'watch-logs', via: 'rpc', fromBlock: f.toString(), toBlock: t.toString(), cooldownSec: Math.round(cooldownMs / 1000), error: errorText(err) });
                 },
                 onRecover: () => {
-                  warnedAt = 0;
+                  if (Date.now() - recoveredAt < QUIET_MS) return;
+                  recoveredAt = Date.now();
                   console.error(pc.dim('specfirst watch: HyperSync serves the logs again'));
                   emitEvent(ctx, { type: 'watch-logs', via: 'hypersync' });
                 },
@@ -645,7 +647,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             type: 'watch-start',
             subjectChainId,
             subjectRpcs: urls.length,
-            logs: hypersync ? { via: 'hypersync', url: hypersync.url } : { via: 'rpc' },
+            logs: hypersync ? { via: 'hypersync', host: rpcHost(hypersync.url) } : { via: 'rpc' },
             sources: sources.map((s) => s.name),
             sourcesFrom,
             known,
@@ -757,7 +759,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
     .description(
       'Find vaults the watcher has never seen in the history of --subject-chain, read from Envio HyperSync (ADR 0009): the first ERC-4626 Deposit of every emitter and the vaults of the factory sources, from --from-block (default 0) to --to-block (default the head less --block-lag), less the vaults in certs/checks and vaults.json, prechecked over the subject RPC. --check checks each one as the watcher does and keeps the report in certs/checks, where the watcher takes it in as a known vault when it next starts. Takes no key and attests nothing.',
     )
-    .option('--check', 'check every new vault that passes the precheck, one at a time, oldest first deposit first, and keep the reports in certs/checks')
+    .option('--check', 'check every new vault that passes the precheck, one at a time, the most Deposits first, and keep the reports in certs/checks')
     .option('--max-checks <n>', 'check at most this many')
     .option('--out <file>', 'write the new vaults as JSON')
     .action(async (o: { check?: boolean; maxChecks?: string; out?: string }, command: Command) => {
@@ -784,7 +786,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         if (to > at) throw new ConfigError(`--to-block ${to} is above the head less --block-lag, ${at}`);
         printLine(ctx, stage('discover', `chain ${subjectChainId}  blocks ${from} to ${to}  Envio HyperSync ${rpcHost(hs.url)}`));
 
-        const found = new Map<string, { firstBlock: bigint; via: 'deposit' | 'factory' }>();
+        const found = new Map<string, { firstBlock: bigint; via: 'deposit' | 'factory'; deposits: number }>();
         let depositLogs = 0;
         if (deposit) {
           let printedAt = 0;
@@ -795,7 +797,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           });
           if (r.reachedTo < to) throw new StageError(WATCH_FAILED_EXIT_CODE, `HyperSync's archive ends at block ${r.reachedTo}, below --to-block ${to}`);
           depositLogs = r.logs;
-          for (const [a, b] of r.first) found.set(a, { firstBlock: b, via: 'deposit' });
+          for (const [a, b] of r.first) found.set(a, { firstBlock: b, via: 'deposit', deposits: r.counts.get(a) ?? 0 });
         }
         let factoryLogs = 0;
         if (factories.length) {
@@ -806,7 +808,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
             if (!s) continue;
             const a = s.subject.toLowerCase();
             const seen = found.get(a);
-            if (!seen || s.block < seen.firstBlock) found.set(a, { firstBlock: s.block, via: 'factory' });
+            if (!seen || s.block < seen.firstBlock) found.set(a, { firstBlock: s.block, via: 'factory', deposits: seen?.deposits ?? 0 });
           }
         }
         const known = await knownVaultsOf(ctx.projectDir, subjectChainId);
@@ -822,7 +824,10 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           address: Address;
           firstBlock: bigint;
           via: 'deposit' | 'factory';
+          deposits: number;
           erc4626: boolean;
+          /** The precheck could not be read (a node or transport failure, three times): unknown, not "not a vault". */
+          precheckError?: string;
           reason?: string;
           report?: string;
           summary?: { pass: number; fail: number; inconclusive: number; notApplicable: number };
@@ -841,19 +846,22 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
                   const pre = await precheckErc4626(client, v.address, at);
                   v.erc4626 = pre.ok;
                   if (!pre.ok) v.reason = pre.reason;
-                  else delete v.reason;
+                  delete v.precheckError;
                   break;
                 } catch (err) {
-                  v.reason = `precheck failed: ${errorText(err)}`;
+                  v.precheckError = errorText(err);
                   if (attempt < 3) await sleep(2_000);
                 }
               }
             }
           }),
         );
-        const vaults = results.filter((v) => v.erc4626);
+        // The busiest first: a vault many deposits went into matters more than a test deployment.
+        const vaults = results.filter((v) => v.erc4626).sort((x, y) => y.deposits - x.deposits || (x.firstBlock < y.firstBlock ? -1 : x.firstBlock > y.firstBlock ? 1 : 0));
+        const unread = results.filter((v) => v.precheckError !== undefined);
         printLine(ctx, cont(`${pc.bold(String(vaults.length))} of the ${results.length} new addresses answer as ERC-4626 vaults at block ${at}`));
-        for (const v of vaults) printLine(ctx, cont(`${v.address}  first ${v.via === 'deposit' ? 'Deposit' : 'factory event'} at block ${v.firstBlock}`));
+        if (unread.length) console.error(pc.yellow(`specfirst watch discover: warning: ${unread.length} prechecks could not be read from the subject RPC (${unread[0]!.precheckError}); run discover again for them`));
+        for (const v of vaults) printLine(ctx, cont(`${v.address}  ${v.deposits} Deposits, the first ${v.via === 'deposit' ? 'Deposit' : 'a factory event'} at block ${v.firstBlock}`));
 
         if (o.check) {
           const todo = vaults.slice(0, maxChecks);
@@ -880,20 +888,21 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           }
         }
         const json = results.map((v) => ({ ...v, firstBlock: v.firstBlock.toString() }));
-        if (o.out) await writeFile(path.resolve(ctx.projectDir, o.out), `${JSON.stringify({ chainId: subjectChainId, fromBlock: from.toString(), toBlock: to.toString(), atBlock: at.toString(), hypersync: hs.url, vaults: json }, null, 2)}\n`);
+        if (o.out) await writeFile(path.resolve(ctx.projectDir, o.out), `${JSON.stringify({ chainId: subjectChainId, fromBlock: from.toString(), toBlock: to.toString(), atBlock: at.toString(), hypersync: rpcHost(hs.url), vaults: json }, null, 2)}\n`);
         emitEvent(ctx, {
           type: 'watch-discover',
           subjectChainId,
           fromBlock: from.toString(),
           toBlock: to.toString(),
           atBlock: at.toString(),
-          hypersync: hs.url,
+          hypersync: rpcHost(hs.url),
           depositLogs,
           factoryLogs,
           addresses: found.size,
           known: found.size - fresh.length,
           new: results.length,
           vaults: vaults.length,
+          precheckUnread: unread.length,
           checked: vaults.filter((v) => v.report).length,
           ...(o.out ? { out: o.out } : {}),
         });

@@ -86,29 +86,34 @@ async function query(
         signal: AbortSignal.timeout(o.timeoutMs ?? 30_000),
       });
     } catch (err) {
-      throw new HypersyncError(`HyperSync request failed: ${(err as Error).message}`);
+      throw new HypersyncError(redact(`HyperSync request failed: ${(err as Error).message}`, o.token));
     }
     if (!res.ok) {
-      const text = (await res.text().catch(() => '')).slice(0, 200);
-      const why = res.status === 401 || res.status === 403 ? 'refused the API token' : res.status === 429 ? 'rate limited the request' : 'failed';
-      throw new HypersyncError(`HyperSync ${why} (HTTP ${res.status})${text ? `: ${text}` : ''}`, res.status);
+      const refused = res.status === 401 || res.status === 403;
+      // A refusal's body may echo what was sent; it is not shown.
+      const text = refused ? '' : (await res.text().catch(() => '')).slice(0, 200);
+      const why = refused ? 'refused the API token' : res.status === 429 ? 'rate limited the request' : 'failed';
+      throw new HypersyncError(redact(`HyperSync ${why} (HTTP ${res.status})${text ? `: ${text}` : ''}`, o.token), res.status);
     }
     const body = (await res.json().catch(() => null)) as HypersyncAnswer | null;
     if (!body || !Array.isArray(body.data) || typeof body.next_block !== 'number') throw new HypersyncError('HyperSync answered without data or next_block');
     const next = BigInt(body.next_block);
+    // archive_height is the first block HyperSync does not have; nothing at or past it was read, whatever next_block says.
+    const archive = typeof body.archive_height === 'number' ? BigInt(body.archive_height) : null;
     onPage(
       body.data.flatMap((d) => d.logs ?? []),
       next,
     );
-    if (next <= cur) {
-      // No progress: the archive ends at or below cur (archive_height is the first block it does not have).
-      const archive = typeof body.archive_height === 'number' ? BigInt(body.archive_height) : null;
-      if (archive !== null && archive <= cur) return { reachedTo: cur - 1n };
-      throw new HypersyncError(`HyperSync made no progress at block ${cur}`);
-    }
+    if (archive !== null && archive < end && next >= archive) return { reachedTo: (archive > cur ? archive : cur) - 1n };
+    if (next <= cur) throw new HypersyncError(`HyperSync made no progress at block ${cur}`);
     cur = next;
   }
   return { reachedTo: toBlock };
+}
+
+/** The token taken out of a message; one too short to tell from ordinary words is left (an Envio token is a UUID). */
+function redact(text: string, token: string): string {
+  return token.length >= 8 ? text.split(token).join('[token]') : text;
 }
 
 function signalLogOf(l: HypersyncLog): SignalLog {
@@ -140,9 +145,9 @@ export function hypersyncLogsReader(o: HypersyncOptions): (fromBlock: bigint, to
 }
 
 /**
- * The first block at which each address emitted a log with this topic0 in [fromBlock, toBlock], reading only the
- * address and block number of each log and folding page by page (a Deposit backfill over a whole chain is
- * millions of logs). Lowercase addresses. `onPage` sees the progress.
+ * The first block at which each address emitted a log with this topic0 in [fromBlock, toBlock], and how many such
+ * logs it emitted, reading only the address and block number of each log and folding page by page (a Deposit
+ * backfill over a whole chain is millions of logs). Lowercase addresses. `onPage` sees the progress.
  */
 export async function hypersyncFirstEmitters(
   o: HypersyncOptions,
@@ -150,8 +155,9 @@ export async function hypersyncFirstEmitters(
   toBlock: bigint,
   topic0: Hex,
   onPage?: (p: { logs: number; nextBlock: bigint; emitters: number }) => void,
-): Promise<{ first: Map<string, bigint>; logs: number; reachedTo: bigint }> {
+): Promise<{ first: Map<string, bigint>; counts: Map<string, number>; logs: number; reachedTo: bigint }> {
   const first = new Map<string, bigint>();
+  const counts = new Map<string, number>();
   let logs = 0;
   const r = await query({ ...o, maxPages: o.maxPages ?? 100_000 }, fromBlock, toBlock, [topic0], ['block_number', 'address'], (page, nextBlock) => {
     for (const l of page) {
@@ -160,46 +166,56 @@ export async function hypersyncFirstEmitters(
       const b = BigInt(l.block_number);
       const seen = first.get(a);
       if (seen === undefined || b < seen) first.set(a, b);
+      counts.set(a, (counts.get(a) ?? 0) + 1);
     }
     logs += page.length;
     onPage?.({ logs, nextBlock, emitters: first.size });
   });
-  return { first, logs, reachedTo: r.reachedTo };
+  return { first, counts, logs, reachedTo: r.reachedTo };
 }
 
 export interface LogsWithFallbackOptions {
-  /** HyperSync behind toBlock by at most this many blocks caps the read (it catches up within seconds); further behind goes to the RPC. Default 600. */
-  maxBehindBlocks?: bigint;
-  /** A read went to the RPC, and why. */
-  onFallback?: (err: unknown, fromBlock: bigint, toBlock: bigint) => void;
-  /** HyperSync served a read again after one went to the RPC. */
+  /** After a read goes to the RPC, HyperSync is not asked for this long; it doubles while HyperSync keeps failing. Default 60 s. */
+  cooldownMs?: number;
+  /** The longest cooldown. Default 10 minutes. */
+  maxCooldownMs?: number;
+  /** A read went to the RPC, and why; `cooldownMs` is how long HyperSync is now left alone. */
+  onFallback?: (err: unknown, fromBlock: bigint, toBlock: bigint, cooldownMs: number) => void;
+  /** HyperSync served a read again after reads went to the RPC. */
   onRecover?: () => void;
+  now?: () => number;
 }
 
 /**
  * HyperSync first, the subject RPC reader when HyperSync fails: a refused token, a rate limit, an outage, a
- * malformed answer, or an archive more than maxBehindBlocks behind. The RPC's own errors (a range error, a node
- * behind) are the watcher's to handle, as without HyperSync.
+ * malformed answer, or an archive that ends below the range (a stuck indexer must not hold the watcher back,
+ * and the RPC has every block). After a failure the reads go straight to the RPC for a cooldown, so a HyperSync
+ * that hangs costs one timeout, not one per topic and window. The RPC's own errors (a range error, a node behind)
+ * are the watcher's to handle, as without HyperSync.
  */
 export function logsWithFallback(
   primary: (fromBlock: bigint, toBlock: bigint, topics: Hex[]) => Promise<SignalLog[]>,
   rpc: (fromBlock: bigint, toBlock: bigint, topics: Hex[]) => Promise<SignalLog[]>,
   o: LogsWithFallbackOptions = {},
 ): (fromBlock: bigint, toBlock: bigint, topics: Hex[]) => Promise<SignalLog[]> {
-  const maxBehind = o.maxBehindBlocks ?? 600n;
-  let onRpc = false;
+  const now = o.now ?? Date.now;
+  const base = o.cooldownMs ?? 60_000;
+  const max = o.maxCooldownMs ?? 10 * 60_000;
+  let cooldown = 0;
+  let skipUntil = 0;
   return async (fromBlock, toBlock, topics) => {
+    if (now() < skipUntil) return rpc(fromBlock, toBlock, topics);
     try {
       const logs = await primary(fromBlock, toBlock, topics);
-      if (onRpc) {
-        onRpc = false;
+      if (cooldown > 0) {
+        cooldown = 0;
         o.onRecover?.();
       }
       return logs;
     } catch (err) {
-      if (err instanceof LogsNodeBehindError && toBlock - err.head <= maxBehind) throw err;
-      onRpc = true;
-      o.onFallback?.(err, fromBlock, toBlock);
+      cooldown = cooldown === 0 ? base : Math.min(max, cooldown * 2);
+      skipUntil = now() + cooldown;
+      o.onFallback?.(err, fromBlock, toBlock, cooldown);
       return rpc(fromBlock, toBlock, topics);
     }
   };
