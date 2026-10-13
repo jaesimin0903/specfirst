@@ -595,6 +595,7 @@ export {
   HypersyncError,
   hypersyncUrlOf,
   hypersyncLogsReader,
+  hypersyncWindowReader,
   hypersyncFirstEmitters,
   logsWithFallback,
   type HypersyncOptions,

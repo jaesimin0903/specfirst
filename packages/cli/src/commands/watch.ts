@@ -24,6 +24,8 @@ import {
   hypersyncFirstEmitters,
   hypersyncLogsReader,
   hypersyncUrlOf,
+  hypersyncWindowReader,
+  signalTopics,
   logsWithFallback,
   outcomeOfReport,
   precheckErc4626,
@@ -522,12 +524,12 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           const seeded = await seedKnownVaults(ctx.projectDir, store);
           for (const s of seeded.skipped) console.error(pc.yellow(`specfirst watch: warning: skipped ${s}`));
           if (fromBlock !== null) store.state.cursor = fromBlock.toString();
-          // HyperSync first (10 s a request), the subject RPC when it fails; each message at most every 10 minutes, so a flapping HyperSync cannot flood the log.
+          // HyperSync first (one request a window, 10 s), the subject RPC when it fails; each message at most every 10 minutes, so a flapping HyperSync cannot flood the log.
           const QUIET_MS = 10 * 60_000;
           let warnedAt = -QUIET_MS;
           let recoveredAt = -QUIET_MS;
           const getLogs = hypersync
-            ? logsWithFallback(hypersyncLogsReader({ ...hypersync, timeoutMs: 10_000 }), batchedLogsReader(urls), {
+            ? logsWithFallback(hypersyncWindowReader({ ...hypersync, timeoutMs: 10_000 }, signalTopics(sources)), batchedLogsReader(urls), {
                 onFallback: (err, f, t, cooldownMs) => {
                   if (Date.now() - warnedAt < QUIET_MS) return;
                   warnedAt = Date.now();

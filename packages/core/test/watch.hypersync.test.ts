@@ -1,6 +1,6 @@
 import type { Hex } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { hypersyncFirstEmitters, HypersyncError, hypersyncLogsReader, logsWithFallback, LogsNodeBehindError, type SignalLog } from '../src/index.js';
+import { hypersyncFirstEmitters, HypersyncError, hypersyncLogsReader, hypersyncWindowReader, logsWithFallback, LogsNodeBehindError, type SignalLog } from '../src/index.js';
 
 const T0 = `0x${'dc'.repeat(32)}` as Hex;
 const T1 = `0x${'bc'.repeat(32)}` as Hex;
@@ -140,6 +140,24 @@ describe('HyperSync logs (docs/adr/0009)', () => {
     const once = stubFetch([{ status: 429 }]);
     await expect(hypersyncLogsReader({ url: 'https://143.hypersync.xyz', token: 'tok', fetch: once.fetch })(1n, 2n, [T0])).rejects.toMatchObject({ status: 429 });
     expect(once.sent).toHaveLength(1);
+  });
+
+  it('H8: the watcher reader asks HyperSync once per window for every topic, serves each topic from it, and asks again after a failure', async () => {
+    const s = stubFetch([
+      { status: 502 },
+      { body: { data: [{ logs: [log(101, 0, undefined, T1), log(100, 2)] }], next_block: 111, archive_height: 500 } },
+      { body: { data: [{ logs: [] }], next_block: 121, archive_height: 500 } },
+    ]);
+    const read = hypersyncWindowReader({ url: 'https://143.hypersync.xyz', token: 'tok', fetch: s.fetch }, [T0, T1]);
+    await expect(read(100n, 110n, [T0])).rejects.toMatchObject({ status: 502 });
+    expect((await read(100n, 110n, [T0])).map((l) => l.logIndex)).toEqual([2]);
+    expect((await read(100n, 110n, [T1])).map((l) => l.blockNumber)).toEqual([101n]);
+    expect(await read(111n, 120n, [T0])).toEqual([]);
+    expect(s.sent.map((x) => [x.body.from_block, x.body.logs[0]!.topics])).toEqual([
+      [100, [[T0, T1]]],
+      [100, [[T0, T1]]],
+      [111, [[T0, T1]]],
+    ]);
   });
 
   it('H6: an archive that ends inside the range stops the read there even when next_block says more, and a refusal never shows the token', async () => {

@@ -57,7 +57,8 @@ export interface HypersyncOptions {
   maxPages?: number;
   /**
    * HTTP 429s one read waits out before it gives up: Retry-After when HyperSync sends one, else 5 s doubling to a
-   * minute. Default 0, for the watcher, which reads from the RPC instead; a whole-chain read waits.
+   * minute, from 5 s again after an answer. Default 0, for the watcher, which reads from the RPC instead; a
+   * whole-chain read waits (200 by default).
    */
   rateLimitRetries?: number;
   fetch?: typeof fetch;
@@ -82,6 +83,7 @@ async function query(
   const end = toBlock + 1n;
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let waits = 0;
+  let inARow = 0;
   let cur = fromBlock;
   for (let page = 0; cur < end; page++) {
     if (page >= maxPages) throw new HypersyncError(`HyperSync did not finish blocks ${fromBlock} to ${toBlock} in ${maxPages} requests`);
@@ -98,11 +100,13 @@ async function query(
     }
     if (res.status === 429 && waits < (o.rateLimitRetries ?? 0)) {
       const after = Number(res.headers.get('retry-after'));
-      await sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 300) * 1000 : Math.min(60_000, 5_000 * 2 ** waits));
+      await sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 300) * 1000 : Math.min(60_000, 5_000 * 2 ** inARow));
       waits++;
+      inARow++;
       page--;
       continue;
     }
+    inARow = 0;
     if (!res.ok) {
       const refused = res.status === 401 || res.status === 403;
       // A refusal's body may echo what was sent; it is not shown.
@@ -160,6 +164,34 @@ export function hypersyncLogsReader(o: HypersyncOptions): (fromBlock: bigint, to
 }
 
 /**
+ * hypersyncLogsReader for the watcher, which asks for one topic at a time (readLogWindows): the first ask of a
+ * window fetches every topic in `allTopics` in one request, and the other topics of that window are served from
+ * it, so a window costs one request instead of one per topic. A free Envio token is rate limited by use, and the
+ * watcher shares it with discover. Topics outside `allTopics` are read on their own.
+ */
+export function hypersyncWindowReader(o: HypersyncOptions, allTopics: readonly Hex[]): (fromBlock: bigint, toBlock: bigint, topics: Hex[]) => Promise<SignalLog[]> {
+  const read = hypersyncLogsReader(o);
+  const all = new Set(allTopics.map((t) => t.toLowerCase()));
+  let last: { key: string; logs: Promise<SignalLog[]> } | null = null;
+  return async (fromBlock, toBlock, topics) => {
+    if (!topics.every((t) => all.has(t.toLowerCase()))) return read(fromBlock, toBlock, topics);
+    const key = `${fromBlock}-${toBlock}`;
+    let entry = last;
+    if (entry?.key !== key) {
+      const logs = read(fromBlock, toBlock, [...allTopics]);
+      const fresh = { key, logs };
+      entry = last = fresh;
+      // A failed fetch is not kept: the next ask of the window tries again.
+      logs.catch(() => {
+        if (last === fresh) last = null;
+      });
+    }
+    const want = new Set(topics.map((t) => t.toLowerCase()));
+    return (await entry.logs).filter((l) => want.has((l.topics[0] ?? '').toLowerCase()));
+  };
+}
+
+/**
  * The first block at which each address emitted a log with this topic0 in [fromBlock, toBlock], and how many such
  * logs it emitted, reading only the address and block number of each log and folding page by page (a Deposit
  * backfill over a whole chain is millions of logs). Lowercase addresses. `onPage` sees the progress.
@@ -174,7 +206,7 @@ export async function hypersyncFirstEmitters(
   const first = new Map<string, bigint>();
   const counts = new Map<string, number>();
   let logs = 0;
-  const r = await query({ ...o, maxPages: o.maxPages ?? 100_000, rateLimitRetries: o.rateLimitRetries ?? 30 }, fromBlock, toBlock, [topic0], ['block_number', 'address'], (page, nextBlock) => {
+  const r = await query({ ...o, maxPages: o.maxPages ?? 100_000, rateLimitRetries: o.rateLimitRetries ?? 200 }, fromBlock, toBlock, [topic0], ['block_number', 'address'], (page, nextBlock) => {
     for (const l of page) {
       if (!l.address || typeof l.block_number !== 'number') continue;
       const a = l.address.toLowerCase();
