@@ -10,6 +10,7 @@ import {
   deployDemoVault,
   depositIntoDemoVault,
   dropPercentText,
+  fingerprintOf,
   LEGACY_DEMO_FACTORY_ADDRESS,
   setDemoVaultBroken,
   setDemoVaultLoss,
@@ -761,8 +762,9 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
     )
     .option('--check', 'check every new vault that passes the precheck, one at a time, the most Deposits first, and keep the reports in certs/checks')
     .option('--max-checks <n>', 'check at most this many')
+    .option('--per-family <n>', 'check at most this many vaults of one implementation (the fingerprint the watcher uses: code hash, EIP-1967 implementation and beacon), the busiest of each')
     .option('--out <file>', 'write the new vaults as JSON')
-    .action(async (o: { check?: boolean; maxChecks?: string; out?: string }, command: Command) => {
+    .action(async (o: { check?: boolean; maxChecks?: string; perFamily?: string; out?: string }, command: Command) => {
       const ctx = contextFrom(command);
       const all = command.optsWithGlobals() as WatchOptions;
       await runStage(ctx, 'watch discover', WATCH_FAILED_EXIT_CODE, async () => {
@@ -772,6 +774,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         const runs = Number(positive(all.runs, '--runs', 100_000n));
         const checkTimeoutSec = Number(positive(all.checkTimeout, '--check-timeout', 86_400n));
         const maxChecks = o.maxChecks !== undefined ? Number(nonNegative(o.maxChecks, '--max-checks', 1_000_000n)) : Number.POSITIVE_INFINITY;
+        const perFamily = o.perFamily !== undefined ? Number(positive(o.perFamily, '--per-family', 1_000_000n)) : Number.POSITIVE_INFINITY;
         const base = reportBase(all.reportBaseUrl ?? process.env[REPORT_BASE_URL_ENV] ?? DEFAULT_REPORT_BASE_URL);
         const { sources } = await loadSources(all.sources, subjectChainId, ctx.projectDir);
         const deposit = sources.find((s) => s.signal === 'deposit');
@@ -826,6 +829,8 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           via: 'deposit' | 'factory';
           deposits: number;
           erc4626: boolean;
+          /** The watcher's fingerprint at the precheck block: one implementation, whatever proxy fronts it. */
+          family?: string;
           /** The precheck could not be read (a node or transport failure, three times): unknown, not "not a vault". */
           precheckError?: string;
           reason?: string;
@@ -846,6 +851,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
                   const pre = await precheckErc4626(client, v.address, at);
                   v.erc4626 = pre.ok;
                   if (!pre.ok) v.reason = pre.reason;
+                  else v.family = await fingerprintOf(client, v.address, at);
                   delete v.precheckError;
                   break;
                 } catch (err) {
@@ -859,12 +865,23 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         // The busiest first: a vault many deposits went into matters more than a test deployment.
         const vaults = results.filter((v) => v.erc4626).sort((x, y) => y.deposits - x.deposits || (x.firstBlock < y.firstBlock ? -1 : x.firstBlock > y.firstBlock ? 1 : 0));
         const unread = results.filter((v) => v.precheckError !== undefined);
-        printLine(ctx, cont(`${pc.bold(String(vaults.length))} of the ${results.length} new addresses answer as ERC-4626 vaults at block ${at}`));
+        const families = new Map<string, number>();
+        for (const v of vaults) families.set(v.family ?? v.address, (families.get(v.family ?? v.address) ?? 0) + 1);
+        printLine(ctx, cont(`${pc.bold(String(vaults.length))} of the ${results.length} new addresses answer as ERC-4626 vaults at block ${at}, ${families.size} implementations`));
         if (unread.length) console.error(pc.yellow(`specfirst watch discover: warning: ${unread.length} prechecks could not be read from the subject RPC (${unread[0]!.precheckError}); run discover again for them`));
         for (const v of vaults) printLine(ctx, cont(`${v.address}  ${v.deposits} Deposits, the first ${v.via === 'deposit' ? 'Deposit' : 'a factory event'} at block ${v.firstBlock}`));
 
         if (o.check) {
-          const todo = vaults.slice(0, maxChecks);
+          const taken = new Map<string, number>();
+          const todo = vaults
+            .filter((v) => {
+              const k = v.family ?? v.address;
+              const n = taken.get(k) ?? 0;
+              if (n >= perFamily) return false;
+              taken.set(k, n + 1);
+              return true;
+            })
+            .slice(0, maxChecks);
           for (const [i, v] of todo.entries()) {
             try {
               const report = await runSubjectCheck(
@@ -902,6 +919,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
           known: found.size - fresh.length,
           new: results.length,
           vaults: vaults.length,
+          implementations: families.size,
           precheckUnread: unread.length,
           checked: vaults.filter((v) => v.report).length,
           ...(o.out ? { out: o.out } : {}),
