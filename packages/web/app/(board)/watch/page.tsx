@@ -26,6 +26,13 @@ export default async function WatchPage({ searchParams }: { searchParams: Promis
           The watcher reads {chainName(chainId)}. When a factory creates an ERC-4626 vault, an unknown address takes its first deposit or a proxy is upgraded,
           it checks that vault against <strong>30 properties</strong> and attests the result on Monad testnet. Nobody pastes an address or pays for that. This
           page reads its files every few seconds.
+          {chainId === 143 && (
+            <>
+              {' '}
+              It reads the chain&apos;s logs from <a href="https://envio.dev">Envio HyperSync</a>, which also let it go back over the whole history of
+              Monad mainnet for vaults funded before it started. The checks themselves read the chain&apos;s own RPC.
+            </>
+          )}
         </p>
         <p className="sw-headline">
           <b>{f.notOnList.toLocaleString('en-US')}</b>

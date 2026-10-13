@@ -125,6 +125,23 @@ describe('HyperSync logs (docs/adr/0009)', () => {
     ]);
   });
 
+  it('H7: a whole-chain read waits out HTTP 429s and carries on from the same block; the watcher reader does not wait', async () => {
+    const s = stubFetch([
+      { body: { data: [{ logs: [{ block_number: 4, address: '0x00000000000000000000000000000000000000bb' }] }], next_block: 10, archive_height: 99 } },
+      { status: 429 },
+      { status: 429 },
+      { body: { data: [{ logs: [{ block_number: 12, address: '0x00000000000000000000000000000000000000cc' }] }], next_block: 21, archive_height: 99 } },
+    ]);
+    const waits: number[] = [];
+    const r = await hypersyncFirstEmitters({ url: 'https://143.hypersync.xyz', token: 'tok', fetch: s.fetch, sleep: async (ms) => void waits.push(ms) }, 0n, 20n, T0);
+    expect(r.first.size).toBe(2);
+    expect(waits).toEqual([5_000, 10_000]);
+    expect(s.sent.map((x) => x.body.from_block)).toEqual([0, 10, 10, 10]);
+    const once = stubFetch([{ status: 429 }]);
+    await expect(hypersyncLogsReader({ url: 'https://143.hypersync.xyz', token: 'tok', fetch: once.fetch })(1n, 2n, [T0])).rejects.toMatchObject({ status: 429 });
+    expect(once.sent).toHaveLength(1);
+  });
+
   it('H6: an archive that ends inside the range stops the read there even when next_block says more, and a refusal never shows the token', async () => {
     const s = stubFetch([{ body: { data: [{ logs: [log(100, 0)] }], next_block: 201, archive_height: 150 } }]);
     const read = hypersyncLogsReader({ url: 'https://143.hypersync.xyz', token: 'tok', fetch: s.fetch });

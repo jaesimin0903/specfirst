@@ -801,7 +801,7 @@ export function registerWatchCommand(program: Command, deps: WatchCommandDeps = 
         }
         let factoryLogs = 0;
         if (factories.length) {
-          const logs = await hypersyncLogsReader({ ...hs, maxPages: 100_000 })(from, to, [...new Set(factories.map((s) => s.topic0))]);
+          const logs = await hypersyncLogsReader({ ...hs, maxPages: 100_000, rateLimitRetries: 30 })(from, to, [...new Set(factories.map((s) => s.topic0))]);
           factoryLogs = logs.length;
           for (const l of logs) {
             const s = decodeSignal(l, factories);

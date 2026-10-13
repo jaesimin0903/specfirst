@@ -55,7 +55,13 @@ export interface HypersyncOptions {
   timeoutMs?: number;
   /** Requests of one read before it gives up; default 1,000. */
   maxPages?: number;
+  /**
+   * HTTP 429s one read waits out before it gives up: Retry-After when HyperSync sends one, else 5 s doubling to a
+   * minute. Default 0, for the watcher, which reads from the RPC instead; a whole-chain read waits.
+   */
+  rateLimitRetries?: number;
   fetch?: typeof fetch;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -74,6 +80,8 @@ async function query(
   const doFetch = o.fetch ?? fetch;
   const maxPages = o.maxPages ?? 1_000;
   const end = toBlock + 1n;
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let waits = 0;
   let cur = fromBlock;
   for (let page = 0; cur < end; page++) {
     if (page >= maxPages) throw new HypersyncError(`HyperSync did not finish blocks ${fromBlock} to ${toBlock} in ${maxPages} requests`);
@@ -87,6 +95,13 @@ async function query(
       });
     } catch (err) {
       throw new HypersyncError(redact(`HyperSync request failed: ${(err as Error).message}`, o.token));
+    }
+    if (res.status === 429 && waits < (o.rateLimitRetries ?? 0)) {
+      const after = Number(res.headers.get('retry-after'));
+      await sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 300) * 1000 : Math.min(60_000, 5_000 * 2 ** waits));
+      waits++;
+      page--;
+      continue;
     }
     if (!res.ok) {
       const refused = res.status === 401 || res.status === 403;
@@ -159,7 +174,7 @@ export async function hypersyncFirstEmitters(
   const first = new Map<string, bigint>();
   const counts = new Map<string, number>();
   let logs = 0;
-  const r = await query({ ...o, maxPages: o.maxPages ?? 100_000 }, fromBlock, toBlock, [topic0], ['block_number', 'address'], (page, nextBlock) => {
+  const r = await query({ ...o, maxPages: o.maxPages ?? 100_000, rateLimitRetries: o.rateLimitRetries ?? 30 }, fromBlock, toBlock, [topic0], ['block_number', 'address'], (page, nextBlock) => {
     for (const l of page) {
       if (!l.address || typeof l.block_number !== 'number') continue;
       const a = l.address.toLowerCase();
