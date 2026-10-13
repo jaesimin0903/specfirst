@@ -2234,6 +2234,8 @@ export interface LiveWatchEffectsInput extends SubjectCheckInput {
   subjectClient: StandardCheckClient & SubjectClient & Pick<PublicClient, 'request' | 'getStorageAt'> & Partial<Pick<PublicClient, 'multicall'>>;
   /** Every subject RPC, primary first, for the getLogs reader; default [subjectRpcUrl]. */
   subjectRpcUrls?: readonly string[];
+  /** Reads the logs instead of the batched RPC reader, e.g. HyperSync with that reader behind it (logsWithFallback). */
+  getLogs?: WatchEffects['getLogs'];
   /** reportURI = <reportBaseUrl>/<chainId>/<address>/<block>-<hash8>.json. No trailing slash. */
   reportBaseUrl: string;
   /** Registry on the attest chain, read for every decision; null when there is none (only with attest false). */
@@ -2260,7 +2262,7 @@ export interface LiveWatchEffectsInput extends SubjectCheckInput {
  */
 export function liveWatchEffects(i: LiveWatchEffectsInput): WatchEffects {
   const registry = i.registry;
-  const getLogs = batchedLogsReader(i.subjectRpcUrls ?? [i.subjectRpcUrl]);
+  const getLogs = i.getLogs ?? batchedLogsReader(i.subjectRpcUrls ?? [i.subjectRpcUrl]);
   const failures = path.join(i.projectDir, WATCH_DIR, String(i.subjectChainId), 'forge-failures');
   // Whether the subject chain has Multicall3, read once; a read that failed is tried again at the next share value read.
   let multicall: Promise<Address | null> | null = null;

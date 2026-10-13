@@ -79,6 +79,14 @@ sudo stat -c '%a %u %n' /etc/specfirst/specfirst.env     # 600 1000
 
 `sudo` here must not ask for a password (cloud images set it up that way); otherwise log in once and paste the lines into `sudo nano` with `umask 077`. Today the keeper signs with `REQUESTER_PRIVATE_KEY`, the key `desk request` and `subs subscribe` also pay from. A key of its own for the keeper keeps those apart: make one, fund it with testnet MON, add `KEEPER_PRIVATE_KEY` to the Mac's `.env` and send the file again; the commands above then copy it in place of the requester key.
 
+The mainnet watcher reads its logs from Envio HyperSync (ADR 0009) with `ENVIO_API_TOKEN`, a twelfth line of the same file. It is not on the Mac's `.env`, so it is appended on its own from a file that holds only the token, and never printed:
+
+```sh
+ssh <user>@<server> 'sudo sh -c "umask 077; cat >> /etc/specfirst/specfirst.env"' < <(printf 'ENVIO_API_TOKEN=%s\n' "$(cat .specfirst/envio.key)")
+```
+
+Without it `watch-143` refuses to start, as `--hypersync` asks; take `--hypersync` out of its command in `deploy/docker-compose.yml` to read logs from the RPCs alone.
+
 The compose settings, none of them a key. The three addresses the web shows are appended from the key file by name, without printing the rest of it:
 
 ```

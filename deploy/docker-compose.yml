@@ -107,7 +107,8 @@ services:
         aliases: ["${DOMAIN}"]
     logging: *logging
 
-  # Monad mainnet, the built-in sources. Attests on testnet with WATCH_ISSUER_PRIVATE_KEY.
+  # Monad mainnet, the built-in sources. Attests on testnet with WATCH_ISSUER_PRIVATE_KEY. Logs from Envio HyperSync
+  # (ENVIO_API_TOKEN in the secret file, ADR 0009), from the subject RPC whenever HyperSync fails.
   watch-143:
     <<: *cli
     command:
@@ -116,6 +117,7 @@ services:
       - --subject-chain=143
       - --subject-rpc=https://rpc1.monad.xyz
       - --subject-rpc=https://rpc.monad.xyz
+      - --hypersync
       - --webhook-local-origin=${PUBLIC_ORIGIN:-https://${DOMAIN}}
     networks:
       specfirst:

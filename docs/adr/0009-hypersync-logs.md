@@ -1,0 +1,22 @@
+# ADR 0009: The watcher reads logs from Envio HyperSync
+
+Date: 2026-10-13. Status: accepted.
+
+## Problem
+The watcher finds vaults from logs (ADR 0006): the creation events of five factories, the first `Deposit` of any address, and proxy upgrades. It reads them with `eth_getLogs` from the public Monad RPCs, and those cap the block range of one call. rpc.monad.xyz takes 100 blocks. rpc1.monad.xyz took 10,000 when the watcher was built; on October 13 it refused 1,000 with "block range too large". At 0.4 seconds a block that is fine for following the head and hopeless for the past: Monad mainnet is past block 112,900,000.
+
+The past matters. The mainnet watcher started following the chain on October 6, at block 110,390,101. Every vault funded before that is on the board only if it was on the hand-made list of 285 (Morpho, Euler, Curvance, Neverland, DefiLlama and protocol docs). The 174 vaults the watcher found in its first days, none of them on that list, say the list was far from complete.
+
+## Decision
+HyperSync, Envio's indexed archive of the chain, serves the logs. Its `/query` takes a topic filter over any block range and pages through the answer with `next_block`, so one read covers the whole chain.
+
+- `hypersyncLogsReader` (core, `watch/hypersync.ts`) is the watcher's `getLogs` over `POST https://143.hypersync.xyz/query`: the logs of an inclusive block range whose topic0 is one of the given topics, from any emitter, in block and log order, in the shape eth_getLogs returns. HyperSync's `to_block` is exclusive; the reader asks for toBlock + 1. An archive that ends below the range is a node behind (`LogsNodeBehindError` with the last block it has), which the watcher already handles by reading up to there.
+- `logsWithFallback` puts it in front of the existing batched RPC reader. A refused token, a rate limit, an outage, a malformed answer, or an archive more than 600 blocks behind sends that read to the RPC, as before; the CLI says so once and then at most every ten minutes. An archive a few blocks behind caps the read instead, since it catches up within seconds.
+- `specfirst watch --hypersync` turns it on, with the token in `ENVIO_API_TOKEN` and the URL `https://<subject chain id>.hypersync.xyz` unless `--hypersync-url` names another. Without the token the watcher refuses to start rather than quietly reading from the RPC. The mainnet watcher in `deploy/docker-compose.yml` runs with it; the testnet demo watcher does not need it.
+- `specfirst watch discover` reads the past: the first block at which every address emitted an ERC-4626 `Deposit` (only the address and block of each log are fetched, folded page by page), and the vaults of the factory sources, from `--from-block` (0) to `--to-block`. It drops the vaults the watcher knows (a report directory in `certs/checks/<chain>/` or an entry of `vaults.json`), prechecks the rest over the subject RPC as the watcher does (code, `asset()` and `totalAssets()` at one block), and with `--check` runs the same check the watcher runs, with the watcher's seed, keeping the report in `certs/checks`. The watcher takes such reports in as known vaults when it next starts (`seedKnownVaults`, the path the hand-made list came in by), and re-checks them on its sweep. Discover holds no key and attests nothing.
+
+## Checked
+Blocks 112,900,000 to 112,902,000 of Monad mainnet, the topics of `Deposit`, `Upgraded` and `BeaconUpgraded`: 158 logs from HyperSync and 158 from rpc1.monad.xyz in 100-block windows, identical in address, block, log index, transaction hash, topics and data. Five unit tests cover paging, the exclusive end, an archive behind, refusals, and the fallback.
+
+## Trust
+HyperSync is a third party between the chain and the watcher, so it is trusted for as little as possible. It only says where to look. Every precheck, check, fingerprint and share value reads state from the subject RPC at a fixed block, and a report names that block, so a result never rests on HyperSync data: a log it left out means a vault found later or not at all, and a log it made up means a real address checked at a real block for nothing. Reports and attestations do not change form, and anyone can still rerun a check without Envio. The token is a secret of the signing services' file, read only by the CLI, and logs print the host of the URL only.

@@ -590,6 +590,16 @@ export {
   DEFAULT_WINDOW_GROW_AFTER,
   type ReadLogWindowsInput,
 } from './watch/logs.js';
+export {
+  ENVIO_API_TOKEN_ENV,
+  HypersyncError,
+  hypersyncUrlOf,
+  hypersyncLogsReader,
+  hypersyncFirstEmitters,
+  logsWithFallback,
+  type HypersyncOptions,
+  type LogsWithFallbackOptions,
+} from './watch/hypersync.js';
 export { QUEUE_PRIORITY, priorityOf, enqueue, nextEntry, queueOrder, removeEntry, type QueueEntry } from './watch/queue.js';
 export {
   outcomeOfReport,
