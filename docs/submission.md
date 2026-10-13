@@ -25,7 +25,7 @@ The callers that rely on these answers are the ones that move money into vaults 
 
 ## What Specfirst does
 
-1. **Finds vaults by itself.** Nobody registers anything. The watcher reads Monad mainnet for vault creation events of five factories, Euler EVK, Morpho Vault V2, MetaMorpho 1.1, Euler Earn and Neverland, for the first `Deposit` of any address, which catches vaults deployed without a factory, and for proxy upgrades of vaults it already knows.
+1. **Finds vaults by itself.** Nobody registers anything. The watcher reads Monad mainnet for vault creation events of five factories, Euler EVK, Morpho Vault V2, MetaMorpho 1.1, Euler Earn and Neverland, for the first `Deposit` of any address, which catches vaults deployed without a factory, and for proxy upgrades of vaults it already knows. It reads these logs from Envio HyperSync, which also let it go back over the whole history of Monad mainnet for vaults funded before it started.
 2. **Checks each one against 30 properties.** 26 come from a16z/erc4626-tests, a public third-party suite, so the vault team does not write the test that grades it. 4 are Specfirst's own and ask whether `maxDeposit`, `maxMint`, `maxWithdraw` and `maxRedeem` are honored when called with exactly that amount. The check runs on a fork of the live state at a fixed block and takes a few seconds to about a minute.
 3. **Records the result on chain.** `CheckAttestationRegistry` on Monad testnet stores the report hash, the suite hash, the vault's code hash and the block. A contract reads it with one call, `isCompliant`. The board shows every vault with the sentence of EIP-4626 it contradicts and the concrete call that shows it.
 4. **Alerts when a vault gets worse.** A subscription costs 0.05 MON a day. Subscribers get a webhook and an inbox entry when a re-check changes the result, when an upgrade changes the code, and when the value of a share falls.
@@ -54,6 +54,10 @@ Each failure is labeled with its level in EIP-4626. A MUST failure contradicts a
 | tyYIELD `0xB464..1408` | watcher, first deposit | round trips favor the caller by a rounding sized amount | SHOULD |
 
 The watcher found and checked the last four with nobody asking, and attested three of them on chain. locked.aprMON has no attestation yet, because that day's budget for attesting failures of newly found vaults was already used. These are disagreements with sentences of the standard, each shown by a concrete call on a fork. None of them is a claim that funds are at risk, and we did not contact the teams.
+
+### The whole history of mainnet, October 13
+
+The watcher started on October 6 at block 110,390,101 and only saw vaults funded after that. On October 13 `specfirst watch discover` read Monad mainnet from block 0 to 112,977,036 through Envio HyperSync: 821,687 Deposit logs and 303 factory logs from 4,092 addresses. 3,293 of them were new to the watcher, and 3,266 of those answer as ERC-4626 vaults. Most are copies of each other: they come from 194 implementations, grouped by the watcher's fingerprint of code hash, EIP-1967 implementation and beacon. Discover checks the busiest vault of each implementation against the same 30 properties, one at a time, and the watcher takes each checked vault in.
 
 ### On testnet, end to end, October 7
 
@@ -106,8 +110,8 @@ These are the figures of October 12. The service loses money today, and we show 
 | AllocationGate | `0xEE966282544FF5e0429e754856197A13b8340C8A` |
 | DemoVaultFactory | `0xE1FC8fa26Cb7496A68DD4e0ba896Ed8CAE2238FB` |
 
-- **Tests.** forge 195, core 569, cli 115, web 337, mcp 119, all passing. `scripts/check-chars.sh` runs with them.
-- **Decisions.** `docs/adr/` records each design decision and what changed after review: third-party properties in 0003, the registry in 0004, the desk in 0005, the watcher and subscriptions in 0006, the gate in 0007, the MCP server in 0008.
+- **Tests.** forge 195, core 577, cli 115, web 337, mcp 119, all passing. `scripts/check-chars.sh` runs with them.
+- **Decisions.** `docs/adr/` records each design decision and what changed after review: third-party properties in 0003, the registry in 0004, the desk in 0005, the watcher and subscriptions in 0006, the gate in 0007, the MCP server in 0008, logs from Envio HyperSync in 0009.
 
 ---
 
@@ -127,7 +131,8 @@ These are the figures of October 12. The service loses money today, and we show 
 | Part | What it is |
 |---|---|
 | `specfirst check` | runs the 30 properties on a fork of any chain at a fixed block and writes a report |
-| `specfirst watch` | the unattended watcher: factory, first deposit and upgrade signals, scheduled re-checks, share value reads, attestation budget, alerts |
+| `specfirst watch` | the unattended watcher: factory, first deposit and upgrade signals read from Envio HyperSync with the RPC as fallback, scheduled re-checks, share value reads, attestation budget, alerts |
+| `specfirst watch discover` | reads the whole history of a chain from Envio HyperSync for vaults the watcher has never seen, prechecks them, groups them by implementation and checks the busiest of each |
 | Contracts | CheckAttestationRegistry, CheckRequestDesk, CheckSubscriptions, AllocationGate, demo vault factory and token |
 | `specfirst worker` | fulfils paid desk requests without a person |
 | Web | the board, a page per vault, the watcher's live feed, the alerts inbox, the desk with revenue and gas, the gate |
