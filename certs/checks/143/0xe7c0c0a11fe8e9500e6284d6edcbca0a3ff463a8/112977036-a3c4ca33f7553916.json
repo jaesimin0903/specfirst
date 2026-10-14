@@ -1,0 +1,286 @@
+{
+  "schemaVersion": 4,
+  "chainId": 143,
+  "address": "0xe7c0c0a11FE8E9500E6284D6EDcbca0A3ff463a8",
+  "blockNumber": "112977036",
+  "standard": "erc4626",
+  "vaultKind": "erc4626",
+  "skipReason": null,
+  "traits": [],
+  "upstream": {
+    "repo": "https://github.com/a16z/erc4626-tests",
+    "commit": "ac485460e014f22807c1ff687e0b4dc3af96ee40"
+  },
+  "harnessSha256": "0xf5d1eef11ff3a4f0375844e1e731c1e18d4856b12573297dc6320baddd8d0262",
+  "sfPropertiesSha256": "0x1d721e8b04b8b2013a796ac97b53e07fffd0a32c6f21f8d23d1bef4924dfa233",
+  "runs": 16,
+  "delta": "0",
+  "seed": "0xb7538c5c4e7163554c0d14aa4cc531313f3cc68aebf1ff20bb73db42e9c9895b",
+  "sender": "0x359C01263B6cA511033742A9256E4b68515A6492",
+  "toolchain": {
+    "forgeVersion": "forge Version: 1.5.1-v1.5.1",
+    "forgeStd": {
+      "repo": "https://github.com/foundry-rs/forge-std",
+      "commit": "bf647bd6046f2f7da30d0c2bf435e5c76a780c1b"
+    },
+    "foundryTomlSha256": "0xee1cdf6abd473ff042b6385bd46833ed08053d608d0a5645ad159fc2cca1b9b3",
+    "maxTestRejects": 4096
+  },
+  "identity": {
+    "codeHash": "0x931a50cdcd90a5849abfb2cc4c6803aa25e3997d2c47dde6165d47783dd23322",
+    "metadataHash": "0x12202ce0c65ebaefa3f31efb9c4bd43a4153c742580cfb925b5bb3d63c66ed3a3876",
+    "maskedCodeHash": "0xd45a75db01976fa3a8c26d2646a37d281e220c49ce68724bc75b4b979c299c3f",
+    "codeSize": 802,
+    "proxy": {
+      "kind": "eip1967",
+      "implementation": "0xb8E6Af4b1D69Da4Bb118C6d28586a2b62A8e8048"
+    },
+    "implementation": {
+      "address": "0xb8E6Af4b1D69Da4Bb118C6d28586a2b62A8e8048",
+      "codeHash": "0x560826332b0adafcec102d36a70f6df499f5c086e1556cb08a639bf1c0c52482",
+      "metadataHash": "0x1220d43d2612d370fb2d69a3bcaa146c24d5f1356682440bbd99cf60139de27ee287",
+      "maskedCodeHash": "0xf6fe2b03261b038810be07fe567afb0e4cf0eb5578e0b1e5e935bab043bda9e0"
+    },
+    "implementationKey": "0xd328b84d2983fa8259d8581cc6865c5a01c1cfcd5d68e4f4b331bccc23d9d091",
+    "implementationKeyKind": {
+      "of": "implementation",
+      "hash": "metadataHash+maskedCodeHash"
+    }
+  },
+  "results": [
+    {
+      "id": "asset",
+      "test": "test_asset",
+      "description": "asset() does not revert",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "totalAssets",
+      "test": "test_totalAssets",
+      "description": "totalAssets() does not revert",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "convertToShares",
+      "test": "test_convertToShares",
+      "description": "convertToShares gives the same result for any caller",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "convertToAssets",
+      "test": "test_convertToAssets",
+      "description": "convertToAssets gives the same result for any caller",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "maxDeposit",
+      "test": "test_maxDeposit",
+      "description": "maxDeposit does not revert",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "previewDeposit",
+      "test": "test_previewDeposit",
+      "description": "deposit mints at least the shares previewDeposit quoted",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "deposit",
+      "test": "test_deposit",
+      "description": "deposit moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "maxMint",
+      "test": "test_maxMint",
+      "description": "maxMint does not revert",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "previewMint",
+      "test": "test_previewMint",
+      "description": "mint pulls at most the assets previewMint quoted",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "mint",
+      "test": "test_mint",
+      "description": "mint moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "maxWithdraw",
+      "test": "test_maxWithdraw",
+      "description": "maxWithdraw does not revert",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "previewWithdraw",
+      "test": "test_previewWithdraw",
+      "description": "withdraw burns at most the shares previewWithdraw quoted",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "withdraw",
+      "test": "test_withdraw",
+      "description": "withdraw burns owner shares, pays the receiver and spends share allowance",
+      "status": "fail",
+      "runs": 0,
+      "reason": "asset: 214101459727 !~= 956837618378 (max delta: 0, real delta: 742736158651)",
+      "counterexample": {
+        "calls": [
+          "test_withdraw(([0x766519314Ee6303EC8d3906098De8078059CD35D, 0xaa582f7C6bbEfAA57fEBc9c5200684183aedBaa4, 0xd4811Fa632016c2aB3CF910A36168b3ec5A6d33C, 0xf539Ded54a6D13FFF6D46cB1A0Dbac9035BFB542], [141970521882661148134357195117317762109519604123135807970819056891807, 115792089237316195423570985008687907853269984665640564039457584007913129639932, 14296733233282994047402428959916243362011784727285705661420895, 4329926012307730], [407533758577890860719299044770574702186413524924688661, 6439537374988887637031987168356871091934358673814, 28964042314767403487035406380020607898832, 2668391435291395214941664472845118339992874383731916749282069], 9746113402592389961091758558796114379256), 246722004497575524215631942800337, 1957139391662069624298467120153942038800030604)"
+        ],
+        "calldata": "0x125cc288000000000000000000000000766519314ee6303ec8d3906098de8078059cd35d000000000000000000000000aa582f7c6bbefaa57febc9c5200684183aedbaa4000000000000000000000000d4811fa632016c2ab3cf910a36168b3ec5a6d33c000000000000000000000000f539ded54a6d13fff6d46cb1a0dbac9035bfb54200000005441738ab0d51bd9e95ce77a1248d21473d31bfac1d2b63f08b60779ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc00000000000008e599db97856587f43231d5774bd50cf165c6048a690d4b155f000000000000000000000000000000000000000000000000000f620b75de091200000000000000000004413de9c1c873a6af866609b281d67da09e100f6ee91500000000000000000000000467f6d7bb856382f8e120281f4a40cd01b5381996000000000000000000000000000000551e1fa3f497fa6e2629404e3a343254d000000000000001a9196a7cf587d31c4b9bed5cef81552506d77e0ba1b53a1b150000000000000000000000000000001ca4292a127d9df2d93cc7812a9bd141f80000000000000000000000000000000000000c2a11cacf847d2c9c9781e453d10000000000000000000000000057c2dbbf262e09bbf7ef09840b17a5b96cdb8c",
+        "logs": []
+      }
+    },
+    {
+      "id": "withdraw-zero-allowance",
+      "test": "test_withdraw_zero_allowance",
+      "description": "withdraw on behalf of an owner without allowance reverts",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "maxRedeem",
+      "test": "test_maxRedeem",
+      "description": "maxRedeem does not revert",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "previewRedeem",
+      "test": "test_previewRedeem",
+      "description": "redeem pays at least the assets previewRedeem quoted",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "redeem",
+      "test": "test_redeem",
+      "description": "redeem burns owner shares, pays the receiver and spends share allowance",
+      "status": "fail",
+      "runs": 0,
+      "reason": "asset: 214101459727 !~= 310937728421 (max delta: 0, real delta: 96836268694)",
+      "counterexample": {
+        "calls": [
+          "test_redeem(([0x766519314Ee6303EC8d3906098De8078059CD35D, 0xaa582f7C6bbEfAA57fEBc9c5200684183aedBaa4, 0xd4811Fa632016c2aB3CF910A36168b3ec5A6d33C, 0xf539Ded54a6D13FFF6D46cB1A0Dbac9035BFB542], [141970521882661148134357195117317762109519604123135807970819056891807, 115792089237316195423570985008687907853269984665640564039457584007913129639932, 14296733233282994047402428959916243362011784727285705661420895, 4329926012307730], [407533758577890860719299044770574702186413524924688661, 6439537374988887637031987168356871091934358673814, 28964042314767403487035406380020607898832, 2668391435291395214941664472845118339992874383731916749282069], 9746113402592389961091758558796114379256), 246722004497575524215631942800337, 1957139391662069624298467120153942038800030604)"
+        ],
+        "calldata": "0x7c139968000000000000000000000000766519314ee6303ec8d3906098de8078059cd35d000000000000000000000000aa582f7c6bbefaa57febc9c5200684183aedbaa4000000000000000000000000d4811fa632016c2ab3cf910a36168b3ec5a6d33c000000000000000000000000f539ded54a6d13fff6d46cb1a0dbac9035bfb54200000005441738ab0d51bd9e95ce77a1248d21473d31bfac1d2b63f08b60779ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc00000000000008e599db97856587f43231d5774bd50cf165c6048a690d4b155f000000000000000000000000000000000000000000000000000f620b75de091200000000000000000004413de9c1c873a6af866609b281d67da09e100f6ee91500000000000000000000000467f6d7bb856382f8e120281f4a40cd01b5381996000000000000000000000000000000551e1fa3f497fa6e2629404e3a343254d000000000000001a9196a7cf587d31c4b9bed5cef81552506d77e0ba1b53a1b150000000000000000000000000000001ca4292a127d9df2d93cc7812a9bd141f80000000000000000000000000000000000000c2a11cacf847d2c9c9781e453d10000000000000000000000000057c2dbbf262e09bbf7ef09840b17a5b96cdb8c",
+        "logs": []
+      }
+    },
+    {
+      "id": "redeem-zero-allowance",
+      "test": "test_redeem_zero_allowance",
+      "description": "redeem on behalf of an owner without allowance reverts",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "RT-deposit-redeem",
+      "test": "test_RT_deposit_redeem",
+      "description": "redeem(deposit(a)) returns no more than a",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "RT-deposit-withdraw",
+      "test": "test_RT_deposit_withdraw",
+      "description": "withdraw(a) burns at least the shares deposit(a) minted",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "RT-redeem-deposit",
+      "test": "test_RT_redeem_deposit",
+      "description": "deposit(redeem(s)) mints no more than s",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "RT-redeem-mint",
+      "test": "test_RT_redeem_mint",
+      "description": "mint(s) costs at least the assets redeem(s) paid",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "RT-mint-withdraw",
+      "test": "test_RT_mint_withdraw",
+      "description": "withdraw(mint(s)) burns at least s shares",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "RT-mint-redeem",
+      "test": "test_RT_mint_redeem",
+      "description": "redeem(s) pays no more than mint(s) cost",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "RT-withdraw-mint",
+      "test": "test_RT_withdraw_mint",
+      "description": "mint(withdraw(a)) costs at least a",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "RT-withdraw-deposit",
+      "test": "test_RT_withdraw_deposit",
+      "description": "deposit(a) mints no more than the shares withdraw(a) burned",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "sf-maxDeposit-honored",
+      "test": "test_sf_maxDeposit_honored",
+      "description": "deposit goes through up to min(maxDeposit, 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxDeposit MUST NOT be higher than what deposit accepts)",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "sf-maxMint-honored",
+      "test": "test_sf_maxMint_honored",
+      "description": "mint goes through up to min(maxMint, shares of 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxMint MUST NOT be higher than what mint accepts)",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "sf-maxWithdraw-honored",
+      "test": "test_sf_maxWithdraw_honored",
+      "description": "withdraw goes through up to maxWithdraw; when a smaller amount is refused maxWithdraw must go through, and refusals are counted (EIP-4626: maxWithdraw MUST NOT be higher than what withdraw accepts, and MUST be 0 when withdrawals are disabled)",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "sf-maxRedeem-honored",
+      "test": "test_sf_maxRedeem_honored",
+      "description": "redeem goes through up to maxRedeem; when a smaller amount is refused maxRedeem must go through, and refusals are counted (EIP-4626: maxRedeem MUST NOT be higher than what redeem accepts, and MUST be 0 when redemptions are disabled)",
+      "status": "pass",
+      "runs": 16
+    }
+  ],
+  "summary": {
+    "pass": 28,
+    "fail": 2,
+    "inconclusive": 0,
+    "notApplicable": 0
+  },
+  "startedAt": "2026-10-13T22:23:43.186Z",
+  "durationMs": 70026
+}

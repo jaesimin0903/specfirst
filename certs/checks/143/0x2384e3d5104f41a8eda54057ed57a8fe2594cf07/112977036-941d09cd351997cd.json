@@ -1,0 +1,356 @@
+{
+  "schemaVersion": 4,
+  "chainId": 143,
+  "address": "0x2384e3D5104f41a8EDa54057ED57a8fE2594cF07",
+  "blockNumber": "112977036",
+  "standard": "erc4626",
+  "vaultKind": "erc4626",
+  "skipReason": null,
+  "traits": [],
+  "upstream": {
+    "repo": "https://github.com/a16z/erc4626-tests",
+    "commit": "ac485460e014f22807c1ff687e0b4dc3af96ee40"
+  },
+  "harnessSha256": "0xf5d1eef11ff3a4f0375844e1e731c1e18d4856b12573297dc6320baddd8d0262",
+  "sfPropertiesSha256": "0x1d721e8b04b8b2013a796ac97b53e07fffd0a32c6f21f8d23d1bef4924dfa233",
+  "runs": 16,
+  "delta": "0",
+  "seed": "0x71ab1e4f2c238bac25b61612f1b9d4f738c6c3a396f1aec80405358f406061e8",
+  "sender": "0x0D64b0205e21c1F06687952fc165dB1E0abc71Db",
+  "toolchain": {
+    "forgeVersion": "forge Version: 1.5.1-v1.5.1",
+    "forgeStd": {
+      "repo": "https://github.com/foundry-rs/forge-std",
+      "commit": "bf647bd6046f2f7da30d0c2bf435e5c76a780c1b"
+    },
+    "foundryTomlSha256": "0xee1cdf6abd473ff042b6385bd46833ed08053d608d0a5645ad159fc2cca1b9b3",
+    "maxTestRejects": 4096
+  },
+  "identity": {
+    "codeHash": "0x7737ba3637937c044285aa3b9169ad9b6650b267600eb5221cff271bbdb8fc1d",
+    "metadataHash": null,
+    "maskedCodeHash": "0xb276e3381c34a0db604b21da9c9f53034b1434423f6b17809f13f0428ce6898e",
+    "codeSize": 11988,
+    "proxy": null,
+    "implementation": null,
+    "implementationKey": "0xb276e3381c34a0db604b21da9c9f53034b1434423f6b17809f13f0428ce6898e",
+    "implementationKeyKind": {
+      "of": "self",
+      "hash": "maskedCodeHash"
+    }
+  },
+  "results": [
+    {
+      "id": "asset",
+      "test": "test_asset",
+      "description": "asset() does not revert",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 2 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "totalAssets",
+      "test": "test_totalAssets",
+      "description": "totalAssets() does not revert",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 2 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "convertToShares",
+      "test": "test_convertToShares",
+      "description": "convertToShares gives the same result for any caller",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 3 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "convertToAssets",
+      "test": "test_convertToAssets",
+      "description": "convertToAssets gives the same result for any caller",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 3 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "maxDeposit",
+      "test": "test_maxDeposit",
+      "description": "maxDeposit does not revert",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 2 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "previewDeposit",
+      "test": "test_previewDeposit",
+      "description": "deposit mints at least the shares previewDeposit quoted",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 5 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "deposit",
+      "test": "test_deposit",
+      "description": "deposit moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 5 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "maxMint",
+      "test": "test_maxMint",
+      "description": "maxMint does not revert",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 2 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "previewMint",
+      "test": "test_previewMint",
+      "description": "mint pulls at most the assets previewMint quoted",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 15 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "mint",
+      "test": "test_mint",
+      "description": "mint moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 13 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "maxWithdraw",
+      "test": "test_maxWithdraw",
+      "description": "maxWithdraw does not revert",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 2 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "previewWithdraw",
+      "test": "test_previewWithdraw",
+      "description": "withdraw burns at most the shares previewWithdraw quoted",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 3 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "withdraw",
+      "test": "test_withdraw",
+      "description": "withdraw burns owner shares, pays the receiver and spends share allowance",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 5 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "withdraw-zero-allowance",
+      "test": "test_withdraw_zero_allowance",
+      "description": "withdraw on behalf of an owner without allowance reverts",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 3 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "maxRedeem",
+      "test": "test_maxRedeem",
+      "description": "maxRedeem does not revert",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 2 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "previewRedeem",
+      "test": "test_previewRedeem",
+      "description": "redeem pays at least the assets previewRedeem quoted",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 3 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "redeem",
+      "test": "test_redeem",
+      "description": "redeem burns owner shares, pays the receiver and spends share allowance",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 4 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "redeem-zero-allowance",
+      "test": "test_redeem_zero_allowance",
+      "description": "redeem on behalf of an owner without allowance reverts",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 3 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "RT-deposit-redeem",
+      "test": "test_RT_deposit_redeem",
+      "description": "redeem(deposit(a)) returns no more than a",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 5 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "RT-deposit-withdraw",
+      "test": "test_RT_deposit_withdraw",
+      "description": "withdraw(a) burns at least the shares deposit(a) minted",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 5 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "RT-redeem-deposit",
+      "test": "test_RT_redeem_deposit",
+      "description": "deposit(redeem(s)) mints no more than s",
+      "status": "fail",
+      "runs": 12,
+      "reason": "Error: a <=~ b not satisfied [uint]; deposit reverted below maxDeposit 8 times (inputs discarded, EIP-4626 says it must not revert)",
+      "counterexample": {
+        "calls": [
+          "test_RT_redeem_deposit(([0xB5960C1Ea647da2cc2aDE0d5bF19C9a838b334a2, 0xD1b03504be77C1817F3bE69db9c9b5A58fD30156, 0x544FEAdA8345e765D2940a3514c5fa6E87085D7F, 0x87dC3e0AD56eF354082E0Ed3F92CE28E91A090e5], [24336240284972042223387321240199578466050372052584433356428071, 2842102302959287666360354009796513250182658855066402234216803730312613368, 56253, 9472144026772251195268627896], [2743295614184601851206, 571633965672311484762544773363913121061825013063812229017785298575620, 55740911385097557931, 749007975987253419430638032173873296141947918828718242721], 2006), 115792089237316195423570985008687907853269984665640564039457584007913129639935)"
+        ],
+        "calldata": "0x37bad155000000000000000000000000b5960c1ea647da2cc2ade0d5bf19c9a838b334a2000000000000000000000000d1b03504be77c1817f3be69db9c9b5a58fd30156000000000000000000000000544feada8345e765d2940a3514c5fa6e87085d7f00000000000000000000000087dc3e0ad56ef354082e0ed3f92ce28e91a090e50000000000000f24fc9bf1ff4feacaa42c57f014a632193be4b12e12d17cd32700019bcb6ef547ff8be8950bedaf4e3470d37c024fc56724ce11b8c985eb4df8000000000000000000000000000000000000000000000000000000000000dbbd00000000000000000000000000000000000000001e9b2c84989a3c3015837db8000000000000000000000000000000000000000000000094b6dfda7f703e95460000001533fd322c1cceeb6c0cacb586779a4409923fedc36000b0732b87e104000000000000000000000000000000000000000000000003058f7f93a54457ab00000000000000001e8c0215f6bf4921749546158f4b0149479950fa71bbbba100000000000000000000000000000000000000000000000000000000000007d6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "logs": [
+          "Error: a <=~ b not satisfied [uint]",
+          "   Value a: 4603291367580941580003413292",
+          "   Value b: 4603291367580941580001921151",
+          " Max Delta: 0",
+          "     Delta: 1492141"
+        ]
+      }
+    },
+    {
+      "id": "RT-redeem-mint",
+      "test": "test_RT_redeem_mint",
+      "description": "mint(s) costs at least the assets redeem(s) paid",
+      "status": "fail",
+      "runs": 12,
+      "reason": "Error: a >=~ b not satisfied [uint]; deposit reverted below maxDeposit 8 times (inputs discarded, EIP-4626 says it must not revert)",
+      "counterexample": {
+        "calls": [
+          "test_RT_redeem_mint(([0xB5960C1Ea647da2cc2aDE0d5bF19C9a838b334a2, 0xD1b03504be77C1817F3bE69db9c9b5A58fD30156, 0x544FEAdA8345e765D2940a3514c5fa6E87085D7F, 0x87dC3e0AD56eF354082E0Ed3F92CE28E91A090e5], [24336240284972042223387321240199578466050372052584433356428071, 2842102302959287666360354009796513250182658855066402234216803730312613368, 56253, 9472144026772251195268627896], [2743295614184601851206, 571633965672311484762544773363913121061825013063812229017785298575620, 55740911385097557931, 749007975987253419430638032173873296141947918828718242721], 2006), 115792089237316195423570985008687907853269984665640564039457584007913129639935)"
+        ],
+        "calldata": "0x840f3a74000000000000000000000000b5960c1ea647da2cc2ade0d5bf19c9a838b334a2000000000000000000000000d1b03504be77c1817f3be69db9c9b5a58fd30156000000000000000000000000544feada8345e765d2940a3514c5fa6e87085d7f00000000000000000000000087dc3e0ad56ef354082e0ed3f92ce28e91a090e50000000000000f24fc9bf1ff4feacaa42c57f014a632193be4b12e12d17cd32700019bcb6ef547ff8be8950bedaf4e3470d37c024fc56724ce11b8c985eb4df8000000000000000000000000000000000000000000000000000000000000dbbd00000000000000000000000000000000000000001e9b2c84989a3c3015837db8000000000000000000000000000000000000000000000094b6dfda7f703e95460000001533fd322c1cceeb6c0cacb586779a4409923fedc36000b0732b87e104000000000000000000000000000000000000000000000003058f7f93a54457ab00000000000000001e8c0215f6bf4921749546158f4b0149479950fa71bbbba100000000000000000000000000000000000000000000000000000000000007d6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "logs": [
+          "Error: a >=~ b not satisfied [uint]",
+          "   Value a: 4603253628474108348841",
+          "   Value b: 4603253628474108348842",
+          " Max Delta: 0",
+          "     Delta: 1"
+        ]
+      }
+    },
+    {
+      "id": "RT-mint-withdraw",
+      "test": "test_RT_mint_withdraw",
+      "description": "withdraw(mint(s)) burns at least s shares",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 15 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "RT-mint-redeem",
+      "test": "test_RT_mint_redeem",
+      "description": "redeem(s) pays no more than mint(s) cost",
+      "status": "pass",
+      "runs": 16,
+      "reason": "deposit reverted below maxDeposit 15 times (inputs discarded, EIP-4626 says it must not revert)"
+    },
+    {
+      "id": "RT-withdraw-mint",
+      "test": "test_RT_withdraw_mint",
+      "description": "mint(withdraw(a)) costs at least a",
+      "status": "fail",
+      "runs": 8,
+      "reason": "Error: a >=~ b not satisfied [uint]; deposit reverted below maxDeposit 2 times (inputs discarded, EIP-4626 says it must not revert)",
+      "counterexample": {
+        "calls": [
+          "test_RT_withdraw_mint(([0xa9058387eECc7Cc480e8EaF2E19F07089b48d78B, 0x3311f71deC247fB80DaA4Fa048138f36f280BAe2, 0xB80e22eC1A6CfAaF3F5404a3705D6E48D0924E65, 0xeaAe5E0A9AD43c2720f64b774294d006A21C9444], [16813171274823819478053537948347284474928938790159301074, 6439488486669238640, 3448572928142875239121015036206739997645488368188071582019166013496049, 128197295198601666420018029198738620062252], [2395058073, 6151152885348, 687, 41173870874098230153105296336785476114795280323], 57896044618658097711785492504343953926634992332820282019728792003956564819967), 213579904434643834881086079619912225982663794)"
+        ],
+        "calldata": "0x6aaa88bc000000000000000000000000a9058387eecc7cc480e8eaf2e19f07089b48d78b0000000000000000000000003311f71dec247fb80daa4fa048138f36f280bae2000000000000000000000000b80e22ec1a6cfaaf3f5404a3705d6e48d0924e65000000000000000000000000eaae5e0a9ad43c2720f64b774294d006a21c9444000000000000000000af89a69dfae7626051a47defdd77c1d291d985f12eb9d2000000000000000000000000000000000000000000000000595da8a9272341700000007fea2869dd7a1d8a6da8a61aba108bbc27347d4a6b1c744582e4f01af100000000000000000000000000000178bcecf61411200fe052b0719120de9a2c000000000000000000000000000000000000000000000000000000008ec1af99000000000000000000000000000000000000000000000000000005982d485e6400000000000000000000000000000000000000000000000000000000000002af00000000000000000000000007364cdb88f3ec66f660a71b3ae44eb9af2d37c37fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff000000000000000000000000000993c6ed8301254477b66523a91751a83a4c72",
+        "logs": [
+          "Error: a >=~ b not satisfied [uint]",
+          "   Value a: 6727430501592376570875",
+          "   Value b: 6727430501592376570883",
+          " Max Delta: 0",
+          "     Delta: 8"
+        ]
+      }
+    },
+    {
+      "id": "RT-withdraw-deposit",
+      "test": "test_RT_withdraw_deposit",
+      "description": "deposit(a) mints no more than the shares withdraw(a) burned",
+      "status": "fail",
+      "runs": 5,
+      "reason": "Error: a <=~ b not satisfied [uint]; deposit reverted below maxDeposit 2 times (inputs discarded, EIP-4626 says it must not revert)",
+      "counterexample": {
+        "calls": [
+          "test_RT_withdraw_deposit(([0x710A09e91b096e5FA99b94FAd6c3Bda353cfA29b, 0x27dF1732992672654f68c38298E3EdAA2d99a398, 0x4aBe80e6D9c3A031801A8a7c984511508D1Bf5b0, 0xDed28ab53b0DE6D18214ce78c1B70313beaf53f2], [662841200376330548, 291737952339101322795439793663454362888311534436, 58460870, 23996956789887358490559977], [3, 115792089237316195423570985008687907853269984665640564039457584007913129639933, 968644180844, 416], -5666809988766022223958671901143365), 149880897087132553141499903219561697353700434158134600198289)"
+        ],
+        "calldata": "0xfbdc4189000000000000000000000000710a09e91b096e5fa99b94fad6c3bda353cfa29b00000000000000000000000027df1732992672654f68c38298e3edaa2d99a3980000000000000000000000004abe80e6d9c3a031801a8a7c984511508d1bf5b0000000000000000000000000ded28ab53b0de6d18214ce78c1b70313beaf53f20000000000000000000000000000000000000000000000000932e28f52ecb9340000000000000000000000003319fb733cd925bf0d147d9821211442ed89f36400000000000000000000000000000000000000000000000000000000037c0ac600000000000000000000000000000000000000000013d98da25d0472ce56c5e90000000000000000000000000000000000000000000000000000000000000003fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd000000000000000000000000000000000000000000000000000000e187b13b6c00000000000000000000000000000000000000000000000000000000000001a0fffffffffffffffffffffffffffffffffffee89acd62455a1620cd16bb9ecebb0000000000000017e09d947392196f80030ea5c3d3b6f4d70f55f66a1e40e891",
+        "logs": [
+          "Error: a <=~ b not satisfied [uint]",
+          "   Value a: 598789337453320693544459",
+          "   Value b: 598789337453320693544379",
+          " Max Delta: 0",
+          "     Delta: 80"
+        ]
+      }
+    },
+    {
+      "id": "sf-maxDeposit-honored",
+      "test": "test_sf_maxDeposit_honored",
+      "description": "deposit goes through up to min(maxDeposit, 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxDeposit MUST NOT be higher than what deposit accepts)",
+      "status": "fail",
+      "runs": 0,
+      "reason": "deposit(7507827025510754222076) reverted with selector 0xf58f733a while maxDeposit is 7507827025510754222076",
+      "counterexample": {
+        "calls": [
+          "test_sf_maxDeposit_honored(2, 6482762080085513912629854396885739050630172735492626758048)"
+        ],
+        "calldata": "0x600eccd700000000000000000000000000000000000000000000000000000000000000020000000000000001086331b629df98fbd389a28081e195393bc8d9542476b9a0",
+        "logs": []
+      }
+    },
+    {
+      "id": "sf-maxMint-honored",
+      "test": "test_sf_maxMint_honored",
+      "description": "mint goes through up to min(maxMint, shares of 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxMint MUST NOT be higher than what mint accepts)",
+      "status": "fail",
+      "runs": 0,
+      "reason": "mint(7507888577341061493651464339) reverted with selector 0xf58f733a while maxMint is 7507888577341061493651464339",
+      "counterexample": {
+        "calls": [
+          "test_sf_maxMint_honored(2, 6482762080085513912629854396885739050630172735492626758048)"
+        ],
+        "calldata": "0xb1f65c3b00000000000000000000000000000000000000000000000000000000000000020000000000000001086331b629df98fbd389a28081e195393bc8d9542476b9a0",
+        "logs": []
+      }
+    },
+    {
+      "id": "sf-maxWithdraw-honored",
+      "test": "test_sf_maxWithdraw_honored",
+      "description": "withdraw goes through up to maxWithdraw; when a smaller amount is refused maxWithdraw must go through, and refusals are counted (EIP-4626: maxWithdraw MUST NOT be higher than what withdraw accepts, and MUST be 0 when withdrawals are disabled)",
+      "status": "pass",
+      "runs": 16
+    },
+    {
+      "id": "sf-maxRedeem-honored",
+      "test": "test_sf_maxRedeem_honored",
+      "description": "redeem goes through up to maxRedeem; when a smaller amount is refused maxRedeem must go through, and refusals are counted (EIP-4626: maxRedeem MUST NOT be higher than what redeem accepts, and MUST be 0 when redemptions are disabled)",
+      "status": "pass",
+      "runs": 16
+    }
+  ],
+  "summary": {
+    "pass": 24,
+    "fail": 6,
+    "inconclusive": 0,
+    "notApplicable": 0
+  },
+  "startedAt": "2026-10-13T11:01:37.437Z",
+  "durationMs": 68308
+}

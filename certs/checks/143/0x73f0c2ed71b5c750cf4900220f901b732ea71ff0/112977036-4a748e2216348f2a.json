@@ -1,0 +1,270 @@
+{
+  "schemaVersion": 4,
+  "chainId": 143,
+  "address": "0x73F0c2ed71b5c750Cf4900220F901B732EA71Ff0",
+  "blockNumber": "112977036",
+  "standard": "erc4626",
+  "vaultKind": "erc4626",
+  "skipReason": "asset-transfer-restricted",
+  "traits": [],
+  "upstream": {
+    "repo": "https://github.com/a16z/erc4626-tests",
+    "commit": "ac485460e014f22807c1ff687e0b4dc3af96ee40"
+  },
+  "harnessSha256": "0xf5d1eef11ff3a4f0375844e1e731c1e18d4856b12573297dc6320baddd8d0262",
+  "sfPropertiesSha256": "0x1d721e8b04b8b2013a796ac97b53e07fffd0a32c6f21f8d23d1bef4924dfa233",
+  "runs": 16,
+  "delta": "0",
+  "seed": "0x2cbf77f42c54adf964243f903a5508caa0b145fcc7637273ad54a80c71b3b379",
+  "sender": "0xC54AbE9Da1D218096f1856fD4263Dcb974Fb0354",
+  "toolchain": {
+    "forgeVersion": "forge Version: 1.5.1-v1.5.1",
+    "forgeStd": {
+      "repo": "https://github.com/foundry-rs/forge-std",
+      "commit": "bf647bd6046f2f7da30d0c2bf435e5c76a780c1b"
+    },
+    "foundryTomlSha256": "0xee1cdf6abd473ff042b6385bd46833ed08053d608d0a5645ad159fc2cca1b9b3",
+    "maxTestRejects": 4096
+  },
+  "identity": {
+    "codeHash": "0xa6995ac0e0d6ca5c62101f7cef71c0c45f289c74722ca410209df73a2bccda21",
+    "metadataHash": "0x12206e23f96bddf0301313e8348b5fc1fa1ee0e8474c2abb428f9316d00f3aa308b1",
+    "maskedCodeHash": "0x3ab4d8145f0dee9517acbab66a9b3099b422777044bf8f3508d08e409fcc265a",
+    "codeSize": 130,
+    "proxy": {
+      "kind": "eip1967",
+      "implementation": "0x97F42d220e09E8aC6b21b3D5df024630457681E7"
+    },
+    "implementation": {
+      "address": "0x97F42d220e09E8aC6b21b3D5df024630457681E7",
+      "codeHash": "0xabbd7fc5883f5b23fb303bb597708809577069cdf2d292d23b43099be8811822",
+      "metadataHash": "0x1220b7bde32d43d5c1d5cb84c36f6361d8bec3291145c5440ce0c1d43be003b7da36",
+      "maskedCodeHash": "0x793e5e5b6f795a5ce887ec14fb259e3f5b3e63e9df4f8697676a675cf329df02"
+    },
+    "implementationKey": "0x22aea84aa66e34a9d96b702bc9bbe37ff23099ad80b9bb7c57c9a93feb3f54ab",
+    "implementationKeyKind": {
+      "of": "implementation",
+      "hash": "metadataHash+maskedCodeHash"
+    }
+  },
+  "results": [
+    {
+      "id": "asset",
+      "test": "test_asset",
+      "description": "asset() does not revert",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "totalAssets",
+      "test": "test_totalAssets",
+      "description": "totalAssets() does not revert",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "convertToShares",
+      "test": "test_convertToShares",
+      "description": "convertToShares gives the same result for any caller",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "convertToAssets",
+      "test": "test_convertToAssets",
+      "description": "convertToAssets gives the same result for any caller",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "maxDeposit",
+      "test": "test_maxDeposit",
+      "description": "maxDeposit does not revert",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "previewDeposit",
+      "test": "test_previewDeposit",
+      "description": "deposit mints at least the shares previewDeposit quoted",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "deposit",
+      "test": "test_deposit",
+      "description": "deposit moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "maxMint",
+      "test": "test_maxMint",
+      "description": "maxMint does not revert",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "previewMint",
+      "test": "test_previewMint",
+      "description": "mint pulls at most the assets previewMint quoted",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "mint",
+      "test": "test_mint",
+      "description": "mint moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "maxWithdraw",
+      "test": "test_maxWithdraw",
+      "description": "maxWithdraw does not revert",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "previewWithdraw",
+      "test": "test_previewWithdraw",
+      "description": "withdraw burns at most the shares previewWithdraw quoted",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "withdraw",
+      "test": "test_withdraw",
+      "description": "withdraw burns owner shares, pays the receiver and spends share allowance",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "withdraw-zero-allowance",
+      "test": "test_withdraw_zero_allowance",
+      "description": "withdraw on behalf of an owner without allowance reverts",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "maxRedeem",
+      "test": "test_maxRedeem",
+      "description": "maxRedeem does not revert",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "previewRedeem",
+      "test": "test_previewRedeem",
+      "description": "redeem pays at least the assets previewRedeem quoted",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "redeem",
+      "test": "test_redeem",
+      "description": "redeem burns owner shares, pays the receiver and spends share allowance",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "redeem-zero-allowance",
+      "test": "test_redeem_zero_allowance",
+      "description": "redeem on behalf of an owner without allowance reverts",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "RT-deposit-redeem",
+      "test": "test_RT_deposit_redeem",
+      "description": "redeem(deposit(a)) returns no more than a",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "RT-deposit-withdraw",
+      "test": "test_RT_deposit_withdraw",
+      "description": "withdraw(a) burns at least the shares deposit(a) minted",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "RT-redeem-deposit",
+      "test": "test_RT_redeem_deposit",
+      "description": "deposit(redeem(s)) mints no more than s",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "RT-redeem-mint",
+      "test": "test_RT_redeem_mint",
+      "description": "mint(s) costs at least the assets redeem(s) paid",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "RT-mint-withdraw",
+      "test": "test_RT_mint_withdraw",
+      "description": "withdraw(mint(s)) burns at least s shares",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "RT-mint-redeem",
+      "test": "test_RT_mint_redeem",
+      "description": "redeem(s) pays no more than mint(s) cost",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "RT-withdraw-mint",
+      "test": "test_RT_withdraw_mint",
+      "description": "mint(withdraw(a)) costs at least a",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "RT-withdraw-deposit",
+      "test": "test_RT_withdraw_deposit",
+      "description": "deposit(a) mints no more than the shares withdraw(a) burned",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "sf-maxDeposit-honored",
+      "test": "test_sf_maxDeposit_honored",
+      "description": "deposit goes through up to min(maxDeposit, 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxDeposit MUST NOT be higher than what deposit accepts)",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "sf-maxMint-honored",
+      "test": "test_sf_maxMint_honored",
+      "description": "mint goes through up to min(maxMint, shares of 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxMint MUST NOT be higher than what mint accepts)",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "sf-maxWithdraw-honored",
+      "test": "test_sf_maxWithdraw_honored",
+      "description": "withdraw goes through up to maxWithdraw; when a smaller amount is refused maxWithdraw must go through, and refusals are counted (EIP-4626: maxWithdraw MUST NOT be higher than what withdraw accepts, and MUST be 0 when withdrawals are disabled)",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    },
+    {
+      "id": "sf-maxRedeem-honored",
+      "test": "test_sf_maxRedeem_honored",
+      "description": "redeem goes through up to maxRedeem; when a smaller amount is refused maxRedeem must go through, and refusals are counted (EIP-4626: maxRedeem MUST NOT be higher than what redeem accepts, and MUST be 0 when redemptions are disabled)",
+      "status": "not_applicable",
+      "reason": "asset token restricts transfers (allowlist or similar); both suites need freely transferable test balances (selector 0x08c379a0)"
+    }
+  ],
+  "summary": {
+    "pass": 0,
+    "fail": 0,
+    "inconclusive": 0,
+    "notApplicable": 30
+  },
+  "startedAt": "2026-10-13T15:30:29.464Z",
+  "durationMs": 11043
+}

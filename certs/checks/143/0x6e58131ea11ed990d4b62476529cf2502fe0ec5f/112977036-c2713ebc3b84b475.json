@@ -1,0 +1,300 @@
+{
+  "schemaVersion": 4,
+  "chainId": 143,
+  "address": "0x6e58131ea11ed990D4b62476529cF2502Fe0eC5F",
+  "blockNumber": "112977036",
+  "standard": "erc4626",
+  "vaultKind": "erc4626",
+  "skipReason": null,
+  "traits": [],
+  "upstream": {
+    "repo": "https://github.com/a16z/erc4626-tests",
+    "commit": "ac485460e014f22807c1ff687e0b4dc3af96ee40"
+  },
+  "harnessSha256": "0xf5d1eef11ff3a4f0375844e1e731c1e18d4856b12573297dc6320baddd8d0262",
+  "sfPropertiesSha256": "0x1d721e8b04b8b2013a796ac97b53e07fffd0a32c6f21f8d23d1bef4924dfa233",
+  "runs": 16,
+  "delta": "0",
+  "seed": "0x3abd831ba8499f1d089949ca2c34b6e5533e4e51694e7b613af2bbe4fedda47b",
+  "sender": "0x22769065b2AD4047e0352e205FE8Ca252e2b925c",
+  "toolchain": {
+    "forgeVersion": "forge Version: 1.5.1-v1.5.1",
+    "forgeStd": {
+      "repo": "https://github.com/foundry-rs/forge-std",
+      "commit": "bf647bd6046f2f7da30d0c2bf435e5c76a780c1b"
+    },
+    "foundryTomlSha256": "0xee1cdf6abd473ff042b6385bd46833ed08053d608d0a5645ad159fc2cca1b9b3",
+    "maxTestRejects": 4096
+  },
+  "identity": {
+    "codeHash": "0x062a75b5af5cf7a55f02d8709ac837618c99fbe51a5e895d954f8066a07f92fd",
+    "metadataHash": null,
+    "maskedCodeHash": "0x062a75b5af5cf7a55f02d8709ac837618c99fbe51a5e895d954f8066a07f92fd",
+    "codeSize": 45,
+    "proxy": {
+      "kind": "eip1167",
+      "implementation": "0x0082e1a5aCf132CD08834C56a31f2465279c218b"
+    },
+    "implementation": {
+      "address": "0x0082e1a5aCf132CD08834C56a31f2465279c218b",
+      "codeHash": "0x5052d4da4f514b99763e668f28a3e9b919aba750de9e1c50c701e861cd77df29",
+      "metadataHash": "0x12206a7517672e71db964f525436af5cd9418bfe8f0403f5aaf173294951d0953705",
+      "maskedCodeHash": "0xf9778b2d2b7db83ba859f592b0f4e8dc78b5e00a22b18eeefb4a35daec59730f"
+    },
+    "implementationKey": "0x0e8fbb83b958cf55afbd6ae4f49316044d93c25c2c246ebcec8028212d102fad",
+    "implementationKeyKind": {
+      "of": "implementation",
+      "hash": "metadataHash+maskedCodeHash"
+    }
+  },
+  "results": [
+    {
+      "id": "asset",
+      "test": "test_asset",
+      "description": "asset() does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "totalAssets",
+      "test": "test_totalAssets",
+      "description": "totalAssets() does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "convertToShares",
+      "test": "test_convertToShares",
+      "description": "convertToShares gives the same result for any caller",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "convertToAssets",
+      "test": "test_convertToAssets",
+      "description": "convertToAssets gives the same result for any caller",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "maxDeposit",
+      "test": "test_maxDeposit",
+      "description": "maxDeposit does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "previewDeposit",
+      "test": "test_previewDeposit",
+      "description": "deposit mints at least the shares previewDeposit quoted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "deposit",
+      "test": "test_deposit",
+      "description": "deposit moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "maxMint",
+      "test": "test_maxMint",
+      "description": "maxMint does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "previewMint",
+      "test": "test_previewMint",
+      "description": "mint pulls at most the assets previewMint quoted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "mint",
+      "test": "test_mint",
+      "description": "mint moves assets from the caller, credits shares to the receiver and spends allowance",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "maxWithdraw",
+      "test": "test_maxWithdraw",
+      "description": "maxWithdraw does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "previewWithdraw",
+      "test": "test_previewWithdraw",
+      "description": "withdraw burns at most the shares previewWithdraw quoted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "withdraw",
+      "test": "test_withdraw",
+      "description": "withdraw burns owner shares, pays the receiver and spends share allowance",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "withdraw-zero-allowance",
+      "test": "test_withdraw_zero_allowance",
+      "description": "withdraw on behalf of an owner without allowance reverts",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "maxRedeem",
+      "test": "test_maxRedeem",
+      "description": "maxRedeem does not revert",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "previewRedeem",
+      "test": "test_previewRedeem",
+      "description": "redeem pays at least the assets previewRedeem quoted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "redeem",
+      "test": "test_redeem",
+      "description": "redeem burns owner shares, pays the receiver and spends share allowance",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "redeem-zero-allowance",
+      "test": "test_redeem_zero_allowance",
+      "description": "redeem on behalf of an owner without allowance reverts",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "RT-deposit-redeem",
+      "test": "test_RT_deposit_redeem",
+      "description": "redeem(deposit(a)) returns no more than a",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "RT-deposit-withdraw",
+      "test": "test_RT_deposit_withdraw",
+      "description": "withdraw(a) burns at least the shares deposit(a) minted",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "RT-redeem-deposit",
+      "test": "test_RT_redeem_deposit",
+      "description": "deposit(redeem(s)) mints no more than s",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "RT-redeem-mint",
+      "test": "test_RT_redeem_mint",
+      "description": "mint(s) costs at least the assets redeem(s) paid",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "RT-mint-withdraw",
+      "test": "test_RT_mint_withdraw",
+      "description": "withdraw(mint(s)) burns at least s shares",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "RT-mint-redeem",
+      "test": "test_RT_mint_redeem",
+      "description": "redeem(s) pays no more than mint(s) cost",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "RT-withdraw-mint",
+      "test": "test_RT_withdraw_mint",
+      "description": "mint(withdraw(a)) costs at least a",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "RT-withdraw-deposit",
+      "test": "test_RT_withdraw_deposit",
+      "description": "deposit(a) mints no more than the shares withdraw(a) burned",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "sf-maxDeposit-honored",
+      "test": "test_sf_maxDeposit_honored",
+      "description": "deposit goes through up to min(maxDeposit, 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxDeposit MUST NOT be higher than what deposit accepts)",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "sf-maxMint-honored",
+      "test": "test_sf_maxMint_honored",
+      "description": "mint goes through up to min(maxMint, shares of 1e6 tokens); when a smaller amount is refused the bound must go through, and refusals are counted (EIP-4626: maxMint MUST NOT be higher than what mint accepts)",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "sf-maxWithdraw-honored",
+      "test": "test_sf_maxWithdraw_honored",
+      "description": "withdraw goes through up to maxWithdraw; when a smaller amount is refused maxWithdraw must go through, and refusals are counted (EIP-4626: maxWithdraw MUST NOT be higher than what withdraw accepts, and MUST be 0 when withdrawals are disabled)",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    },
+    {
+      "id": "sf-maxRedeem-honored",
+      "test": "test_sf_maxRedeem_honored",
+      "description": "redeem goes through up to maxRedeem; when a smaller amount is refused maxRedeem must go through, and refusals are counted (EIP-4626: maxRedeem MUST NOT be higher than what redeem accepts, and MUST be 0 when redemptions are disabled)",
+      "status": "inconclusive",
+      "runs": 0,
+      "reason": "the asset's balance slot cannot be written, test users cannot be funded (non-standard token): stdStorage find(StdStorage): No storage use detected for target."
+    }
+  ],
+  "summary": {
+    "pass": 0,
+    "fail": 0,
+    "inconclusive": 30,
+    "notApplicable": 0
+  },
+  "startedAt": "2026-10-13T14:10:43.752Z",
+  "durationMs": 8724
+}
